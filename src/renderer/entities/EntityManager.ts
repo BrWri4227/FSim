@@ -7,9 +7,12 @@ import { runAIBrain } from '../ai/AIBrain'
 import { MissileSystem } from '../weapons/MissileSystem'
 import type { Aircraft } from './Aircraft'
 import type { PlayerAircraft } from './PlayerAircraft'
+import { NetworkAircraft } from './NetworkAircraft'
+import type { NetPlayerState } from '../network/MultiplayerTypes'
 
 export class EntityManager {
   private enemies: AIAircraft[] = []
+  private remotePlayers = new Map<string, NetworkAircraft>()
   private scene: THREE.Scene
   private player: PlayerAircraft
   /** Separate missile system used exclusively for debug-spawned inbound missiles */
@@ -20,8 +23,6 @@ export class EntityManager {
     this.scene  = scene
     this.player = player
     this.debugMissiles = new MissileSystem(scene)
-    // Expose for PlayerAircraft target lookup
-    ;(window as unknown as Record<string, unknown>)['_fsimEnemies'] = this.enemies
   }
 
   spawnEnemy(spec: AircraftSpec, stores: LoadedStore[], behavior: AIBehavior, spawnPos: Vec3, spawnVel: Vec3): AIAircraft {
@@ -59,7 +60,7 @@ export class EntityManager {
 
   update(dt: number, player: PlayerAircraft): void {
     // Update debug missiles — pass player aircraft so 'player' target resolves correctly
-    this.debugMissiles.update(dt, player.state, this.enemies as unknown as Aircraft[], player as unknown as Aircraft)
+    this.debugMissiles.update(dt, player.state, this.getEnemies(), player as unknown as Aircraft)
 
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const ai = this.enemies[i]!
@@ -76,17 +77,45 @@ export class EntityManager {
       const controls = runAIBrain(ai, player as unknown as Aircraft, dt)
       ai.update(controls, dt)
     }
+
+    // Legacy global for systems that still query enemies directly (e.g. audio cues).
+    ;(window as unknown as Record<string, unknown>)['_fsimEnemies'] = this.getEnemies()
   }
 
   updateMeshes(): void {
     for (const ai of this.enemies) ai.updateMesh()
+    for (const rp of this.remotePlayers.values()) rp.updateMesh()
   }
 
-  getEnemies(): AIAircraft[] { return this.enemies }
+  getEnemies(): Aircraft[] {
+    return [...this.enemies, ...this.remotePlayers.values()]
+  }
+
+  upsertRemotePlayer(
+    playerId: string,
+    aircraftSpec: AircraftSpec,
+    state: NetPlayerState
+  ): void {
+    let remote = this.remotePlayers.get(playerId)
+    if (!remote) {
+      remote = new NetworkAircraft(aircraftSpec, this.scene, playerId)
+      this.remotePlayers.set(playerId, remote)
+    }
+    remote.applyNetworkState(state)
+  }
+
+  removeRemotePlayer(playerId: string): void {
+    const remote = this.remotePlayers.get(playerId)
+    if (!remote) return
+    remote.dispose()
+    this.remotePlayers.delete(playerId)
+  }
 
   dispose(): void {
     for (const ai of this.enemies) this.scene.remove(ai.mesh)
+    for (const rp of this.remotePlayers.values()) rp.dispose()
     this.enemies.length = 0
+    this.remotePlayers.clear()
     this.debugMissiles.dispose()
   }
 }

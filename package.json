@@ -12,7 +12,8 @@
     "dist": "electron-builder"
   },
   "dependencies": {
-    "three": "^0.165.0"
+    "three": "^0.165.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.0",

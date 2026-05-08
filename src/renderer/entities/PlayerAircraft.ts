@@ -11,7 +11,7 @@ import { HMS } from '../avionics/HMS'
 import { GPWS } from '../avionics/GPWS'
 import type { RWRState } from '../types/radar'
 import type { HMSState } from '../types/ir'
-import { DEFAULT_BINDINGS } from '../input/ControlMapping'
+import type { DamageZone } from '../types/damage'
 
 export class PlayerAircraft extends Aircraft {
   readonly gun: GunSystem
@@ -56,8 +56,13 @@ export class PlayerAircraft extends Aircraft {
     }
   }
 
-  update(dt: number, controls: ControlInputs): void {
+  update(dt: number, controls: ControlInputs, enemies: Aircraft[]): void {
     if (this.state.ejected) return
+
+    if (this.damage.structuralFailure || this.damage.zones['COCKPIT'] >= 1.0) {
+      this.eject()
+      return
+    }
 
     // Eject check
     const ejectKey = document.getElementById('three-canvas') !== null &&
@@ -66,9 +71,6 @@ export class PlayerAircraft extends Aircraft {
     this.ejectKeyPrev = ejectKey
 
     this.integrate(controls, dt)
-
-    // Weapons
-    const enemies: Aircraft[] = (window as any)._fsimEnemies ?? []
 
     if (controls.fireGun) this.gun.fire(this.state, this.spec)
     this.gun.update(dt, enemies)
@@ -101,6 +103,11 @@ export class PlayerAircraft extends Aircraft {
       // GPWS audio events handled via AudioManager in FlightSession
       ;(window as any)['_fsimGPWSEvent'] = _event
     })
+  }
+
+  setOnTargetHit(cb: ((targetId: string, zone: DamageZone, severity: number, weapon: 'GUN' | 'MISSILE') => void) | null): void {
+    this.gun.setOnTargetHit(cb ? (target, zone, severity) => cb(target.entityId, zone, severity, 'GUN') : null)
+    this.missiles.setOnTargetHit(cb ? (target, zone, severity) => cb(target.entityId, zone, severity, 'MISSILE') : null)
   }
 
   private fireMissile(enemies: Aircraft[]): void {

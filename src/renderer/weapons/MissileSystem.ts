@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { MissileState } from '../types/weapons'
 import type { AircraftState } from '../types/aircraft'
+import type { DamageZone } from '../types/damage'
 import type { Aircraft } from '../entities/Aircraft'
 import { guideMissile, guideMissileCoast, checkIRSeekerLock } from './MissileGuidance'
 import { evaluateFlareSeduction } from './IRSeeker'
@@ -73,6 +74,7 @@ export class MissileSystem {
   private trails: RocketTrail[] = []
   private scene: THREE.Scene
   private explosions: ExplosionManager
+  private onTargetHit: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null = null
 
   private bodyMat = new THREE.MeshPhongMaterial({ color: 0xcccccc, emissive: 0x222222, shininess: 60 })
   private finMat  = new THREE.MeshPhongMaterial({ color: 0x888888, emissive: 0x111111, side: THREE.DoubleSide })
@@ -80,6 +82,10 @@ export class MissileSystem {
   constructor(scene: THREE.Scene) {
     this.scene = scene
     this.explosions = new ExplosionManager(scene)
+  }
+
+  setOnTargetHit(cb: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null): void {
+    this.onTargetHit = cb
   }
 
   launch(
@@ -270,10 +276,12 @@ export class MissileSystem {
           const lethality = computeLethality(m.positionNED, target.state.positionNED, m.spec.lethalRadiusM)
           if (lethality > 0.3) {
             const zone = hitZoneFromMissileApproach(m.velocityNED, target.state.attitudeQuat)
-            applyHit(target.damage, zone, lethality * 0.65, target.state.invincible)
+            const severity = lethality * 0.65
+            applyHit(target.damage, zone, severity, target.state.invincible)
+            this.onTargetHit?.(target, zone, severity)
             // Proximity blast: secondary fragments can hit adjacent zones
             if (lethality > 0.7 && !target.state.invincible) {
-              const secondary: import('../types/damage').DamageZone[] = ['FUSELAGE', 'ENGINE', 'WING_LEFT', 'WING_RIGHT']
+              const secondary: DamageZone[] = ['FUSELAGE', 'ENGINE', 'WING_LEFT', 'WING_RIGHT']
               for (const sz of secondary) {
                 if (sz !== zone) applyHit(target.damage, sz, lethality * 0.15)
               }

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { GunSpec, AircraftState } from '../types/aircraft'
 import type { GunRoundState } from '../types/weapons'
 import type { Aircraft } from '../entities/Aircraft'
+import type { DamageZone } from '../types/damage'
 import { updateGunRound } from './GunRound'
 import { v3add, v3scale, quatRotateVec, nedToThree, v3dist } from '../utils/MathUtils'
 import { applyHit } from '../systems/DamageModel'
@@ -15,6 +16,7 @@ export class GunSystem {
   private fireTimer = 0
   private roundMeshes: THREE.Mesh[] = []
   private scene: THREE.Scene
+  private onTargetHit: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null = null
 
   private roundMat = new THREE.MeshBasicMaterial({ color: 0xffff00 })
   private roundGeo = new THREE.SphereGeometry(0.15, 4, 4)
@@ -23,6 +25,10 @@ export class GunSystem {
     this.spec = spec
     this.scene = scene
     this.remainingRounds = spec?.totalRounds ?? 0
+  }
+
+  setOnTargetHit(cb: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null): void {
+    this.onTargetHit = cb
   }
 
   fire(state: AircraftState, _spec: import('../types/aircraft').AircraftSpec): void {
@@ -71,12 +77,14 @@ export class GunSystem {
           const dx = round.positionNED[0] - enemy.state.positionNED[0]
           const dz = round.positionNED[2] - enemy.state.positionNED[2]
           const dy = round.positionNED[1] - enemy.state.positionNED[1]
-          let zone: import('../types/damage').DamageZone = 'FUSELAGE'
+          let zone: DamageZone = 'FUSELAGE'
           if (Math.abs(dy) > 2.5 && dy < 0) zone = 'ENGINE'      // from below
           else if (Math.abs(dz) > 2.0) zone = Math.random() < 0.5 ? 'WING_LEFT' : 'WING_RIGHT'
           else if (dx > 3.0) zone = 'COCKPIT'                     // nose-on
           else if (dx < -3.0) zone = 'TAIL'
-          applyHit(enemy.damage, zone, 0.22, enemy.state.invincible)
+          const severity = 0.22
+          applyHit(enemy.damage, zone, severity, enemy.state.invincible)
+          this.onTargetHit?.(enemy, zone, severity)
         }
       }
 

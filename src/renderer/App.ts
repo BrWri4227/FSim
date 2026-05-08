@@ -1,6 +1,7 @@
 import { LoadoutScreen } from './ui/LoadoutScreen'
 import { FlightSession } from './FlightSession'
 import { DebriefScreen } from './ui/DebriefScreen'
+import type { MultiplayerConfig } from './network/MultiplayerTypes'
 import type { AircraftSpec } from './types/aircraft'
 import type { LoadedStore } from './types/weapons'
 
@@ -35,17 +36,17 @@ export class App {
     this.debriefScreen?.dispose()
     this.debriefScreen = null
 
-    this.loadoutScreen = new LoadoutScreen(this.uiOverlay, (spec, stores) => {
-      this.enterFlight(spec, stores)
+    this.loadoutScreen = new LoadoutScreen(this.uiOverlay, (spec, stores, multiplayer) => {
+      this.enterFlight(spec, stores, multiplayer)
     })
   }
 
-  private enterFlight(spec: AircraftSpec, stores: LoadedStore[]): void {
+  private enterFlight(spec: AircraftSpec, stores: LoadedStore[], multiplayer: MultiplayerConfig): void {
     this.state = 'FLIGHT'
     this.loadoutScreen?.dispose()
     this.loadoutScreen = null
 
-    this.flightSession = new FlightSession(spec, stores, (result) => {
+    this.flightSession = new FlightSession(spec, stores, multiplayer, (result) => {
       this.enterDebrief(result)
     })
     this.flightSession.start()
