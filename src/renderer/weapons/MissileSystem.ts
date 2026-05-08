@@ -35,32 +35,32 @@ function buildMissileMesh(bodyMat: THREE.Material, finMat: THREE.Material): THRE
   const group = new THREE.Group()
 
   // Body cylinder (tapered slightly at tail)
-  const bodyGeo = new THREE.CylinderGeometry(0.09, 0.12, 2.1, 8)
+  const bodyGeo = new THREE.CylinderGeometry(0.12, 0.15, 2.35, 10)
   bodyGeo.rotateX(Math.PI / 2)
   group.add(new THREE.Mesh(bodyGeo, bodyMat))
 
   // Nose cone
-  const noseGeo = new THREE.ConeGeometry(0.09, 0.55, 8)
+  const noseGeo = new THREE.ConeGeometry(0.12, 0.62, 10)
   noseGeo.rotateX(-Math.PI / 2)   // tip → +Z
   const noseMesh = new THREE.Mesh(noseGeo, bodyMat)
-  noseMesh.position.z = 1.325
+  noseMesh.position.z = 1.48
   group.add(noseMesh)
 
   // Tail fins — 4× cruciform, 0.5 m span, at z = -0.85
-  const tailFinGeo = new THREE.BoxGeometry(0.55, 0.018, 0.32)
+  const tailFinGeo = new THREE.BoxGeometry(0.72, 0.024, 0.42)
   for (let i = 0; i < 4; i++) {
     const fin = new THREE.Mesh(tailFinGeo, finMat)
     fin.rotation.z = i * (Math.PI / 2)
-    fin.position.z = -0.85
+    fin.position.z = -0.95
     group.add(fin)
   }
 
   // Canard fins — 4× smaller, at z = +0.7 (forward third)
-  const canardGeo = new THREE.BoxGeometry(0.28, 0.014, 0.18)
+  const canardGeo = new THREE.BoxGeometry(0.36, 0.018, 0.22)
   for (let i = 0; i < 4; i++) {
     const fin = new THREE.Mesh(canardGeo, finMat)
     fin.rotation.z = i * (Math.PI / 2)
-    fin.position.z = 0.7
+    fin.position.z = 0.82
     group.add(fin)
   }
 
@@ -76,8 +76,8 @@ export class MissileSystem {
   private explosions: ExplosionManager
   private onTargetHit: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null = null
 
-  private bodyMat = new THREE.MeshPhongMaterial({ color: 0xcccccc, emissive: 0x222222, shininess: 60 })
-  private finMat  = new THREE.MeshPhongMaterial({ color: 0x888888, emissive: 0x111111, side: THREE.DoubleSide })
+  private bodyMat = new THREE.MeshPhongMaterial({ color: 0xf5f5f5, emissive: 0x303030, shininess: 90 })
+  private finMat  = new THREE.MeshPhongMaterial({ color: 0xa8a8a8, emissive: 0x1a1a1a, side: THREE.DoubleSide })
 
   constructor(scene: THREE.Scene) {
     this.scene = scene
@@ -326,7 +326,7 @@ export class MissileSystem {
 
       // Thruster glow fades out after burnout; trail only during burn
       const thrusterIntensity = m.burnActive ? 1.0 : Math.max(0, 1 - (m.ageSec - m.spec.burnTimeSec) * 2)
-      this.thrusters[i]?.update(thrusterIntensity, dt)
+      this.thrusters[i]?.update(thrusterIntensity, false, dt)
       if (m.burnActive) this.trails[i]?.addPoint(worldPos)
       this.trails[i]?.update(dt)
     }

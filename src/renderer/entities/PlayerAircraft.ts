@@ -24,6 +24,7 @@ export class PlayerAircraft extends Aircraft {
 
   selectedWeaponIndex = 0
   private ejectKeyPrev = false
+  private onMissileLaunch: ((category: 'IR_MISSILE' | 'ARH_MISSILE') => void) | null = null
 
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene) {
     super(spec, stores, scene, 'player')
@@ -122,6 +123,10 @@ export class PlayerAircraft extends Aircraft {
     this.missiles.setOnTargetHit(cb ? (target, zone, severity) => cb(target.entityId, zone, severity, 'MISSILE') : null)
   }
 
+  setOnMissileLaunch(cb: ((category: 'IR_MISSILE' | 'ARH_MISSILE') => void) | null): void {
+    this.onMissileLaunch = cb
+  }
+
   private fireMissile(enemies: Aircraft[]): void {
     const store = this.getSelectedMissileStore()
     if (!store || store.remainingRounds <= 0) return
@@ -148,6 +153,9 @@ export class PlayerAircraft extends Aircraft {
 
     this.missiles.launch(store.weaponId, this.state, targetId, 'player', tgtPos, tgtVel, hpBody)
     store.remainingRounds = 0
+    if (store.category === 'IR_MISSILE' || store.category === 'ARH_MISSILE') {
+      this.onMissileLaunch?.(store.category)
+    }
   }
 
   private getSelectedMissileStore(): LoadedStore | null {

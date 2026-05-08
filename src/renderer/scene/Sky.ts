@@ -12,9 +12,10 @@ export class Sky {
       uniforms: {
         topColor:    { value: new THREE.Color(0x05103a) },
         horizonColor:{ value: new THREE.Color(0x3ab8f0) },
-        groundColor: { value: new THREE.Color(0x2a3c18) },
+        groundColor: { value: new THREE.Color(0x355327) },
         offset:      { value: 500 },
         exponent:    { value: 0.45 },
+        horizonBlend:{ value: 0.035 },
       },
       vertexShader: `
         varying vec3 vWorldPos;
@@ -29,15 +30,14 @@ export class Sky {
         uniform vec3 groundColor;
         uniform float offset;
         uniform float exponent;
+        uniform float horizonBlend;
         varying vec3 vWorldPos;
         void main() {
           float h = normalize(vWorldPos + vec3(0.0, offset, 0.0)).y;
-          vec3 col;
-          if (h > 0.0) {
-            col = mix(horizonColor, topColor, pow(max(h, 0.0), exponent));
-          } else {
-            col = groundColor;
-          }
+          vec3 skyCol = mix(horizonColor, topColor, pow(max(h, 0.0), exponent));
+          // Smoothly blend around the horizon to avoid a hard seam/line.
+          float t = smoothstep(-horizonBlend, horizonBlend, h);
+          vec3 col = mix(groundColor, skyCol, t);
           gl_FragColor = vec4(col, 1.0);
         }
       `,

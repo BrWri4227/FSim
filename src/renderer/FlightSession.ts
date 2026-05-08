@@ -71,6 +71,9 @@ export class FlightSession {
     void this.audioManager.loadSounds('sounds/')
 
     this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene)
+    this.player.setOnMissileLaunch(category => {
+      this.audioManager.play(category === 'IR_MISSILE' ? 'MISSILE_LAUNCH_IR' : 'MISSILE_LAUNCH_ARH')
+    })
     this.entityManager = new EntityManager(this.sceneManager.scene, this.player)
     this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
       if (!this.multiplayer || !this.localNetworkId) return

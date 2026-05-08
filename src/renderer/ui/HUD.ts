@@ -189,6 +189,8 @@ export class HUD {
         this.drawLockDiamond(ctx, camera, target, W, H)
       }
     }
+
+    if (camera) this.drawSituationalMarkers(ctx, camera, W, H)
   }
 
   private drawGunFunnel(
@@ -301,6 +303,68 @@ export class HUD {
     ctx.stroke()
     ctx.lineWidth = 1.5
     ctx.strokeStyle = '#00ff44'
+  }
+
+  private drawSituationalMarkers(
+    ctx: CanvasRenderingContext2D,
+    camera: THREE.PerspectiveCamera,
+    W: number,
+    H: number
+  ): void {
+    const ownPos = this.player.state.positionNED
+
+    ctx.save()
+    ctx.lineWidth = 1.5
+    ctx.font = '10px monospace'
+
+    // Enemy aircraft markers: yellow square + range text.
+    for (const enemy of this.entityManager.getEnemies()) {
+      const screen = this.projectNEDToScreen(camera, enemy.state.positionNED, W, H)
+      if (!screen) continue
+
+      const dx = enemy.state.positionNED[0] - ownPos[0]
+      const dy = enemy.state.positionNED[1] - ownPos[1]
+      const dz = enemy.state.positionNED[2] - ownPos[2]
+      const rangeM = Math.hypot(dx, dy, dz)
+      if (rangeM > 120000) continue
+
+      const r = THREE.MathUtils.clamp(12 - rangeM / 12000, 5, 12)
+      ctx.strokeStyle = '#ffd54d'
+      ctx.beginPath()
+      ctx.rect(screen.x - r, screen.y - r, r * 2, r * 2)
+      ctx.stroke()
+      ctx.fillStyle = '#ffd54d'
+      ctx.fillText(`${(rangeM / 1000).toFixed(1)}km`, screen.x + r + 4, screen.y - r - 2)
+    }
+
+    // Missiles: own missiles and inbound-to-player missiles get distinct marker colors.
+    const ownMissiles = this.player.missiles.getMissiles().filter(m => m.active)
+    for (const m of ownMissiles) {
+      const screen = this.projectNEDToScreen(camera, m.positionNED, W, H)
+      if (!screen) continue
+      ctx.strokeStyle = '#66ccff'
+      this.drawDiamond(ctx, screen.x, screen.y, 7)
+    }
+
+    const inbound = this.entityManager.getInboundMissiles(['player'])
+    for (const m of inbound) {
+      const screen = this.projectNEDToScreen(camera, m.positionNED, W, H)
+      if (!screen) continue
+      ctx.strokeStyle = '#ff6aa8'
+      this.drawDiamond(ctx, screen.x, screen.y, 8)
+    }
+
+    ctx.restore()
+  }
+
+  private drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+    ctx.beginPath()
+    ctx.moveTo(x, y - r)
+    ctx.lineTo(x + r, y)
+    ctx.lineTo(x, y + r)
+    ctx.lineTo(x - r, y)
+    ctx.closePath()
+    ctx.stroke()
   }
 
   private projectNEDToScreen(

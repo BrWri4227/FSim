@@ -141,7 +141,8 @@ export class Aircraft {
 
     // Engine glow: extinguished when engine is failed
     const thrThrottle = this.damage.engineFailed ? 0 : this.state.throttle
-    this.thrusterEffect.update(thrThrottle, dt)
+    const isAfterburner = !this.damage.engineFailed && this.state.throttle >= this.spec.engine.afterburnerThrottleMin
+    this.thrusterEffect.update(thrThrottle, isAfterburner, dt)
 
     // Visual damage: tint mesh based on accumulated damage
     applyDamageTint(this.mesh, overallDamage(this.damage), this.damage.onFire)

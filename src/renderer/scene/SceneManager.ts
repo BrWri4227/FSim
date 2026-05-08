@@ -50,7 +50,7 @@ export class SceneManager {
     this.sky = new Sky(this.scene)
 
     // Fog for depth
-    this.scene.fog = new THREE.FogExp2(0x90cce8, 0.000008)
+    this.scene.fog = new THREE.FogExp2(0x90cce8, 0.0000055)
 
     window.addEventListener('resize', this.onResize)
   }
