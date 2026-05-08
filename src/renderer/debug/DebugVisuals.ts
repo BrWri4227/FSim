@@ -38,9 +38,10 @@ export class DebugVisuals {
   }
 
   update(state: AircraftState, radar: RadarState, missiles: MissileState[]): void {
-    const showVelocity   = !!(window as any)['showVelocity']
-    const showRadarCone  = !!(window as any)['showRadarCone']
-    const showSeekerCone = !!(window as any)['showSeekerCone']
+    const w = window as unknown as Record<string, unknown>
+    const showVelocity   = !!w['showVelocity']
+    const showRadarCone  = !!w['showRadarCone']
+    const showSeekerCone = !!w['showSeekerCone']
 
     // ── Velocity vector ───────────────────────────────────────────────────────
     if (showVelocity) {

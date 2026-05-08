@@ -104,6 +104,7 @@ export interface ControlInputs {
   radarSelectNext: boolean
   radarLockTarget: boolean
   radarUnlock: boolean
+  ejectRequested: boolean
 }
 
 export interface AircraftState {

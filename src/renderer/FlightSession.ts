@@ -35,7 +35,8 @@ export class FlightSession {
   private multiplayerConfig: MultiplayerConfig
   private multiplayer: MultiplayerClient | null = null
   private localNetworkId: string | null = null
-  private trackedRemoteIds = new Set<string>()
+  private trackedRemoteIds    = new Set<string>()
+  private _remoteIdSwap       = new Set<string>()  // swap buffer — avoids per-tick Set allocation
 
   private flareEffect: FlareEffect
   private chaffEffect: ChaffEffect
@@ -45,6 +46,8 @@ export class FlightSession {
   private accumulator = 0
   private sessionStartTime = 0
   private disposed = false
+  private completionScheduled = false
+  private completionTimer: ReturnType<typeof setTimeout> | null = null
   private gSmoothed = 1.0   // low-pass filtered G for visual effects
   private glocEnabled: boolean
   private wasRadarShootCueActive = false
@@ -81,6 +84,9 @@ export class FlightSession {
     this.player.setOnMissileRadarStateChange((_missileId, mode) => {
       if (mode === 'ACTIVE') this.audioManager.play('PITBULL')
     })
+    this.player.setOnGPWSEvent(event => {
+      this.audioManager.play(event)
+    })
     this.entityManager = new EntityManager(this.sceneManager.scene, this.player)
     this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
       if (!this.multiplayer || !this.localNetworkId) return
@@ -95,6 +101,7 @@ export class FlightSession {
     })
 
     this.postFX = new PostFXManager(this.sceneManager.renderer, this.sceneManager.scene, this.sceneManager.camera)
+    this.postFX.setSize(window.innerWidth, window.innerHeight)
 
     this.flareEffect = new FlareEffect(this.sceneManager.scene)
     this.chaffEffect = new ChaffEffect(this.sceneManager.scene)
@@ -117,6 +124,7 @@ export class FlightSession {
 
   private onResize = (): void => {
     this.hud.resize(window.innerWidth, window.innerHeight)
+    this.postFX.setSize(window.innerWidth, window.innerHeight)
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -200,7 +208,7 @@ export class FlightSession {
     const targetIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
     const inboundMissiles = this.entityManager.getInboundMissiles(targetIds)
     this.player.rwr.addMissileThreats(inboundMissiles, this.player.state)
-    this.audioManager.update(this.player, controls)
+    this.audioManager.update(this.player, controls, this.entityManager.getEnemies())
     const radarShootCueActive = this.hud.isRadarShootCueActive()
     if (radarShootCueActive && !this.wasRadarShootCueActive) {
       this.audioManager.play('SHOOT')
@@ -211,9 +219,11 @@ export class FlightSession {
     const tau = 0.4
     this.gSmoothed += (this.player.state.gCurrent - this.gSmoothed) * Math.min(1, dt / tau)
 
-    if (this.player.state.ejected) {
+    if (this.player.state.ejected && !this.completionScheduled) {
+      this.completionScheduled = true
       const elapsed = (performance.now() - this.sessionStartTime) / 1000
-      setTimeout(() => {
+      this.completionTimer = setTimeout(() => {
+        if (this.disposed) return
         this.onComplete({
           kills: this.entityManager.killCount,
           deaths: 1,
@@ -265,7 +275,11 @@ export class FlightSession {
     })
 
     const snapshots = this.multiplayer.getRemoteSnapshots()
-    const seen = new Set<string>()
+
+    // Swap-buffer pattern: reuse two pre-allocated Sets instead of allocating one per tick.
+    const prev = this.trackedRemoteIds
+    const seen = this._remoteIdSwap
+    seen.clear()
     for (const snap of snapshots) {
       seen.add(snap.playerId)
       if (!snap.state) continue
@@ -273,11 +287,11 @@ export class FlightSession {
       if (!remoteSpec) continue
       this.entityManager.upsertRemotePlayer(snap.playerId, remoteSpec, snap.state)
     }
-
-    for (const trackedId of this.trackedRemoteIds) {
+    for (const trackedId of prev) {
       if (!seen.has(trackedId)) this.entityManager.removeRemotePlayer(trackedId)
     }
-    this.trackedRemoteIds = seen
+    this._remoteIdSwap       = prev   // reclaim for next tick
+    this.trackedRemoteIds    = seen
 
     if (!this.localNetworkId) return
     for (const hit of this.multiplayer.consumeInboundHits()) {
@@ -322,14 +336,22 @@ export class FlightSession {
   dispose(): void {
     this.disposed = true
     cancelAnimationFrame(this.rafId)
+    if (this.completionTimer !== null) {
+      clearTimeout(this.completionTimer)
+      this.completionTimer = null
+    }
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('resize',  this.onResize)
     this.inputManager.dispose()
+    this.entityManager.dispose()
+    this.player.dispose()
+    this.cameraManager.dispose()
     this.hud.dispose()
     this.debugOverlay.dispose()
     this.debugVisuals.dispose()
     this.flareEffect.dispose()
     this.chaffEffect.dispose()
+    this.postFX.dispose()
     this.sceneManager.dispose()
     this.audioManager.dispose()
     this.multiplayer?.disconnect()

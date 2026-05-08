@@ -1,5 +1,8 @@
 import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent } from './MultiplayerTypes'
 
+const CONNECT_TIMEOUT_MS = 8000
+const MAX_INBOUND_HITS = 256
+
 interface RemoteSnapshot {
   playerId: string
   profile: NetPlayerProfile
@@ -22,20 +25,39 @@ export class MultiplayerClient {
   async connect(config: MultiplayerConfig): Promise<void> {
     if (config.mode === 'single') return
     const url = `ws://${config.host}:${config.port}`
-    this.ws = new WebSocket(url)
+    const ws = new WebSocket(url)
+    this.ws = ws
 
     await new Promise<void>((resolve, reject) => {
-      if (!this.ws) return reject(new Error('WebSocket not initialized'))
+      let settled = false
+      const settle = (fn: () => void): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        ws.removeEventListener('open',  onOpen)
+        ws.removeEventListener('error', onError)
+        fn()
+      }
+
+      const timer = setTimeout(() => {
+        settle(() => {
+          ws.close()
+          reject(new Error(`Connection to ${url} timed out after ${CONNECT_TIMEOUT_MS} ms`))
+        })
+      }, CONNECT_TIMEOUT_MS)
+
       const onOpen = (): void => {
-        this.connected = true
-        this.send({ type: 'join', profile: this.profile })
-        resolve()
+        settle(() => {
+          this.connected = true
+          this.send({ type: 'join', profile: this.profile })
+          resolve()
+        })
       }
       const onError = (): void => {
-        reject(new Error(`Failed to connect to LAN session at ${url}`))
+        settle(() => reject(new Error(`Failed to connect to LAN session at ${url}`)))
       }
-      this.ws.addEventListener('open', onOpen, { once: true })
-      this.ws.addEventListener('error', onError, { once: true })
+      ws.addEventListener('open',  onOpen)
+      ws.addEventListener('error', onError)
     })
 
     this.ws.addEventListener('message', event => {
@@ -100,7 +122,9 @@ export class MultiplayerClient {
       }
 
       if (msg.type === 'hit') {
-        this.inboundHits.push(msg.hit)
+        if (this.inboundHits.length < MAX_INBOUND_HITS) {
+          this.inboundHits.push(msg.hit)
+        }
       }
     })
 

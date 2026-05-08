@@ -4,8 +4,10 @@ const TERRAIN_SIZE = 300000  // 300 km
 
 export class Terrain {
   private mesh: THREE.Mesh
+  private scene: THREE.Scene
 
   constructor(scene: THREE.Scene) {
+    this.scene = scene
     // Large flat terrain with grid texture
     const geo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, 64, 64)
     geo.rotateX(-Math.PI / 2)
@@ -45,5 +47,12 @@ export class Terrain {
     this.mesh.receiveShadow = true
     this.mesh.position.y = 0
     scene.add(this.mesh)
+  }
+
+  dispose(): void {
+    this.scene.remove(this.mesh)
+    ;(this.mesh.material as THREE.MeshLambertMaterial).map?.dispose()
+    ;(this.mesh.material as THREE.MeshLambertMaterial).dispose()
+    this.mesh.geometry.dispose()
   }
 }

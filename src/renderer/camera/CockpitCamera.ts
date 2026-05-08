@@ -11,12 +11,13 @@ export class CockpitCamera {
   private readonly MAX_YAW   = Math.PI / 2.2   // ±80°
   private readonly MAX_PITCH = 0.7              // ±40°
 
+  private onCanvasClick = (): void => {
+    document.getElementById('three-canvas')?.requestPointerLock()
+  }
+
   constructor() {
     window.addEventListener('mousemove', this.onMouse)
-    // Lock pointer on click
-    document.getElementById('three-canvas')?.addEventListener('click', () => {
-      document.getElementById('three-canvas')?.requestPointerLock()
-    })
+    document.getElementById('three-canvas')?.addEventListener('click', this.onCanvasClick)
   }
 
   private onMouse = (e: MouseEvent) => {
@@ -63,5 +64,6 @@ export class CockpitCamera {
 
   dispose(): void {
     window.removeEventListener('mousemove', this.onMouse)
+    document.getElementById('three-canvas')?.removeEventListener('click', this.onCanvasClick)
   }
 }

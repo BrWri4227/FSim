@@ -2,8 +2,10 @@ import * as THREE from 'three'
 
 export class Sky {
   private mesh: THREE.Mesh
+  private scene: THREE.Scene
 
   constructor(scene: THREE.Scene) {
+    this.scene = scene
     const geo = new THREE.SphereGeometry(180000, 32, 16)
     // No scale flip — BackSide renders interior facing the camera correctly
 
@@ -55,5 +57,11 @@ export class Sky {
   /** Keep the sky dome centred on the camera so it never clips. */
   update(cameraPos: THREE.Vector3): void {
     this.mesh.position.copy(cameraPos)
+  }
+
+  dispose(): void {
+    this.scene.remove(this.mesh)
+    ;(this.mesh.material as THREE.ShaderMaterial).dispose()
+    this.mesh.geometry.dispose()
   }
 }

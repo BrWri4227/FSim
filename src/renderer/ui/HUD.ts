@@ -830,7 +830,7 @@ export class HUD {
       const entry = visible[i]!
       const sym = entry.pitbull ? 'A' : 'M'
       const mode = entry.pitbull ? 'PB' : entry.missile.guidanceMode === 'COAST' ? 'MEM' : 'TRK'
-      const ttiTxt = entry.timeToImpactSec == null
+      const ttiTxt = entry.timeToImpactSec === null || entry.timeToImpactSec === undefined
         ? '--.-'
         : Math.max(0, Math.min(99.9, entry.timeToImpactSec)).toFixed(1)
       ctx.fillStyle = entry.pitbull ? '#ffe66d' : '#00ff44'
@@ -855,9 +855,11 @@ export class HUD {
     })
 
     entries.sort((a, b) => {
-      if (a.timeToImpactSec == null && b.timeToImpactSec == null) return 0
-      if (a.timeToImpactSec == null) return 1
-      if (b.timeToImpactSec == null) return -1
+      if (a.timeToImpactSec === null || a.timeToImpactSec === undefined) {
+        if (b.timeToImpactSec === null || b.timeToImpactSec === undefined) return 0
+        return 1
+      }
+      if (b.timeToImpactSec === null || b.timeToImpactSec === undefined) return -1
       return a.timeToImpactSec - b.timeToImpactSec
     })
     return entries
@@ -945,11 +947,11 @@ export class HUD {
       }
     }
 
-    if (t == null) {
+    if (t === null || t === undefined) {
       const rangeM = Math.sqrt(rDotR)
       if (projectileSpeedMS > eps) t = rangeM / projectileSpeedMS
     }
-    if (t == null) return null
+    if (t === null || t === undefined) return null
     return THREE.MathUtils.clamp(t, MIN_INTERCEPT_TIME_S, MAX_INTERCEPT_TIME_S)
   }
 

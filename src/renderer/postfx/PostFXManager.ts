@@ -25,4 +25,8 @@ export class PostFXManager {
   setSize(w: number, h: number): void {
     this.composer.setSize(w, h)
   }
+
+  dispose(): void {
+    this.composer.dispose()
+  }
 }

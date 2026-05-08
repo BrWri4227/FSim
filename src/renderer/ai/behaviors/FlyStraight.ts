@@ -24,6 +24,6 @@ export function flyStraight(self: AIAircraft, _dt: number): ControlInputs {
     pitch, roll, yaw: 0, throttle,
     fireMissile: false, fireGun: false, cycleMissile: false,
     dispenseFlare: false, dispenseChaff: false, toggleGear: false, cycleFlaps: false, brakeHeld: false, speedBrakeToggle: false,
-    radarModeNext: false, radarSelectNext: false, radarLockTarget: false, radarUnlock: false
+    radarModeNext: false, radarSelectNext: false, radarLockTarget: false, radarUnlock: false, ejectRequested: false
   }
 }

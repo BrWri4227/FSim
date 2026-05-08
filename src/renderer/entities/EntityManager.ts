@@ -19,6 +19,9 @@ export class EntityManager {
   private debugMissiles: MissileSystem
   killCount = 0
 
+  /** Cached combined enemy list — rebuilt only when the entity set changes. */
+  private _enemyCache: Aircraft[] | null = null
+
   constructor(scene: THREE.Scene, player: PlayerAircraft) {
     this.scene  = scene
     this.player = player
@@ -28,6 +31,7 @@ export class EntityManager {
   spawnEnemy(spec: AircraftSpec, stores: LoadedStore[], behavior: AIBehavior, spawnPos: Vec3, spawnVel: Vec3): AIAircraft {
     const ai = new AIAircraft(spec, stores, this.scene, behavior, spawnPos, spawnVel)
     this.enemies.push(ai)
+    this._enemyCache = null  // invalidate cache
     return ai
   }
 
@@ -37,6 +41,7 @@ export class EntityManager {
     const ai = this.enemies[idx]!
     this.scene.remove(ai.mesh)
     this.enemies.splice(idx, 1)
+    this._enemyCache = null  // invalidate cache
     this.killCount++
   }
 
@@ -78,8 +83,6 @@ export class EntityManager {
       ai.update(controls, dt)
     }
 
-    // Legacy global for systems that still query enemies directly (e.g. audio cues).
-    ;(window as unknown as Record<string, unknown>)['_fsimEnemies'] = this.getEnemies()
   }
 
   updateMeshes(): void {
@@ -88,7 +91,10 @@ export class EntityManager {
   }
 
   getEnemies(): Aircraft[] {
-    return [...this.enemies, ...this.remotePlayers.values()]
+    if (this._enemyCache === null) {
+      this._enemyCache = [...this.enemies, ...this.remotePlayers.values()]
+    }
+    return this._enemyCache
   }
 
   private isInboundToPlayer(
@@ -150,6 +156,7 @@ export class EntityManager {
     if (!remote) {
       remote = new NetworkAircraft(aircraftSpec, this.scene, playerId)
       this.remotePlayers.set(playerId, remote)
+      this._enemyCache = null  // new remote player — invalidate cache
     }
     remote.applyNetworkState(state)
   }
@@ -159,10 +166,11 @@ export class EntityManager {
     if (!remote) return
     remote.dispose()
     this.remotePlayers.delete(playerId)
+    this._enemyCache = null  // invalidate cache
   }
 
   dispose(): void {
-    for (const ai of this.enemies) this.scene.remove(ai.mesh)
+    for (const ai of this.enemies) ai.dispose()
     for (const rp of this.remotePlayers.values()) rp.dispose()
     this.enemies.length = 0
     this.remotePlayers.clear()

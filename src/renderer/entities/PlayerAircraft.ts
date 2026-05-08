@@ -33,6 +33,7 @@ export class PlayerAircraft extends Aircraft {
   private ejectKeyPrev = false
   private onMissileLaunch: ((category: 'IR_MISSILE' | 'ARH_MISSILE') => void) | null = null
   private onMissileRadarStateChange: ((missileId: string, mode: MissileState['guidanceMode']) => void) | null = null
+  private onGPWSEvent: ((event: 'PULL_UP' | 'PULL_UP_URGENT') => void) | null = null
   private missileRadarModes = new Map<string, MissileState['guidanceMode']>()
 
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene) {
@@ -92,10 +93,8 @@ export class PlayerAircraft extends Aircraft {
     }
 
     // Eject check
-    const ejectKey = document.getElementById('three-canvas') !== null &&
-      (window as any)._fsimEjectPressed === true
-    if (ejectKey && !this.ejectKeyPrev) this.eject()
-    this.ejectKeyPrev = ejectKey
+    if (controls.ejectRequested && !this.ejectKeyPrev) this.eject()
+    this.ejectKeyPrev = controls.ejectRequested
 
     this.integrate(controls, dt)
 
@@ -106,7 +105,7 @@ export class PlayerAircraft extends Aircraft {
 
     // AMRAAM midcourse support should come only from an active STT lock.
     const sttId = this.radar.getSttTargetId()
-    const sttTrack = sttId ? this.radar.state.tracks.find(t => t.entityId === sttId) : null
+    const sttTrack = sttId ? this.radar.getTrack(sttId) : null
     const radarTgtPos = sttTrack?.positionNED as [number,number,number] | undefined
     const radarTgtVel = sttTrack?.velocityNED as [number,number,number] | undefined
     this.missiles.update(dt, this.state, enemies, undefined, radarTgtPos, radarTgtVel)
@@ -183,9 +182,8 @@ export class PlayerAircraft extends Aircraft {
     if (controls.radarUnlock)     this.radar.unlockSTT()
     this.rwr.update(enemies, this.state, ownNetId ?? 'player')
     this.hms.update(this.state)
-    this.gpws.update(this.state, dt, _event => {
-      // GPWS audio events handled via AudioManager in FlightSession
-      ;(window as any)['_fsimGPWSEvent'] = _event
+    this.gpws.update(this.state, dt, event => {
+      this.onGPWSEvent?.(event)
     })
   }
 
@@ -200,6 +198,10 @@ export class PlayerAircraft extends Aircraft {
 
   setOnMissileRadarStateChange(cb: ((missileId: string, mode: MissileState['guidanceMode']) => void) | null): void {
     this.onMissileRadarStateChange = cb
+  }
+
+  setOnGPWSEvent(cb: ((event: 'PULL_UP' | 'PULL_UP_URGENT') => void) | null): void {
+    this.onGPWSEvent = cb
   }
 
   private fireMissile(enemies: Aircraft[]): void {
@@ -325,4 +327,10 @@ export class PlayerAircraft extends Aircraft {
 
   getRWRState(): RWRState { return this.rwr.state }
   getHMSState(): HMSState { return this.hms.state }
+
+  dispose(): void {
+    this.gun.dispose()
+    this.missiles.dispose()
+    super.dispose()
+  }
 }

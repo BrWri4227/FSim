@@ -8,6 +8,8 @@ export class Radar {
   state: RadarState
   private spec: AircraftSpec
   private time = 0
+  /** O(1) track lookup — kept in sync with state.tracks at all mutation points. */
+  private trackById = new Map<string, RadarTrack>()
 
   constructor(spec: AircraftSpec) {
     this.spec = spec
@@ -32,8 +34,12 @@ export class Radar {
     if (cycleMode) this.cycleMode()
 
     if (this.state.mode === 'OFF') return
-    const liveEnemies = enemies.filter(e => this.isRadarTrackable(e))
-    const liveIds = new Set(liveEnemies.map(e => e.entityId))
+
+    // Build live-trackable map in a single pass (avoids filter + separate map calls)
+    const liveTrackable = new Map<string, Aircraft>()
+    for (const e of enemies) {
+      if (this.isRadarTrackable(e)) liveTrackable.set(e.entityId, e)
+    }
 
     // Advance scan bar
     this.state.azimuthDeg += this.state.scanRateDegs * dt
@@ -45,12 +51,15 @@ export class Radar {
 
     // STT: full energy on one target
     if (this.state.mode === 'STT' && this.state.sttTargetId) {
-      const target = liveEnemies.find(e => e.entityId === this.state.sttTargetId)
+      const target = liveTrackable.get(this.state.sttTargetId)
       if (target) {
         this.updateTrack(target, ownState)
       } else {
-        this.state.tracks = this.state.tracks.filter(t => t.entityId !== this.state.sttTargetId)
-        if (this.state.selectedTrackId === this.state.sttTargetId) this.state.selectedTrackId = null
+        // Remove the lost STT track using the Map for O(1) lookup
+        const lostId = this.state.sttTargetId
+        this.state.tracks = this.state.tracks.filter(t => t.entityId !== lostId)
+        this.trackById.delete(lostId)
+        if (this.state.selectedTrackId === lostId) this.state.selectedTrackId = null
         this.state.sttTargetId = null
         this.state.mode = 'TWS'
       }
@@ -58,7 +67,7 @@ export class Radar {
     }
 
     // Sweep detection
-    for (const enemy of liveEnemies) {
+    for (const [, enemy] of liveTrackable) {
       const dist = v3dist(ownState.positionNED, enemy.state.positionNED)
       if (dist > this.state.rangeModeM * 1.5) continue
 
@@ -71,17 +80,22 @@ export class Radar {
       }
     }
 
-    // Remove contacts that no longer exist/alive before confidence decay.
-    this.state.tracks = this.state.tracks.filter(t => liveIds.has(t.entityId))
-
-    // Decay confidence on stale tracks
+    // Single-pass: remove dead contacts AND decay confidence (was two separate filter calls)
     this.state.tracks = this.state.tracks.filter(t => {
+      if (!liveTrackable.has(t.entityId)) {
+        this.trackById.delete(t.entityId)
+        return false
+      }
       t.confidence = Math.max(0, t.confidence - dt * 0.1)
-      return t.confidence > 0.05
+      if (t.confidence <= 0.05) {
+        this.trackById.delete(t.entityId)
+        return false
+      }
+      return true
     })
 
-    // Keep selectedTrackId valid
-    if (this.state.selectedTrackId && !this.state.tracks.find(t => t.entityId === this.state.selectedTrackId)) {
+    // Keep selectedTrackId valid — use Map for O(1) existence check
+    if (this.state.selectedTrackId && !this.trackById.has(this.state.selectedTrackId)) {
       this.state.selectedTrackId = this.state.tracks[0]?.entityId ?? null
     }
     // Auto-select first contact if none selected
@@ -101,7 +115,7 @@ export class Radar {
   selectNextTrack(): void {
     if (this.state.tracks.length === 0) { this.state.selectedTrackId = null; return }
     const ids = this.state.tracks.map(t => t.entityId)
-    const idx = this.state.selectedTrackId != null ? ids.indexOf(this.state.selectedTrackId) : -1
+    const idx = this.state.selectedTrackId !== null ? ids.indexOf(this.state.selectedTrackId) : -1
     this.state.selectedTrackId = ids[(idx + 1) % ids.length]!
   }
 
@@ -120,14 +134,14 @@ export class Radar {
   }
 
   private updateTrack(enemy: Aircraft, ownState: AircraftState): void {
-    const existing = this.state.tracks.find(t => t.entityId === enemy.entityId)
+    const existing = this.trackById.get(enemy.entityId)
     if (existing) {
       existing.positionNED = enemy.state.positionNED
       existing.velocityNED = enemy.state.velocityNED
       existing.lastUpdateSec = this.time
       existing.confidence = 1.0
     } else if (this.state.tracks.length < 8) {
-      this.state.tracks.push({
+      const track: RadarTrack = {
         entityId: enemy.entityId,
         positionNED: enemy.state.positionNED,
         velocityNED: enemy.state.velocityNED,
@@ -135,7 +149,9 @@ export class Radar {
         lastUpdateSec: this.time,
         confidence: 1.0,
         isSTT: false,
-      })
+      }
+      this.state.tracks.push(track)
+      this.trackById.set(enemy.entityId, track)
       // Auto TWS on first contact
       if (this.state.mode === 'RWS') this.state.mode = 'TWS'
     }
@@ -151,6 +167,11 @@ export class Radar {
     this.state.mode = modes[(idx + 1) % modes.length]!
   }
 
+  /** O(1) track lookup — preferred over iterating state.tracks when only one track is needed. */
+  getTrack(entityId: string): RadarTrack | undefined {
+    return this.trackById.get(entityId)
+  }
+
   getSttTargetId(): string | null {
     if (this.state.mode !== 'STT') return this.state.tracks[0]?.entityId ?? null
     return this.state.sttTargetId
@@ -159,7 +180,7 @@ export class Radar {
   lockSTT(entityId: string): void {
     this.state.mode = 'STT'
     this.state.sttTargetId = entityId
-    const t = this.state.tracks.find(t => t.entityId === entityId)
+    const t = this.trackById.get(entityId)
     if (t) t.isSTT = true
   }
 }

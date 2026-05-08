@@ -6,6 +6,15 @@ export interface AeroCoeffs {
   CY: number; Cl: number; Cn: number
 }
 
+/** CL-only lookup — avoids the CD/Cm table reads and side-force assembly.
+ *  Use when only lift coefficient is needed (e.g. load-factor display in computeDerivedState). */
+export function computeCL(aero: AeroTable, alphaDeg: number, machNumber: number): number {
+  const { alphaBreakpointsDeg: alphaBP, machBreakpoints: machBP } = aero
+  const alphaLook = Math.max(alphaBP[0]!, Math.min(alphaBP[alphaBP.length - 1]!, alphaDeg))
+  const machLook  = Math.max(machBP[0]!, Math.min(machBP[machBP.length - 1]!, machNumber))
+  return interp2D(alphaBP, machBP, aero.CL, alphaLook, machLook)
+}
+
 export function computeAeroCoeffs(
   aero: AeroTable,
   alphaDeg: number,

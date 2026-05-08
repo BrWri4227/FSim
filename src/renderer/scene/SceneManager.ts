@@ -71,6 +71,8 @@ export class SceneManager {
 
   dispose(): void {
     window.removeEventListener('resize', this.onResize)
+    this.terrain.dispose()
+    this.sky.dispose()
     this.renderer.dispose()
   }
 }

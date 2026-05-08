@@ -89,7 +89,8 @@ export class AudioManager {
   private radarLockSrc:      AudioBufferSourceNode | null = null
   private activeRWRMode: 'TRACK' | 'LOCK' | 'INCOMING' | null = null
   private prevHasMissile = false
-  private seenSearchIds = new Set<string>()
+  private seenSearchIds     = new Set<string>()
+  private seenSearchIdsPrev = new Set<string>()  // swap buffer — avoids per-frame Set allocation
   private prevFlareCount = -1
   private prevChaffCount = -1
 
@@ -281,7 +282,11 @@ export class AudioManager {
 
   // ── Public update called every frame ─────────────────────────────────────
 
-  update(player: import('../entities/PlayerAircraft').PlayerAircraft, controls?: ControlInputs): void {
+  update(
+    player: import('../entities/PlayerAircraft').PlayerAircraft,
+    controls?: ControlInputs,
+    enemies: import('../entities/Aircraft').Aircraft[] = []
+  ): void {
     this.resume()
     this.updateEngine(player.state.throttle, player.state.mach, player.damage.engineFailed)
 
@@ -308,7 +313,6 @@ export class AudioManager {
       s.remainingRounds > 0 &&
       s.weaponId === selectedWeaponId
     )
-    const enemies: import('../entities/Aircraft').Aircraft[] = (window as any)._fsimEnemies ?? []
     if (irStore) {
       // Baseline "searching" growl as soon as an IR missile is selected.
       let acquired = true
@@ -351,18 +355,31 @@ export class AudioManager {
     // RWR tones — priority: MISSILE > STT LOCK > TRACK > SEARCH
     const rwrState = player.rwr.state
     const threats  = rwrState.threats
-    const hasMissile = threats.some(t => t.type === 'MISSILE')
-    const hasSTT     = threats.some(t => t.type === 'TRACK' && t.priority >= 4)
-    const hasTrack   = threats.some(t => t.type === 'TRACK')
 
-    // SEARCH: one-shot ping per newly-detected target (never loops)
-    const currentSearchIds = new Set(threats.filter(t => t.type === 'SEARCH').map(t => t.entityId))
-    for (const id of currentSearchIds) {
-      if (!this.seenSearchIds.has(id)) {
-        if (!this.playOnce('rwr_search', 0.45)) this.playTone(660, 0.12, 0.08)
+    // Single-pass threat classification — replaces three separate .some() traversals
+    // and the filter+map+Set allocation for search IDs.
+    let hasMissile = false, hasSTT = false, hasTrack = false
+
+    // Swap seenSearchIds buffers: prev holds last frame's set, current is cleared for this frame.
+    const tmp = this.seenSearchIdsPrev
+    this.seenSearchIdsPrev = this.seenSearchIds
+    this.seenSearchIds = tmp
+    this.seenSearchIds.clear()
+
+    for (const t of threats) {
+      if (t.type === 'MISSILE') {
+        hasMissile = true
+      } else if (t.type === 'TRACK') {
+        hasTrack = true
+        if (t.priority >= 4) hasSTT = true
+      } else if (t.type === 'SEARCH') {
+        this.seenSearchIds.add(t.entityId)
+        // One-shot ping per newly-detected search emitter
+        if (!this.seenSearchIdsPrev.has(t.entityId)) {
+          if (!this.playOnce('rwr_search', 0.45)) this.playTone(660, 0.12, 0.08)
+        }
       }
     }
-    this.seenSearchIds = currentSearchIds
 
     // Voice callout on new missile detection
     if (rwrState.hasMissileLaunch && !this.prevHasMissile) {

@@ -16,10 +16,12 @@ export class InputManager {
   private radarUnlockPrev = false
   private speedBrakeTogglePending = false
 
+  private onContextMenu = (e: Event): void => { e.preventDefault() }
+
   constructor() {
     window.addEventListener('keydown', this.onKeyDown)
     window.addEventListener('keyup', this.onKeyUp)
-    window.addEventListener('contextmenu', e => e.preventDefault())
+    window.addEventListener('contextmenu', this.onContextMenu)
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -88,8 +90,6 @@ export class InputManager {
     this.radarLockPrev = radarLock
     this.radarUnlockPrev = radarUnlock
 
-    ;(window as unknown as Record<string, unknown>)['_fsimEjectPressed'] = this.keys.has(DEFAULT_BINDINGS.eject)
-
     const speedBrakeToggle = this.speedBrakeTogglePending
     this.speedBrakeTogglePending = false
 
@@ -111,13 +111,15 @@ export class InputManager {
       radarSelectNext: radarSelectEdge,
       radarLockTarget: radarLockEdge,
       radarUnlock: radarUnlockEdge,
+      ejectRequested: this.keys.has(DEFAULT_BINDINGS.eject),
     }
   }
 
   setThrottle(v: number): void { this.throttle = clamp(v, 0, 1) }
 
   dispose(): void {
-    window.removeEventListener('keydown', this.onKeyDown)
-    window.removeEventListener('keyup',   this.onKeyUp)
+    window.removeEventListener('keydown',      this.onKeyDown)
+    window.removeEventListener('keyup',        this.onKeyUp)
+    window.removeEventListener('contextmenu',  this.onContextMenu)
   }
 }
