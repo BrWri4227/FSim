@@ -46,7 +46,7 @@ export class Aircraft {
       throttle: 0.3, fuelKg: spec.mass.fuelCapacityKg,
       loadedStores: [...stores],
       totalMassKg: spec.mass.emptyMassKg + spec.mass.fuelCapacityKg,
-      onGround: false, ejected: false, invincible: false, gearDown: false, flaps: 0, speedBrake: false,
+      onGround: false, ejected: false, invincible: false, gearDown: false, flaps: 0, speedBrake: false, brakeHeld: false,
       sv,
     }
 
@@ -101,6 +101,7 @@ export class Aircraft {
     this.state.onGround = this.state.altitudeM <= groundClearM + 0.1
 
     // Wheel brakes: friction deceleration ~4 m/s² when on ground with gear down
+    this.state.brakeHeld = controls.brakeHeld
     if (controls.brakeHeld && this.state.onGround && this.state.gearDown) {
       const vN = this.state.velocityNED[0], vE = this.state.velocityNED[1]
       const gs = Math.sqrt(vN * vN + vE * vE)

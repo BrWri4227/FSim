@@ -23,7 +23,7 @@ export class InputManager {
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (e.ctrlKey && e.code === 'KeyW') e.preventDefault()
+    if (e.ctrlKey && (e.code === 'KeyW' || e.code === 'KeyS' || e.code === 'KeyR')) e.preventDefault()
     this.keys.add(e.code)
     if (e.code === DEFAULT_BINDINGS.throttleDown && this.throttle === 0)
       this.speedBrakeTogglePending = true

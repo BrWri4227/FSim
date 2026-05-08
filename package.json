@@ -1,6 +1,6 @@
 {
   "name": "fsim",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Combat flight simulator — US vs Russian fighters",
   "main": "dist-electron/main/index.js",
   "type": "module",
