@@ -8,10 +8,13 @@ export function applyFCSLimits(
   spec: AircraftSpec
 ): ControlInputs {
   let pitch = controls.pitch
+  let roll = controls.roll
+  let yaw = controls.yaw
 
-  // AoA limiter: reduce pitch authority when approaching AoA limit
-  const aoaMargin = spec.maxAoADeg - state.alphaDeg
-  if (aoaMargin < 8 && controls.pitch > 0) {
+  // Symmetric AoA limiter: protect both upright and inverted maneuvering.
+  const alphaAbs = Math.abs(state.alphaDeg)
+  const aoaMargin = spec.maxAoADeg - alphaAbs
+  if (aoaMargin < 8 && Math.abs(controls.pitch) > 0) {
     pitch *= clamp(aoaMargin / 8, 0, 1)
   }
 
@@ -25,5 +28,11 @@ export function applyFCSLimits(
     pitch *= clamp(gLowerMargin / 2.0, 0.05, 1.0)
   }
 
-  return { ...controls, pitch }
+  // Soften lateral authority near the AoA edge to reduce departure-like wobble.
+  const aoaFrac = clamp(alphaAbs / Math.max(spec.maxAoADeg, 1), 0, 1)
+  const lateralScale = 1 - 0.35 * clamp((aoaFrac - 0.65) / 0.35, 0, 1)
+  roll *= lateralScale
+  yaw *= lateralScale
+
+  return { ...controls, pitch, roll, yaw }
 }

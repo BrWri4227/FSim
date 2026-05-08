@@ -9,6 +9,7 @@ export interface HeatContact {
 
 export interface FlareContact {
   positionNED: Vec3
+  velocityNED: Vec3
   heatSignatureKW: number
   ageSec: number
 }

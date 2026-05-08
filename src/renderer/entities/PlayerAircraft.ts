@@ -13,8 +13,14 @@ import type { RWRState } from '../types/radar'
 import type { HMSState } from '../types/ir'
 import type { DamageZone } from '../types/damage'
 import { getMissileSpec, getStoreDragPenalty } from '../data/weapons/catalog'
+import { quatRotateVec } from '../utils/MathUtils'
 
 export class PlayerAircraft extends Aircraft {
+  private static readonly FLARE_DISPENSER_BODY_X_M = -2.8
+  private static readonly FLARE_DISPENSER_BODY_Z_M = 0.85
+  private static readonly FLARE_PAIR_SPACING_M = 0.7
+  private static readonly FLARE_EJECTION_SPEED_MPS = 35
+
   readonly gun: GunSystem
   readonly missiles: MissileSystem
   readonly radar: Radar
@@ -110,7 +116,51 @@ export class PlayerAircraft extends Aircraft {
     if (controls.cycleMissile) this.cycleWeapon()
 
     // Countermeasures
-    if (controls.dispenseFlare) this.cmds.dispenseFlare(this.state.positionNED, this.state.velocityNED)
+    if (controls.dispenseFlare) {
+      const halfSpacing = PlayerAircraft.FLARE_PAIR_SPACING_M * 0.5
+      const leftBody: [number, number, number] = [
+        PlayerAircraft.FLARE_DISPENSER_BODY_X_M,
+        -halfSpacing,
+        PlayerAircraft.FLARE_DISPENSER_BODY_Z_M,
+      ]
+      const rightBody: [number, number, number] = [
+        PlayerAircraft.FLARE_DISPENSER_BODY_X_M,
+        halfSpacing,
+        PlayerAircraft.FLARE_DISPENSER_BODY_Z_M,
+      ]
+      const leftOffsetNED = quatRotateVec(this.state.attitudeQuat, leftBody)
+      const rightOffsetNED = quatRotateVec(this.state.attitudeQuat, rightBody)
+      const leftSpawnNED: [number, number, number] = [
+        this.state.positionNED[0] + leftOffsetNED[0],
+        this.state.positionNED[1] + leftOffsetNED[1],
+        this.state.positionNED[2] + leftOffsetNED[2],
+      ]
+      const rightSpawnNED: [number, number, number] = [
+        this.state.positionNED[0] + rightOffsetNED[0],
+        this.state.positionNED[1] + rightOffsetNED[1],
+        this.state.positionNED[2] + rightOffsetNED[2],
+      ]
+
+      // Left/right flare vectors are symmetric and 120 degrees apart.
+      const leftEjectDirBody: [number, number, number] = [-0.5, -0.8660254, 0]
+      const rightEjectDirBody: [number, number, number] = [-0.5, 0.8660254, 0]
+      const leftEjectDirNED = quatRotateVec(this.state.attitudeQuat, leftEjectDirBody)
+      const rightEjectDirNED = quatRotateVec(this.state.attitudeQuat, rightEjectDirBody)
+      const leftVelocityNED: [number, number, number] = [
+        this.state.velocityNED[0] + leftEjectDirNED[0] * PlayerAircraft.FLARE_EJECTION_SPEED_MPS,
+        this.state.velocityNED[1] + leftEjectDirNED[1] * PlayerAircraft.FLARE_EJECTION_SPEED_MPS,
+        this.state.velocityNED[2] + leftEjectDirNED[2] * PlayerAircraft.FLARE_EJECTION_SPEED_MPS,
+      ]
+      const rightVelocityNED: [number, number, number] = [
+        this.state.velocityNED[0] + rightEjectDirNED[0] * PlayerAircraft.FLARE_EJECTION_SPEED_MPS,
+        this.state.velocityNED[1] + rightEjectDirNED[1] * PlayerAircraft.FLARE_EJECTION_SPEED_MPS,
+        this.state.velocityNED[2] + rightEjectDirNED[2] * PlayerAircraft.FLARE_EJECTION_SPEED_MPS,
+      ]
+      this.cmds.dispenseFlarePair([
+        { positionNED: leftSpawnNED, velocityNED: leftVelocityNED },
+        { positionNED: rightSpawnNED, velocityNED: rightVelocityNED },
+      ])
+    }
     if (controls.dispenseChaff) this.cmds.dispenseChaff(this.state.positionNED, this.state.velocityNED)
     this.cmds.update(dt)
 

@@ -9,10 +9,10 @@ export interface ChaffCloud {
 }
 
 export class CMDS {
-  private readonly MAX_FLARES = 30
-  private readonly MAX_CHAFF = 30
-  flareCount = 30
-  chaffCount = 30
+  private readonly MAX_FLARES = 120
+  private readonly MAX_CHAFF = 120
+  flareCount = 120
+  chaffCount = 120
   flares: FlareContact[] = []
   chaffClouds: ChaffCloud[] = []
   private flareTimer = 0
@@ -20,19 +20,28 @@ export class CMDS {
   private readonly FLARE_COOLDOWN = 0.5
   private readonly CHAFF_COOLDOWN = 0.25
 
+  private emitFlare(posNED: Vec3, velocityNED: Vec3): void {
+    this.flares.push({
+      positionNED: [...posNED] as Vec3,
+      velocityNED: [...velocityNED] as Vec3,
+      heatSignatureKW: 60,  // bright flare
+      ageSec: 0
+    })
+  }
+
   dispenseFlare(posNED: Vec3, velocityNED: Vec3 = [0, 0, 0]): void {
     if (this.flareCount <= 0 || this.flareTimer > 0) return
     this.flareCount--
     this.flareTimer = this.FLARE_COOLDOWN
-    this.flares.push({
-      positionNED: [
-        posNED[0] + velocityNED[0] * 0.05,
-        posNED[1] + velocityNED[1] * 0.05,
-        posNED[2] + velocityNED[2] * 0.05,
-      ],
-      heatSignatureKW: 60,  // bright flare
-      ageSec: 0
-    })
+    this.emitFlare(posNED, velocityNED)
+  }
+
+  dispenseFlarePair(spawns: readonly { positionNED: Vec3; velocityNED: Vec3 }[]): void {
+    if (this.flareTimer > 0 || this.flareCount < 2 || spawns.length < 2) return
+    this.flareCount -= 2
+    this.flareTimer = this.FLARE_COOLDOWN
+    this.emitFlare(spawns[0]!.positionNED, spawns[0]!.velocityNED)
+    this.emitFlare(spawns[1]!.positionNED, spawns[1]!.velocityNED)
   }
 
   dispenseChaff(posNED: Vec3, velocityNED: Vec3 = [0, 0, 0]): void {
@@ -53,6 +62,17 @@ export class CMDS {
     for (let i = this.flares.length - 1; i >= 0; i--) {
       const f = this.flares[i]!
       f.ageSec += dt
+      const drag = Math.max(0, 1 - dt * 1.8)
+      f.velocityNED = [
+        f.velocityNED[0] * drag,
+        f.velocityNED[1] * drag,
+        f.velocityNED[2] + dt * 3.5,
+      ]
+      f.positionNED = [
+        f.positionNED[0] + f.velocityNED[0] * dt,
+        f.positionNED[1] + f.velocityNED[1] * dt,
+        f.positionNED[2] + f.velocityNED[2] * dt,
+      ]
       f.heatSignatureKW = Math.max(0, 60 * (1 - f.ageSec / 4.0))
       if (f.ageSec > 4.0) this.flares.splice(i, 1)
     }

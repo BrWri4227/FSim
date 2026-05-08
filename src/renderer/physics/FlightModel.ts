@@ -50,16 +50,23 @@ function computeDerivative(
   const maxPitchRad = 25 * DEG2RAD
   const maxRollRad  = 25 * DEG2RAD
   const maxYawRad   = 20 * DEG2RAD
-  const pitchRad = -controls.pitch * maxPitchRad * penalties.pitchAuthorityMultiplier
-  const rollRad  = controls.roll  * maxRollRad  * penalties.rollAuthorityMultiplier
-  const yawRad   = controls.yaw   * maxYawRad
+  const pitchRadCmd = -controls.pitch * maxPitchRad * penalties.pitchAuthorityMultiplier
+  const rollRadCmd  = controls.roll  * maxRollRad  * penalties.rollAuthorityMultiplier
+  const yawRadCmd   = controls.yaw   * maxYawRad
+
+  // Basic SAS-like command damping against body rates and sideslip.
+  // This helps tame roll/yaw oscillation in tight alternating and inverted turns.
+  const betaRad = betaDeg * DEG2RAD
+  const pitchDamped = clamp(pitchRadCmd - 0.06 * qr, -maxPitchRad, maxPitchRad)
+  const rollDamped = clamp(rollRadCmd - 0.05 * p - 0.10 * betaRad, -maxRollRad, maxRollRad)
+  const yawDamped = clamp(yawRadCmd - 0.04 * r - 0.18 * betaRad, -maxYawRad, maxYawRad)
 
   // Aerodynamic coefficients
   const aeroCoeffs = computeAeroCoeffs(
     spec.aero, alphaDeg, betaDeg, mach,
     p, qr, r, spec.mass.wingspanM, spec.mass.macM, vt
   )
-  const ctrlDeltas = computeControlDeltas(spec.controlEffectiveness, mach, pitchRad, rollRad, yawRad)
+  const ctrlDeltas = computeControlDeltas(spec.controlEffectiveness, mach, pitchDamped, rollDamped, yawDamped)
 
   const CL = aeroCoeffs.CL + ctrlDeltas.dCL + flapCL
   const CD = Math.max(0, aeroCoeffs.CD + storeDragCD + flapCD)

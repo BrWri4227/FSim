@@ -71,6 +71,7 @@ export class AudioManager {
   // ── Sound buffer cache ──────────────────────────────────────────────────
   private buffers = new Map<string, AudioBuffer>()
   private soundsBasePath = 'sounds/'
+  private soundsLoadFinished = false
 
   // ── Engine (synthesis fallback) ─────────────────────────────────────────
   private engineOsc:  OscillatorNode
@@ -149,6 +150,7 @@ export class AudioManager {
    */
   async loadSounds(basePath?: string): Promise<void> {
     if (basePath) this.soundsBasePath = basePath
+    this.soundsLoadFinished = false
 
     const baseCandidates = await this.getSoundBaseCandidates()
     const loads = Object.entries(SOUND_FILES).map(async ([key, file]) => {
@@ -177,6 +179,7 @@ export class AudioManager {
       }
     })
     await Promise.allSettled(loads)
+    this.soundsLoadFinished = true
 
     console.log(`[Audio] ${this.buffers.size} / ${Object.keys(SOUND_FILES).length} sound files loaded.`)
 
@@ -536,6 +539,9 @@ export class AudioManager {
       this.applyGrowlParams(strength, locked)
       return
     }
+    // Avoid startup synth "chirp" before async sound loading has completed.
+    // If growl files are truly missing, we allow synthesis only after load settles.
+    if (!this.soundsLoadFinished) return
 
     // Synthesis fallback
     const ctx = this.ctx

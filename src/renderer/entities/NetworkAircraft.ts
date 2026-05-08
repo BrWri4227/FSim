@@ -41,6 +41,7 @@ export class NetworkAircraft extends Aircraft {
     this._netMissiles = net.missiles ?? []
     this._netFlares = (net.countermeasures?.flares ?? []).map(f => ({
       positionNED: [...f.positionNED] as [number, number, number],
+      velocityNED: [0, 0, 0],
       heatSignatureKW: f.heatSignatureKW,
       ageSec: f.ageSec,
     }))

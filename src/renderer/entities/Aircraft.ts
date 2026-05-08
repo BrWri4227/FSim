@@ -7,7 +7,7 @@ import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
 import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint, setGearVisible, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
-import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
+import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp } from '../utils/MathUtils'
 import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
 import { ThrusterEffect } from '../scene/ThrusterEffect'
@@ -25,6 +25,7 @@ export class Aircraft {
   mesh: THREE.Group
   protected scene: THREE.Scene
   private thrusterEffect: ThrusterEffect
+  private shapedAxes = { pitch: 0, roll: 0, yaw: 0 }
 
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, entityId?: string) {
     this.entityId = entityId ?? `aircraft_${++_entityCounter}`
@@ -70,7 +71,8 @@ export class Aircraft {
     const FLAP_CD = [0, 0.02, 0.08] as const
     const flapCL = FLAP_CL[this.state.flaps]
     const flapCD = FLAP_CD[this.state.flaps]
-    const fcsControls = applyFCSLimits(controls, this.state, this.spec)
+    const limitedControls = applyFCSLimits(controls, this.state, this.spec)
+    const fcsControls = this.shapeFlightControls(limitedControls, dt)
     const groundClearM = getGroundClearance(this.spec.id, this.state.gearDown)
     const newSV = stepRK4(this.state.sv, this.spec, fcsControls, massKg, penalties, storeDrag + gearDrag + speedBrakeDrag, dt, flapCL, flapCD, groundClearM)
 
@@ -123,6 +125,36 @@ export class Aircraft {
     const thrustEst = isAB ? this.spec.engine.maxThrustWetN : this.spec.engine.maxThrustDryN
     const burn = sfc * thrustEst * dt * penalties.fuelLeakMultiplier
     this.state.fuelKg = Math.max(0, this.state.fuelKg - burn)
+  }
+
+  private shapeFlightControls(controls: ControlInputs, dt: number): ControlInputs {
+    const dtSafe = Math.max(dt, 1 / 240)
+    const aoaFrac = clamp(Math.abs(this.state.alphaDeg) / Math.max(this.spec.maxAoADeg, 1), 0, 1)
+    const dampingBoost = 1 + 0.4 * aoaFrac
+
+    this.shapedAxes.pitch = this.rateLimitedAxis(this.shapedAxes.pitch, controls.pitch, dtSafe, 0.14 * dampingBoost, 3.2)
+    this.shapedAxes.roll = this.rateLimitedAxis(this.shapedAxes.roll, controls.roll, dtSafe, 0.10 * dampingBoost, 4.2)
+    this.shapedAxes.yaw = this.rateLimitedAxis(this.shapedAxes.yaw, controls.yaw, dtSafe, 0.12 * dampingBoost, 3.8)
+
+    return {
+      ...controls,
+      pitch: this.shapedAxes.pitch,
+      roll: this.shapedAxes.roll,
+      yaw: this.shapedAxes.yaw,
+    }
+  }
+
+  private rateLimitedAxis(current: number, target: number, dt: number, timeConstantSec: number, maxRatePerSec: number): number {
+    const alpha = 1 - Math.exp(-dt / Math.max(timeConstantSec, 1e-3))
+    const desired = current + (target - current) * alpha
+    const maxDelta = maxRatePerSec * dt
+    return current + clamp(desired - current, -maxDelta, maxDelta)
+  }
+
+  protected resetFlightControlShaping(): void {
+    this.shapedAxes.pitch = 0
+    this.shapedAxes.roll = 0
+    this.shapedAxes.yaw = 0
   }
 
   updateMesh(dt = 0.016): void {
