@@ -9,6 +9,8 @@ export interface ChaffCloud {
 }
 
 export class CMDS {
+  private readonly MAX_FLARES = 30
+  private readonly MAX_CHAFF = 30
   flareCount = 30
   chaffCount = 30
   flares: FlareContact[] = []
@@ -79,5 +81,14 @@ export class CMDS {
 
   getActiveChaffClouds(): readonly ChaffCloud[] {
     return this.chaffClouds
+  }
+
+  reloadCountermeasures(): void {
+    this.flareCount = this.MAX_FLARES
+    this.chaffCount = this.MAX_CHAFF
+    this.flares.length = 0
+    this.chaffClouds.length = 0
+    this.flareTimer = 0
+    this.chaffTimer = 0
   }
 }
