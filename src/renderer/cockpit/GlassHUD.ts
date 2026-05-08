@@ -95,12 +95,27 @@ export class GlassHUD {
       }
     }
 
-    // RWR threats top-right corner
+    // RWR threats top-right corner — missiles shown in red and flash at 4 Hz
+    const flash4Hz = Math.floor(performance.now() / 250) % 2 === 0
     let rwrY = 50
-    for (const t of rwr.threats.slice(0, 4)) {
-      c.fillStyle = t.type === 'TRACK' ? '#ff4444' : '#ffaa00'
-      c.fillText(`${t.type[0]} ${Math.round(t.azimuthDeg).toString().padStart(3,'0')}`, HUD_W - 80, rwrY)
+    for (const t of rwr.threats.slice(0, 5)) {
+      if (t.type === 'MISSILE') {
+        if (!flash4Hz) { rwrY += 14; continue }
+        c.fillStyle = '#ff0000'
+        const distStr = t.distanceM !== undefined ? ` ${(t.distanceM / 1000).toFixed(0)}k` : ''
+        c.fillText(`M ${Math.round(t.azimuthDeg).toString().padStart(3,'0')}${distStr}`, HUD_W - 80, rwrY)
+      } else {
+        c.fillStyle = t.type === 'TRACK' ? '#ff4444' : '#ffaa00'
+        c.fillText(`${t.type[0]} ${Math.round(t.azimuthDeg).toString().padStart(3,'0')}`, HUD_W - 80, rwrY)
+      }
       rwrY += 14
+    }
+    // Missile launch banner at top of glass HUD
+    if (rwr.threats.some(t => t.type === 'MISSILE') && flash4Hz) {
+      c.fillStyle = '#ff0000'
+      c.font = 'bold 12px monospace'
+      c.fillText('MSL', HUD_W - 45, 18)
+      c.font = '12px monospace'
     }
     c.fillStyle = '#00ff44'
 
