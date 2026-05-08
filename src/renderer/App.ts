@@ -37,8 +37,8 @@ export class App {
     this.debriefScreen?.dispose()
     this.debriefScreen = null
 
-    this.loadoutScreen = new LoadoutScreen(this.uiOverlay, (spec, stores, multiplayer, client) => {
-      this.enterFlight(spec, stores, multiplayer, client)
+    this.loadoutScreen = new LoadoutScreen(this.uiOverlay, (spec, stores, multiplayer, client, glocEnabled) => {
+      this.enterFlight(spec, stores, multiplayer, client, glocEnabled)
     })
   }
 
@@ -46,7 +46,8 @@ export class App {
     spec: AircraftSpec,
     stores: LoadedStore[],
     multiplayer: MultiplayerConfig,
-    multiplayerClient: MultiplayerClient | null
+    multiplayerClient: MultiplayerClient | null,
+    glocEnabled: boolean
   ): void {
     this.state = 'FLIGHT'
     this.loadoutScreen?.dispose()
@@ -54,7 +55,7 @@ export class App {
 
     this.flightSession = new FlightSession(spec, stores, multiplayer, multiplayerClient, (result) => {
       this.enterDebrief(result)
-    })
+    }, glocEnabled)
     this.flightSession.start()
   }
 
