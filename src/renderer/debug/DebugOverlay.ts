@@ -5,6 +5,8 @@ import { mToFt } from '../utils/Units'
 import { F16C } from '../data/aircraft/f16c'
 import { MIG29 } from '../data/aircraft/mig29'
 import type * as THREE from 'three'
+import { R73 } from '../data/weapons/r73'
+import { getStoreDragPenalty } from '../data/weapons/catalog'
 
 const ENEMY_SPECS = { 'F-16C': F16C, 'MiG-29': MIG29 } as const
 const BEHAVIORS   = ['FOLLOW_BEHIND', 'FOLLOW_IN_FRONT', 'FLY_STRAIGHT', 'TURN_CONSTANTLY'] as const
@@ -113,8 +115,8 @@ export class DebugOverlay {
       this.entityManager.spawnEnemy(
         spec,
         [
-          { hardpointId: 'W1', weaponId: 'r73', category: 'IR_MISSILE' as const, massKg: 105, dragPenalty: 0.002, remainingRounds: 1 },
-          { hardpointId: 'E1', weaponId: 'r73', category: 'IR_MISSILE' as const, massKg: 105, dragPenalty: 0.002, remainingRounds: 1 }
+          { hardpointId: 'W1', weaponId: 'r73', category: 'IR_MISSILE' as const, massKg: R73.massKg, dragPenalty: getStoreDragPenalty(R73), remainingRounds: 1 },
+          { hardpointId: 'E1', weaponId: 'r73', category: 'IR_MISSILE' as const, massKg: R73.massKg, dragPenalty: getStoreDragPenalty(R73), remainingRounds: 1 }
         ],
         behavior,
         spawnPos,

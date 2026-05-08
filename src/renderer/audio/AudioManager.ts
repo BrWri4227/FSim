@@ -9,6 +9,8 @@ export type AudioEvent =
   | 'IR_LOCK'
   | 'MISSILE_LAUNCH_IR'
   | 'MISSILE_LAUNCH_ARH'
+  | 'PITBULL'
+  | 'SHOOT'
   | 'GUN_FIRE_20MM'
   | 'GUN_FIRE_30MM'
   | 'PULL_UP'
@@ -36,6 +38,8 @@ export type AudioEvent =
 //   rwr_track.wav          — RWR track ping (faster than search)
 //   rwr_lock.wav           — RWR continuous lock tone (looped)
 //   missile_launch.wav     — missile motor ignition
+//   pitbull.wav            — "pitbull" callout
+//   shoot.wav              — "shoot" callout
 //   pull_up.wav            — GPWS "pull up" voice
 //   pull_up_urgent.wav     — GPWS "pull up pull up" voice
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +59,8 @@ const SOUND_FILES: Record<string, string> = {
   rwr_lock:          'rwr_lock.wav',
   rwr_launch:        'rwr_launch.wav',
   missile_launch:    'missile_launch.wav',
+  pitbull:           'pitbull.wav',
+  shoot:             'shoot.wav',
   pull_up:           'pull_up.wav',
   pull_up_urgent:    'pull_up_urgent.wav',
 }
@@ -90,7 +96,9 @@ export class AudioManager {
   private growlCarrier: OscillatorNode | null = null
   private growlAmpGain: GainNode | null = null
   private growlFmOsc:   OscillatorNode | null = null
+  private growlFmGain:  GainNode | null = null
   private growlAmOsc:   OscillatorNode | null = null
+  private growlAmGain:  GainNode | null = null
   private growlSrc:     AudioBufferSourceNode | null = null
   private growlSrcGain: GainNode | null = null
   private growlLocked = false
@@ -262,6 +270,7 @@ export class AudioManager {
       const fwdSpd = Math.sqrt(playerVel[0]**2 + playerVel[1]**2 + playerVel[2]**2) || 1
 
       let bestD = Infinity, bestInFront = false
+      let bestDot = -1
       for (const e of enemies) {
         const d = dist3(e.state.positionNED as [number,number,number], playerPos as [number,number,number])
         if (d < bestD) {
@@ -269,15 +278,21 @@ export class AudioManager {
           const dx = e.state.positionNED[0] - playerPos[0]
           const dy = e.state.positionNED[1] - playerPos[1]
           const dz = e.state.positionNED[2] - playerPos[2]
-          const dot = (dx * playerVel[0] + dy * playerVel[1] + dz * playerVel[2]) / (d * fwdSpd)
+          const dot = (dx * playerVel[0] + dy * playerVel[1] + dz * playerVel[2]) / Math.max(d * fwdSpd, 1)
+          bestDot = dot
           bestInFront = dot > 0.64
         }
       }
       const locked   = bestD < 5000  && bestInFront
-      const acquired = bestD < 15000 && bestInFront
-      this.setIRSeekerState(acquired, locked)
+      const acquired = bestD < 15000 && bestDot > 0.35
+      const rangeStrength = clamp01((15000 - bestD) / 12000) // 0 at ~15 km, 1 by ~3 km
+      const aspectStrength = clamp01((bestDot - 0.35) / 0.65)
+      const strengthRaw = 0.6 * rangeStrength + 0.4 * aspectStrength
+      const lockStrength = locked ? Math.max(strengthRaw, 0.8) : strengthRaw
+      const strength = acquired ? clamp01(lockStrength) : 0
+      this.setIRSeekerState(acquired, locked, strength)
     } else {
-      this.setIRSeekerState(false, false)
+      this.setIRSeekerState(false, false, 0)
     }
 
     // RWR tones — priority: MISSILE > STT LOCK > TRACK > SEARCH
@@ -319,6 +334,14 @@ export class AudioManager {
       case 'MISSILE_LAUNCH_ARH':
         if (!this.playOnce('missile_launch', 0.8)) this.speak('Fox Three')
         else this.speak('Fox Three')
+        break
+      case 'PITBULL':
+        if (!this.playOnce('pitbull', 0.9)) this.speak('Pitbull')
+        else this.speak('Pitbull')
+        break
+      case 'SHOOT':
+        if (!this.playOnce('shoot', 0.95)) this.speak('Shoot')
+        else this.speak('Shoot')
         break
       case 'PULL_UP':
         if (!this.playOnce('pull_up', 0.9)) this.speak('Pull up, terrain')
@@ -452,45 +475,40 @@ export class AudioManager {
 
   // ── IR seeker growl ───────────────────────────────────────────────────────
 
-  private startGrowl(locked: boolean): void {
+  private startGrowl(locked: boolean, strength: number): void {
     this.stopGrowl()
 
     const fileKey = locked ? 'ir_growl_hot' : 'ir_growl_cold'
-    const loop = this.startLoop(fileKey, locked ? 0.65 : 0.35)
+    const loop = this.startLoop(fileKey, locked ? 0.6 : 0.32)
     if (loop) {
       ;[this.growlSrc, this.growlSrcGain] = loop
       this.growlLocked = locked
+      this.applyGrowlParams(strength, locked)
       return
     }
 
     // Synthesis fallback
     const ctx = this.ctx
-    const carrierFreq = locked ? 480 : 340
-    const fmRate      = locked ? 42  : 22
-    const fmDepth     = locked ? 130 : 60
-    const amRate      = locked ? 38  : 18
-    const baseGain    = locked ? 0.11 : 0.05
-    const amDepth     = locked ? 0.08 : 0.04
 
     const carrier = ctx.createOscillator()
     carrier.type = 'sawtooth'
-    carrier.frequency.value = carrierFreq
+    carrier.frequency.value = 340
 
     const fmOsc  = ctx.createOscillator()
-    fmOsc.frequency.value = fmRate
+    fmOsc.frequency.value = 22
     const fmGain = ctx.createGain()
-    fmGain.gain.value = fmDepth
+    fmGain.gain.value = 60
     fmOsc.connect(fmGain)
     fmGain.connect(carrier.frequency)
 
     const amOsc  = ctx.createOscillator()
-    amOsc.frequency.value = amRate
+    amOsc.frequency.value = 18
     const amScaleGain = ctx.createGain()
-    amScaleGain.gain.value = amDepth
+    amScaleGain.gain.value = 0.04
     amOsc.connect(amScaleGain)
 
     const ampGain = ctx.createGain()
-    ampGain.gain.value = baseGain
+    ampGain.gain.value = 0.05
     amScaleGain.connect(ampGain.gain)
 
     const hp = ctx.createBiquadFilter()
@@ -505,8 +523,11 @@ export class AudioManager {
     this.growlCarrier = carrier
     this.growlAmpGain = ampGain
     this.growlFmOsc   = fmOsc
+    this.growlFmGain  = fmGain
     this.growlAmOsc   = amOsc
+    this.growlAmGain  = amScaleGain
     this.growlLocked  = locked
+    this.applyGrowlParams(strength, locked)
   }
 
   private stopGrowl(): void {
@@ -525,21 +546,56 @@ export class AudioManager {
       try { a?.stop() } catch { /* */ }
     }, 100)
     this.growlCarrier = null; this.growlAmpGain = null
-    this.growlFmOsc = null; this.growlAmOsc = null
+    this.growlFmOsc = null; this.growlFmGain = null
+    this.growlAmOsc = null; this.growlAmGain = null
     this.growlLocked = false
   }
 
-  setIRSeekerState(acquired: boolean, locked: boolean): void {
+  private applyGrowlParams(strength: number, locked: boolean): void {
+    const s = clamp01(strength)
+    const now = this.ctx.currentTime
+
+    if (this.growlSrc) {
+      // Keep full-lock ("solid") tone at a fixed pitch; only acquisition phase ramps pitch.
+      const playbackRate = locked ? 1.04 : (0.88 + s * 0.58)
+      const gain = locked ? (0.56 + s * 0.12) : (0.22 + s * 0.48)
+      this.growlSrc.playbackRate.setTargetAtTime(playbackRate, now, 0.06)
+      this.growlSrcGain?.gain.setTargetAtTime(gain, now, 0.05)
+      return
+    }
+
+    // Synthesis fallback mirrors the same "stronger lock => hotter pitch" behavior.
     if (locked) {
-      if ((this.growlSrc || this.growlCarrier) && this.growlLocked) return
-      this.startGrowl(true)
-    } else if (acquired) {
-      if ((this.growlSrc || this.growlCarrier) && !this.growlLocked) return
-      this.startGrowl(false)
+      this.growlCarrier?.frequency.setTargetAtTime(635, now, 0.06)
+      this.growlFmOsc?.frequency.setTargetAtTime(40, now, 0.07)
+      this.growlFmGain?.gain.setTargetAtTime(160, now, 0.07)
+      this.growlAmOsc?.frequency.setTargetAtTime(36, now, 0.07)
+      this.growlAmGain?.gain.setTargetAtTime(0.09, now, 0.08)
+      this.growlAmpGain?.gain.setTargetAtTime(0.15, now, 0.05)
     } else {
+      this.growlCarrier?.frequency.setTargetAtTime(300 + s * 300, now, 0.06)
+      this.growlFmOsc?.frequency.setTargetAtTime(16 + s * 34, now, 0.07)
+      this.growlFmGain?.gain.setTargetAtTime(45 + s * 120, now, 0.07)
+      this.growlAmOsc?.frequency.setTargetAtTime(12 + s * 28, now, 0.07)
+      this.growlAmGain?.gain.setTargetAtTime(0.03 + s * 0.08, now, 0.08)
+      this.growlAmpGain?.gain.setTargetAtTime(0.03 + s * 0.14, now, 0.05)
+    }
+  }
+
+  setIRSeekerState(acquired: boolean, locked: boolean, strength = 0): void {
+    if (!acquired) {
       if (!this.growlSrc && !this.growlCarrier) return
       this.stopGrowl()
+      return
     }
+
+    const hasGrowl = Boolean(this.growlSrc || this.growlCarrier)
+    if (!hasGrowl || this.growlLocked !== locked) {
+      this.startGrowl(locked, strength)
+      return
+    }
+
+    this.applyGrowlParams(strength, locked)
   }
 
   // ── RWR radar warning tones ───────────────────────────────────────────────
@@ -641,4 +697,8 @@ export class AudioManager {
 
 function dist3(a: [number,number,number], b: [number,number,number]): number {
   return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2)
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value))
 }

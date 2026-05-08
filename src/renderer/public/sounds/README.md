@@ -18,6 +18,7 @@ synthesized placeholders. Any missing file silently falls back to synthesis.
 | `rwr_track.wav`       | Single RWR track ping (plays faster than search)           |
 | `rwr_lock.wav`        | RWR continuous STT lock tone — looped                      |
 | `missile_launch.wav`  | Missile motor ignition one-shot                            |
+| `pitbull.wav`         | "Pitbull" callout when ARH missile goes active             |
 | `pull_up.wav`         | GPWS "pull up" voice warning                               |
 | `pull_up_urgent.wav`  | GPWS "pull up pull up" urgent warning                      |
 

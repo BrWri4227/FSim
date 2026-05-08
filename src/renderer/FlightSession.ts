@@ -47,6 +47,7 @@ export class FlightSession {
   private disposed = false
   private gSmoothed = 1.0   // low-pass filtered G for visual effects
   private glocEnabled: boolean
+  private wasRadarShootCueActive = false
 
   private onComplete: (result: FlightResult) => void
 
@@ -74,6 +75,12 @@ export class FlightSession {
     void this.audioManager.loadSounds('sounds/')
 
     this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene)
+    this.player.setOnMissileLaunch(category => {
+      this.audioManager.play(category === 'IR_MISSILE' ? 'MISSILE_LAUNCH_IR' : 'MISSILE_LAUNCH_ARH')
+    })
+    this.player.setOnMissileRadarStateChange((_missileId, mode) => {
+      if (mode === 'ACTIVE') this.audioManager.play('PITBULL')
+    })
     this.entityManager = new EntityManager(this.sceneManager.scene, this.player)
     this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
       if (!this.multiplayer || !this.localNetworkId) return
@@ -194,6 +201,11 @@ export class FlightSession {
     const inboundMissiles = this.entityManager.getInboundMissiles(targetIds)
     this.player.rwr.addMissileThreats(inboundMissiles, this.player.state)
     this.audioManager.update(this.player, controls)
+    const radarShootCueActive = this.hud.isRadarShootCueActive()
+    if (radarShootCueActive && !this.wasRadarShootCueActive) {
+      this.audioManager.play('SHOOT')
+    }
+    this.wasRadarShootCueActive = radarShootCueActive
 
     // Smooth G with ~0.4 s time-constant so vignette builds gradually
     const tau = 0.4

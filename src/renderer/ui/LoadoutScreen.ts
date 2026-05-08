@@ -4,14 +4,11 @@ import type { MultiplayerConfig } from '../network/MultiplayerTypes'
 import { MultiplayerClient } from '../network/MultiplayerClient'
 import { AIRCRAFT_ROSTER } from '../data/aircraft/catalog'
 import { getAircraftById } from '../data/aircraft/catalog'
-import { AIM9M }   from '../data/weapons/aim9m'
-import { AIM120B } from '../data/weapons/aim120b'
-import { R73 }  from '../data/weapons/r73'
-import { R77 }  from '../data/weapons/r77'
+import { MISSILE_SPECS, getStoreDragPenalty } from '../data/weapons/catalog'
 import { msToKts } from '../utils/Units'
 
 const WEAPON_OPTIONS: Record<string, { label: string; count: number }> = {
-  'aim9m':   { label: 'AIM-9M Sidewinder', count: 1 },
+  'aim9x':   { label: 'AIM-9X Sidewinder', count: 1 },
   'aim120b': { label: 'AIM-120B AMRAAM',   count: 1 },
   'r73':     { label: 'R-73 Archer',        count: 1 },
   'r77':     { label: 'R-77 Adder',         count: 1 },
@@ -147,7 +144,8 @@ export class LoadoutScreen {
       // Only show compatible weapons
       for (const [id, info] of Object.entries(WEAPON_OPTIONS)) {
         if (id === 'none') continue
-        const wSpec = id === 'aim9m' ? AIM9M : id === 'aim120b' ? AIM120B : id === 'r73' ? R73 : R77
+        const wSpec = MISSILE_SPECS[id]
+        if (!wSpec) continue
         if (!hp.compatibleTypes.includes(wSpec.category)) continue
         const opt = document.createElement('option')
         opt.value = id
@@ -155,7 +153,7 @@ export class LoadoutScreen {
         sel.appendChild(opt)
       }
       const priorWeapon = this.selectedWeaponByHardpoint.get(hp.id)
-      if (priorWeapon && [...sel.options].some(opt => opt.value === priorWeapon)) sel.value = priorWeapon
+      if (priorWeapon && Array.from(sel.options).some(opt => opt.value === priorWeapon)) sel.value = priorWeapon
       sel.onchange = () => this.selectedWeaponByHardpoint.set(hp.id, sel.value)
 
       selects.push({ hpId: hp.id, sel })
@@ -383,13 +381,14 @@ export class LoadoutScreen {
         const stores: LoadedStore[] = selects
           .filter(s => s.sel.value !== 'none')
           .map(s => {
-            const wSpec = s.sel.value === 'aim9m' ? AIM9M : s.sel.value === 'aim120b' ? AIM120B : s.sel.value === 'r73' ? R73 : R77
+            const wSpec = MISSILE_SPECS[s.sel.value]
+            if (!wSpec) throw new Error(`Unknown weapon selected: ${s.sel.value}`)
             return {
               hardpointId: s.hpId,
               weaponId: s.sel.value,
               category: wSpec.category as import('../types/aircraft').WeaponCategory,
               massKg: wSpec.massKg,
-              dragPenalty: 0.002,
+              dragPenalty: getStoreDragPenalty(wSpec),
               remainingRounds: 1
             }
           })

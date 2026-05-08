@@ -21,7 +21,7 @@ export class Radar {
       tracks: [],
       sttTargetId: null,
       selectedTrackId: null,
-      rangeModeM: 148160,  // 80nm default
+      rangeModeM: 222240,  // 120nm default
       lastFullScanSec: 0,
     }
   }

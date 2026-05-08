@@ -12,6 +12,7 @@ import { GPWS } from '../avionics/GPWS'
 import type { RWRState } from '../types/radar'
 import type { HMSState } from '../types/ir'
 import type { DamageZone } from '../types/damage'
+import { getMissileSpec, getStoreDragPenalty } from '../data/weapons/catalog'
 
 export class PlayerAircraft extends Aircraft {
   readonly gun: GunSystem
@@ -24,6 +25,9 @@ export class PlayerAircraft extends Aircraft {
 
   selectedWeaponIndex = 0
   private ejectKeyPrev = false
+  private onMissileLaunch: ((category: 'IR_MISSILE' | 'ARH_MISSILE') => void) | null = null
+  private onMissileRadarStateChange: ((missileId: string, mode: MissileState['guidanceMode']) => void) | null = null
+  private missileRadarModes = new Map<string, MissileState['guidanceMode']>()
 
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene) {
     super(spec, stores, scene, 'player')
@@ -43,16 +47,33 @@ export class PlayerAircraft extends Aircraft {
 
   private applyDefaultLoadout(): void {
     // Give 2 IR missiles and 4 ARH missiles as defaults
-    const irId  = this.spec.nation === 'USA' ? 'aim9m'   : 'r73'
+    const irId  = this.spec.nation === 'USA' ? 'aim9x'   : 'r73'
     const arhId = this.spec.nation === 'USA' ? 'aim120b' : 'r77'
+    const irSpec = getMissileSpec(irId)
+    const arhSpec = getMissileSpec(arhId)
+    if (!irSpec || !arhSpec) return
     const irHps  = this.spec.hardpoints.filter(h => h.compatibleTypes.includes('IR_MISSILE')).slice(0,2)
     const arhHps = this.spec.hardpoints.filter(h => h.compatibleTypes.includes('ARH_MISSILE')).slice(0,4)
 
     for (const hp of irHps) {
-      this.state.loadedStores.push({ hardpointId: hp.id, weaponId: irId, category: 'IR_MISSILE', massKg: 100, dragPenalty: 0.002, remainingRounds: 1 })
+      this.state.loadedStores.push({
+        hardpointId: hp.id,
+        weaponId: irId,
+        category: irSpec.category,
+        massKg: irSpec.massKg,
+        dragPenalty: getStoreDragPenalty(irSpec),
+        remainingRounds: 1,
+      })
     }
     for (const hp of arhHps) {
-      this.state.loadedStores.push({ hardpointId: hp.id, weaponId: arhId, category: 'ARH_MISSILE', massKg: 155, dragPenalty: 0.003, remainingRounds: 1 })
+      this.state.loadedStores.push({
+        hardpointId: hp.id,
+        weaponId: arhId,
+        category: arhSpec.category,
+        massKg: arhSpec.massKg,
+        dragPenalty: getStoreDragPenalty(arhSpec),
+        remainingRounds: 1,
+      })
     }
   }
 
@@ -77,12 +98,13 @@ export class PlayerAircraft extends Aircraft {
 
     if (controls.fireMissile) this.fireMissile(enemies)
 
-    // Pass current STT / TWS target position to MissileSystem for ARH datalink
-    const sttId = this.radar.getSttTargetId() ?? this.radar.state.selectedTrackId
+    // AMRAAM midcourse support should come only from an active STT lock.
+    const sttId = this.radar.getSttTargetId()
     const sttTrack = sttId ? this.radar.state.tracks.find(t => t.entityId === sttId) : null
     const radarTgtPos = sttTrack?.positionNED as [number,number,number] | undefined
     const radarTgtVel = sttTrack?.velocityNED as [number,number,number] | undefined
     this.missiles.update(dt, this.state, enemies, undefined, radarTgtPos, radarTgtVel)
+    this.emitMissileRadarModeTransitions()
 
     // Cycle missile
     if (controls.cycleMissile) this.cycleWeapon()
@@ -122,12 +144,26 @@ export class PlayerAircraft extends Aircraft {
     this.missiles.setOnTargetHit(cb ? (target, zone, severity) => cb(target.entityId, zone, severity, 'MISSILE') : null)
   }
 
+  setOnMissileLaunch(cb: ((category: 'IR_MISSILE' | 'ARH_MISSILE') => void) | null): void {
+    this.onMissileLaunch = cb
+  }
+
+  setOnMissileRadarStateChange(cb: ((missileId: string, mode: MissileState['guidanceMode']) => void) | null): void {
+    this.onMissileRadarStateChange = cb
+  }
+
   private fireMissile(enemies: Aircraft[]): void {
     const store = this.getSelectedMissileStore()
     if (!store || store.remainingRounds <= 0) return
 
+    const sttTargetId = this.radar.getSttTargetId()
+    if (store.weaponId === 'aim120b' && !sttTargetId) {
+      // AIM-120 launch requires a valid radar lock for midcourse support.
+      return
+    }
+
     // Find locked target
-    let targetId = this.radar.getSttTargetId() ?? this.hms.state.lockedEntityId
+    let targetId = sttTargetId ?? this.hms.state.lockedEntityId
     if (!targetId && enemies.length > 0) {
       const nearest = enemies.reduce((a, b) => {
         const da = Math.hypot(...(a.state.positionNED.map((v,i) => v - this.state.positionNED[i]!) as [number,number,number]))
@@ -148,23 +184,67 @@ export class PlayerAircraft extends Aircraft {
 
     this.missiles.launch(store.weaponId, this.state, targetId, 'player', tgtPos, tgtVel, hpBody)
     store.remainingRounds = 0
+    if (store.category === 'IR_MISSILE' || store.category === 'ARH_MISSILE') {
+      this.onMissileLaunch?.(store.category)
+    }
+  }
+
+  private getAvailableMissileWeaponIds(): string[] {
+    const ids: string[] = []
+    const seen = new Set<string>()
+    for (const store of this.state.loadedStores) {
+      const isMissile = store.category === 'IR_MISSILE' || store.category === 'ARH_MISSILE'
+      if (!isMissile || store.remainingRounds <= 0 || seen.has(store.weaponId)) continue
+      seen.add(store.weaponId)
+      ids.push(store.weaponId)
+    }
+    return ids
+  }
+
+  private getSelectedMissileWeaponId(): string | null {
+    const weaponIds = this.getAvailableMissileWeaponIds()
+    if (weaponIds.length === 0) return null
+    this.selectedWeaponIndex = ((this.selectedWeaponIndex % weaponIds.length) + weaponIds.length) % weaponIds.length
+    return weaponIds[this.selectedWeaponIndex] ?? null
   }
 
   private getSelectedMissileStore(): LoadedStore | null {
-    const missileStores = this.state.loadedStores.filter(s =>
-      (s.category === 'IR_MISSILE' || s.category === 'ARH_MISSILE') && s.remainingRounds > 0
-    )
-    return missileStores[this.selectedWeaponIndex % Math.max(1, missileStores.length)] ?? null
+    const selectedWeaponId = this.getSelectedMissileWeaponId()
+    if (!selectedWeaponId) return null
+    return this.state.loadedStores.find(s =>
+      s.weaponId === selectedWeaponId &&
+      (s.category === 'IR_MISSILE' || s.category === 'ARH_MISSILE') &&
+      s.remainingRounds > 0
+    ) ?? null
+  }
+
+  private emitMissileRadarModeTransitions(): void {
+    const activeMissiles = this.missiles.getMissiles().filter(m => m.active && m.spec.category === 'ARH_MISSILE')
+    const seen = new Set<string>()
+
+    for (const missile of activeMissiles) {
+      seen.add(missile.id)
+      const prevMode = this.missileRadarModes.get(missile.id)
+      const nextMode = missile.guidanceMode
+      if (prevMode !== undefined && prevMode !== nextMode) {
+        this.onMissileRadarStateChange?.(missile.id, nextMode)
+      }
+      this.missileRadarModes.set(missile.id, nextMode)
+    }
+
+    for (const id of this.missileRadarModes.keys()) {
+      if (!seen.has(id)) this.missileRadarModes.delete(id)
+    }
   }
 
   getSelectedWeaponName(): string {
-    const store = this.getSelectedMissileStore()
-    if (!store) return this.spec.gunSpec ? 'GUN' : 'NONE'
-    return store.weaponId.toUpperCase()
+    const selectedWeaponId = this.getSelectedMissileWeaponId()
+    if (!selectedWeaponId) return this.spec.gunSpec ? 'GUN' : 'NONE'
+    return selectedWeaponId.toUpperCase()
   }
 
   cycleWeapon(): void {
-    const count = this.state.loadedStores.filter(s => s.remainingRounds > 0 && s.category !== 'FUEL_TANK').length
+    const count = this.getAvailableMissileWeaponIds().length
     if (count > 0) this.selectedWeaponIndex = (this.selectedWeaponIndex + 1) % count
   }
 

@@ -21,6 +21,8 @@ function makeGlowTexture(innerRgba: string, outerRgba: string): THREE.Texture {
 export class ThrusterEffect {
   private core: THREE.Sprite
   private glow: THREE.Sprite
+  private plume: THREE.Mesh
+  private abDiamond: THREE.Mesh
   readonly light: THREE.PointLight
   private baseScale: number
   private time = 0
@@ -48,22 +50,77 @@ export class ThrusterEffect {
     this.glow.scale.setScalar(baseScale * 5)
     parent.add(this.glow)
 
+    const plumeMat = new THREE.MeshBasicMaterial({
+      color: 0x77aaff,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+    this.plume = new THREE.Mesh(new THREE.ConeGeometry(baseScale * 0.42, baseScale * 4.2, 16, 1, true), plumeMat)
+    // ConeGeometry axis is +Y; rotate so plume points out of rear nozzle (-X in local placeholder mesh space).
+    this.plume.rotation.z = Math.PI / 2
+    this.plume.position.x = -baseScale * 2.1
+    parent.add(this.plume)
+
+    const diamondMat = new THREE.MeshBasicMaterial({
+      color: 0x9dd7ff,
+      transparent: true,
+      opacity: 0.6,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+    this.abDiamond = new THREE.Mesh(new THREE.OctahedronGeometry(baseScale * 0.22, 0), diamondMat)
+    this.abDiamond.position.x = -baseScale * 3.3
+    this.abDiamond.visible = false
+    parent.add(this.abDiamond)
+
     this.light = new THREE.PointLight(0x88aaff, 0, baseScale * 40)
     parent.add(this.light)
   }
 
-  update(intensity: number, dt = 0.016): void {
+  update(intensity: number, isAfterburner = false, dt = 0.016): void {
     this.time += dt
     const i = Math.max(0, Math.min(1, intensity))
     // Slight flicker — ±8 % random variation
     const flicker = 1 + (Math.sin(this.time * 47) * 0.05 + Math.sin(this.time * 83) * 0.03)
     const eff = i * flicker
 
-    this.core.visible = i > 0.02
-    this.glow.visible = i > 0.02
-    this.core.scale.setScalar(this.baseScale * (1 + eff * 1.5))
-    this.glow.scale.setScalar(this.baseScale * (2.5 + eff * 3.5))
-    this.light.intensity = eff * 4
+    const active = i > 0.02
+    this.core.visible = active
+    this.glow.visible = active
+    this.plume.visible = active
+    this.abDiamond.visible = active && isAfterburner
+
+    this.core.scale.setScalar(this.baseScale * (0.95 + eff * 1.35))
+    this.glow.scale.setScalar(this.baseScale * (2.2 + eff * 3.1))
+
+    const plumeMat = this.plume.material as THREE.MeshBasicMaterial
+    const plumeLen = this.baseScale * (isAfterburner ? (4.8 + eff * 3.1) : (2.7 + eff * 1.6))
+    const plumeRadius = this.baseScale * (isAfterburner ? (0.32 + eff * 0.18) : (0.20 + eff * 0.1))
+    this.plume.scale.set(
+      plumeRadius / (this.baseScale * 0.42),
+      plumeLen / (this.baseScale * 4.2),
+      plumeRadius / (this.baseScale * 0.42),
+    )
+    this.plume.position.x = -plumeLen * 0.5
+    plumeMat.color.set(isAfterburner ? 0x83cbff : 0xffa25a)
+    plumeMat.opacity = isAfterburner ? 0.5 : 0.28
+
+    const diamondMat = this.abDiamond.material as THREE.MeshBasicMaterial
+    if (isAfterburner) {
+      const pulse = 0.8 + 0.2 * Math.sin(this.time * 28)
+      const dScale = this.baseScale * (0.7 + eff * 0.8) * pulse
+      this.abDiamond.scale.setScalar(dScale)
+      this.abDiamond.position.x = -plumeLen * 0.72
+      diamondMat.opacity = 0.45 + 0.25 * pulse
+    }
+
+    this.light.color.set(isAfterburner ? 0x9bcfff : 0xffa060)
+    this.light.intensity = eff * (isAfterburner ? 8 : 3.8)
+    this.light.distance = this.baseScale * (isAfterburner ? 68 : 40)
   }
 
   dispose(): void {
@@ -71,6 +128,10 @@ export class ThrusterEffect {
     ;(this.core.material as THREE.SpriteMaterial).dispose()
     ;(this.glow.material as THREE.SpriteMaterial).map?.dispose()
     ;(this.glow.material as THREE.SpriteMaterial).dispose()
+    ;(this.plume.material as THREE.MeshBasicMaterial).dispose()
+    this.plume.geometry.dispose()
+    ;(this.abDiamond.material as THREE.MeshBasicMaterial).dispose()
+    this.abDiamond.geometry.dispose()
   }
 }
 
