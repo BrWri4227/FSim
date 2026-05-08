@@ -1,0 +1,173 @@
+import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent } from './MultiplayerTypes'
+
+interface RemoteSnapshot {
+  playerId: string
+  profile: NetPlayerProfile
+  state: NetPlayerState | null
+}
+
+export class MultiplayerClient {
+  private ws: WebSocket | null = null
+  private remotePlayers = new Map<string, RemoteSnapshot>()
+  private inboundHits: HitEvent[] = []
+  private connected = false
+  private localPlayerId: string | null = null
+  private profile: NetPlayerProfile
+  private rosterListeners: Array<() => void> = []
+
+  constructor(profile: NetPlayerProfile) {
+    this.profile = profile
+  }
+
+  async connect(config: MultiplayerConfig): Promise<void> {
+    if (config.mode === 'single') return
+    const url = `ws://${config.host}:${config.port}`
+    this.ws = new WebSocket(url)
+
+    await new Promise<void>((resolve, reject) => {
+      if (!this.ws) return reject(new Error('WebSocket not initialized'))
+      const onOpen = (): void => {
+        this.connected = true
+        this.send({ type: 'join', profile: this.profile })
+        resolve()
+      }
+      const onError = (): void => {
+        reject(new Error(`Failed to connect to LAN session at ${url}`))
+      }
+      this.ws.addEventListener('open', onOpen, { once: true })
+      this.ws.addEventListener('error', onError, { once: true })
+    })
+
+    this.ws.addEventListener('message', event => {
+      let msg: ServerMessage | null = null
+      try {
+        msg = JSON.parse(String(event.data)) as ServerMessage
+      } catch {
+        return
+      }
+      if (!msg) return
+
+      if (msg.type === 'welcome') {
+        this.localPlayerId = msg.playerId
+        this.remotePlayers.clear()
+        for (const peer of msg.peers) {
+          this.remotePlayers.set(peer.playerId, {
+            playerId: peer.playerId,
+            profile: peer.profile,
+            state: peer.state ?? null,
+          })
+        }
+        this.notifyRosterChanged()
+        return
+      }
+
+      if (msg.type === 'peer-join') {
+        this.remotePlayers.set(msg.playerId, {
+          playerId: msg.playerId,
+          profile: msg.profile,
+          state: null,
+        })
+        this.notifyRosterChanged()
+        return
+      }
+
+      if (msg.type === 'peer-leave') {
+        this.remotePlayers.delete(msg.playerId)
+        this.notifyRosterChanged()
+        return
+      }
+
+      if (msg.type === 'state') {
+        const wasInLobby = !this.remotePlayers.get(msg.playerId)?.state
+        this.remotePlayers.set(msg.playerId, {
+          playerId: msg.playerId,
+          profile: msg.profile,
+          state: msg.state,
+        })
+        // Only notify on first state received (lobby → flight transition); subsequent
+        // updates are polled each frame by syncMultiplayer() via getRemoteSnapshots().
+        if (wasInLobby) this.notifyRosterChanged()
+        return
+      }
+
+      if (msg.type === 'peer-profile-update') {
+        const peer = this.remotePlayers.get(msg.playerId)
+        if (peer) {
+          peer.profile = msg.profile
+          this.notifyRosterChanged()
+        }
+        return
+      }
+
+      if (msg.type === 'hit') {
+        this.inboundHits.push(msg.hit)
+      }
+    })
+
+    this.ws.addEventListener('close', () => {
+      this.connected = false
+      this.remotePlayers.clear()
+      this.localPlayerId = null
+      this.notifyRosterChanged()
+    })
+  }
+
+  isConnected(): boolean {
+    return this.connected && this.ws !== null && this.ws.readyState === WebSocket.OPEN
+  }
+
+  getLocalPlayerId(): string | null {
+    return this.localPlayerId
+  }
+
+  getRemoteSnapshots(): RemoteSnapshot[] {
+    return [...this.remotePlayers.values()]
+  }
+
+  onRosterChanged(cb: () => void): () => void {
+    this.rosterListeners.push(cb)
+    return () => {
+      this.rosterListeners = this.rosterListeners.filter(listener => listener !== cb)
+    }
+  }
+
+  updateProfile(profile: NetPlayerProfile): void {
+    this.profile = profile
+    this.send({ type: 'profile-update', profile })
+  }
+
+  sendState(state: NetPlayerState): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'state', state })
+  }
+
+  sendHit(hit: HitEvent): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'hit', hit })
+  }
+
+  consumeInboundHits(): HitEvent[] {
+    const out = [...this.inboundHits]
+    this.inboundHits.length = 0
+    return out
+  }
+
+  disconnect(): void {
+    if (this.ws) this.ws.close()
+    this.ws = null
+    this.connected = false
+    this.remotePlayers.clear()
+    this.localPlayerId = null
+    this.inboundHits.length = 0
+    this.notifyRosterChanged()
+  }
+
+  private send(msg: ClientMessage): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify(msg))
+  }
+
+  private notifyRosterChanged(): void {
+    for (const listener of this.rosterListeners) listener()
+  }
+}

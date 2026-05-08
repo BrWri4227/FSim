@@ -17,8 +17,16 @@ export function drawThreatDisplay(ctx: CanvasRenderingContext2D, cx: number, cy:
     const azRad = (t.azimuthDeg - 90) * Math.PI / 180
     const tx = cx + Math.cos(azRad) * r
     const ty = cy + Math.sin(azRad) * r
-    ctx.fillStyle = t.type === 'TRACK' ? '#ff2222' : '#ffaa00'
-    ctx.fillText(t.type[0]!, tx - 4, ty + 4)
+    if (t.type === 'MISSILE') {
+      ctx.fillStyle = '#ff0000'
+      ctx.fillText('M', tx - 4, ty + 4)
+    } else if (t.type === 'TRACK') {
+      ctx.fillStyle = '#ff2222'
+      ctx.fillText('T', tx - 4, ty + 4)
+    } else {
+      ctx.fillStyle = '#ffaa00'
+      ctx.fillText('S', tx - 4, ty + 4)
+    }
   }
   ctx.fillStyle = '#00ff44'
 }

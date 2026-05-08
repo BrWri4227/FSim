@@ -9,9 +9,15 @@ import { DebugOverlay } from './debug/DebugOverlay'
 import { DebugVisuals } from './debug/DebugVisuals'
 import { AudioManager } from './audio/AudioManager'
 import { PostFXManager } from './postfx/PostFXManager'
+import { MultiplayerClient } from './network/MultiplayerClient'
+import type { MultiplayerConfig } from './network/MultiplayerTypes'
 import type { AircraftSpec } from './types/aircraft'
 import type { LoadedStore } from './types/weapons'
+import { applyHit } from './systems/DamageModel'
+import { getAircraftById } from './data/aircraft/catalog'
 import type { FlightResult } from './App'
+import { FlareEffect } from './scene/FlareEffect'
+import { ChaffEffect } from './scene/ChaffEffect'
 
 const FIXED_DT = 1 / 60
 
@@ -26,6 +32,13 @@ export class FlightSession {
   private debugVisuals: DebugVisuals
   private audioManager: AudioManager
   private postFX: PostFXManager
+  private multiplayerConfig: MultiplayerConfig
+  private multiplayer: MultiplayerClient | null = null
+  private localNetworkId: string | null = null
+  private trackedRemoteIds = new Set<string>()
+
+  private flareEffect: FlareEffect
+  private chaffEffect: ChaffEffect
 
   private rafId = 0
   private lastTime = 0
@@ -39,9 +52,13 @@ export class FlightSession {
   constructor(
     spec: AircraftSpec,
     stores: LoadedStore[],
+    multiplayer: MultiplayerConfig,
+    existingMultiplayerClient: MultiplayerClient | null,
     onComplete: (result: FlightResult) => void
   ) {
     this.onComplete = onComplete
+    this.multiplayerConfig = multiplayer
+    this.multiplayer = existingMultiplayerClient
 
     const threeCanvas = document.getElementById('three-canvas') as HTMLCanvasElement
     const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement
@@ -55,8 +72,22 @@ export class FlightSession {
 
     this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene)
     this.entityManager = new EntityManager(this.sceneManager.scene, this.player)
+    this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
+      if (!this.multiplayer || !this.localNetworkId) return
+      if (!targetId.startsWith('peer_')) return
+      this.multiplayer.sendHit({
+        sourceId: this.localNetworkId,
+        targetId,
+        zone,
+        severity,
+        weapon,
+      })
+    })
 
     this.postFX = new PostFXManager(this.sceneManager.renderer, this.sceneManager.scene, this.sceneManager.camera)
+
+    this.flareEffect = new FlareEffect(this.sceneManager.scene)
+    this.chaffEffect = new ChaffEffect(this.sceneManager.scene)
 
     this.hud = new HUD(hudCanvas, this.player, this.entityManager)
     this.debugOverlay = new DebugOverlay(this.player, this.entityManager, this.sceneManager.scene)
@@ -86,9 +117,53 @@ export class FlightSession {
   }
 
   start(): void {
+    void this.startInternal()
+  }
+
+  private async startInternal(): Promise<void> {
+    await this.initMultiplayer()
+    this.applyPeerSpawnOffset()
     this.sessionStartTime = performance.now()
     this.lastTime = this.sessionStartTime
     this.loop(this.sessionStartTime)
+  }
+
+  private applyPeerSpawnOffset(): void {
+    if (!this.localNetworkId) return
+    const match = this.localNetworkId.match(/^peer_(\d+)$/)
+    if (!match) return
+    const peerNum = parseInt(match[1]!, 10)
+    if (peerNum <= 1) return
+    // Each peer beyond the first is offset 600 m east so players spawn in different positions.
+    const eastM = (peerNum - 1) * 600
+    this.player.state.positionNED[1] = eastM
+    // Keep state vector consistent with the new position (sv index 1 = East).
+    this.player.state.sv[1] = eastM
+  }
+
+  private async initMultiplayer(): Promise<void> {
+    if (this.multiplayerConfig.mode === 'single') return
+    try {
+      if (this.multiplayer && this.multiplayer.isConnected()) {
+        this.localNetworkId = this.multiplayer.getLocalPlayerId()
+        return
+      }
+      if (this.multiplayerConfig.mode === 'host') {
+        await window.fsim.multiplayer.startHost(this.multiplayerConfig.port)
+      }
+      const connectHost = this.multiplayerConfig.mode === 'host' ? '127.0.0.1' : this.multiplayerConfig.host
+      this.multiplayer = new MultiplayerClient({ aircraftId: this.player.spec.id })
+      await this.multiplayer.connect({
+        mode: this.multiplayerConfig.mode,
+        host: connectHost,
+        port: this.multiplayerConfig.port,
+      })
+      this.localNetworkId = this.multiplayer.getLocalPlayerId()
+    } catch (err) {
+      console.warn('LAN multiplayer unavailable, continuing single-player:', err)
+      this.multiplayer = null
+      this.localNetworkId = null
+    }
   }
 
   private loop = (timestamp: number): void => {
@@ -109,8 +184,12 @@ export class FlightSession {
 
   private tick(dt: number): void {
     const controls = this.inputManager.getControls()
-    this.player.update(dt, controls)
+    this.syncMultiplayer()
+    this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined)
     this.entityManager.update(dt, this.player)
+    const targetIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
+    const inboundMissiles = this.entityManager.getInboundMissiles(targetIds)
+    this.player.rwr.addMissileThreats(inboundMissiles, this.player.state)
     this.audioManager.update(this.player, controls)
 
     // Smooth G with ~0.4 s time-constant so vignette builds gradually
@@ -130,6 +209,55 @@ export class FlightSession {
     }
   }
 
+  private syncMultiplayer(): void {
+    if (!this.multiplayer || !this.multiplayer.isConnected()) return
+
+    this.localNetworkId = this.multiplayer.getLocalPlayerId() ?? this.localNetworkId
+    const radarState = this.player.radar.state
+    this.multiplayer.sendState({
+      positionNED: [...this.player.state.positionNED] as [number, number, number],
+      velocityNED: [...this.player.state.velocityNED] as [number, number, number],
+      attitudeQuat: [...this.player.state.attitudeQuat] as [number, number, number, number],
+      throttle: this.player.state.throttle,
+      ejected: this.player.state.ejected,
+      structuralFailure: this.player.damage.structuralFailure,
+      radar: {
+        mode: radarState.mode,
+        sttTargetId: radarState.sttTargetId,
+      },
+      missiles: this.player.missiles.getMissiles()
+        .filter(m => m.active)
+        .map(m => ({
+          id: m.id,
+          positionNED: [...m.positionNED] as [number, number, number],
+          velocityNED: [...m.velocityNED] as [number, number, number],
+          targetEntityId: m.targetEntityId,
+          active: m.active,
+        })),
+    })
+
+    const snapshots = this.multiplayer.getRemoteSnapshots()
+    const seen = new Set<string>()
+    for (const snap of snapshots) {
+      seen.add(snap.playerId)
+      if (!snap.state) continue
+      const remoteSpec = getAircraftById(snap.profile.aircraftId)
+      if (!remoteSpec) continue
+      this.entityManager.upsertRemotePlayer(snap.playerId, remoteSpec, snap.state)
+    }
+
+    for (const trackedId of this.trackedRemoteIds) {
+      if (!seen.has(trackedId)) this.entityManager.removeRemotePlayer(trackedId)
+    }
+    this.trackedRemoteIds = seen
+
+    if (!this.localNetworkId) return
+    for (const hit of this.multiplayer.consumeInboundHits()) {
+      if (hit.targetId !== this.localNetworkId) continue
+      applyHit(this.player.damage, hit.zone, hit.severity, this.player.state.invincible)
+    }
+  }
+
   private render(): void {
     const playerState = this.player.state
     this.cameraManager.update(this.player)
@@ -137,6 +265,10 @@ export class FlightSession {
     // Sync mesh transforms
     this.player.updateMesh()
     this.entityManager.updateMeshes()
+
+    // Countermeasure visual effects
+    this.flareEffect.update(this.player.cmds.getActiveFlares())
+    this.chaffEffect.update(this.player.cmds.getActiveChaffClouds())
 
     // Keep sky centred on camera before rendering
     this.sceneManager.updateSky(this.sceneManager.camera)
@@ -168,7 +300,11 @@ export class FlightSession {
     this.hud.dispose()
     this.debugOverlay.dispose()
     this.debugVisuals.dispose()
+    this.flareEffect.dispose()
+    this.chaffEffect.dispose()
     this.sceneManager.dispose()
     this.audioManager.dispose()
+    this.multiplayer?.disconnect()
+    if (this.multiplayerConfig.mode === 'host') void window.fsim.multiplayer.stopHost()
   }
 }

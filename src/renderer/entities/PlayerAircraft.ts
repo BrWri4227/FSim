@@ -11,7 +11,7 @@ import { HMS } from '../avionics/HMS'
 import { GPWS } from '../avionics/GPWS'
 import type { RWRState } from '../types/radar'
 import type { HMSState } from '../types/ir'
-import { DEFAULT_BINDINGS } from '../input/ControlMapping'
+import type { DamageZone } from '../types/damage'
 
 export class PlayerAircraft extends Aircraft {
   readonly gun: GunSystem
@@ -56,8 +56,13 @@ export class PlayerAircraft extends Aircraft {
     }
   }
 
-  update(dt: number, controls: ControlInputs): void {
+  update(dt: number, controls: ControlInputs, enemies: Aircraft[], ownNetId?: string): void {
     if (this.state.ejected) return
+
+    if (this.damage.structuralFailure || this.damage.zones['COCKPIT'] >= 1.0) {
+      this.eject()
+      return
+    }
 
     // Eject check
     const ejectKey = document.getElementById('three-canvas') !== null &&
@@ -66,9 +71,6 @@ export class PlayerAircraft extends Aircraft {
     this.ejectKeyPrev = ejectKey
 
     this.integrate(controls, dt)
-
-    // Weapons
-    const enemies: Aircraft[] = (window as any)._fsimEnemies ?? []
 
     if (controls.fireGun) this.gun.fire(this.state, this.spec)
     this.gun.update(dt, enemies)
@@ -90,17 +92,31 @@ export class PlayerAircraft extends Aircraft {
     if (controls.dispenseChaff) this.cmds.dispenseChaff(this.state.positionNED, this.state.velocityNED)
     this.cmds.update(dt)
 
+    // Landing gear toggle
+    if (controls.toggleGear) this.state.gearDown = !this.state.gearDown
+
+    // Flap cycle: UP → TAKEOFF → LANDING → UP
+    if (controls.cycleFlaps) this.state.flaps = ((this.state.flaps + 1) % 3) as 0 | 1 | 2
+    // Auto-retract flaps above limit speed (250 kts for pos 1, 200 kts for pos 2)
+    if (this.state.flaps === 2 && this.state.iasKts > 200) this.state.flaps = 1
+    if (this.state.flaps === 1 && this.state.iasKts > 250) this.state.flaps = 0
+
     // Avionics
     this.radar.update(dt, this.state, enemies, controls.radarModeNext)
     if (controls.radarSelectNext) this.radar.selectNextTrack()
     if (controls.radarLockTarget) this.radar.lockSelectedTarget()
     if (controls.radarUnlock)     this.radar.unlockSTT()
-    this.rwr.update(enemies, this.state)
+    this.rwr.update(enemies, this.state, ownNetId ?? 'player')
     this.hms.update(this.state)
     this.gpws.update(this.state, dt, _event => {
       // GPWS audio events handled via AudioManager in FlightSession
       ;(window as any)['_fsimGPWSEvent'] = _event
     })
+  }
+
+  setOnTargetHit(cb: ((targetId: string, zone: DamageZone, severity: number, weapon: 'GUN' | 'MISSILE') => void) | null): void {
+    this.gun.setOnTargetHit(cb ? (target, zone, severity) => cb(target.entityId, zone, severity, 'GUN') : null)
+    this.missiles.setOnTargetHit(cb ? (target, zone, severity) => cb(target.entityId, zone, severity, 'MISSILE') : null)
   }
 
   private fireMissile(enemies: Aircraft[]): void {

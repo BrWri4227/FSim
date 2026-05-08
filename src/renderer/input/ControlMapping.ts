@@ -12,6 +12,8 @@ export interface KeyBindings {
   cycleMissile: string
   flare:      string
   chaff:      string
+  gear:       string
+  flaps:      string
   radarMode:  string
   radarSelectNext: string
   radarLockTarget: string
@@ -33,6 +35,8 @@ export const DEFAULT_BINDINGS: KeyBindings = {
   cycleMissile: 'KeyC',
   flare:        'KeyZ',
   chaff:        'KeyX',
+  gear:         'KeyG',
+  flaps:        'KeyV',
   radarMode:    'KeyR',
   radarSelectNext: 'KeyT',
   radarLockTarget: 'KeyL',

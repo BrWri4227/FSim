@@ -25,7 +25,9 @@ function computeDerivative(
   controls: ControlInputs,
   massKg: number,
   penalties: FlightPenalties,
-  storeDragCD: number
+  storeDragCD: number,
+  flapCL: number,
+  flapCD: number
 ): StateVec {
   const { pos, vel, q, omega } = extractFromSV(sv)
   const [p, qr, r] = omega
@@ -59,8 +61,8 @@ function computeDerivative(
   )
   const ctrlDeltas = computeControlDeltas(spec.controlEffectiveness, mach, pitchRad, rollRad, yawRad)
 
-  const CL = aeroCoeffs.CL + ctrlDeltas.dCL
-  const CD = Math.max(0, aeroCoeffs.CD + storeDragCD)
+  const CL = aeroCoeffs.CL + ctrlDeltas.dCL + flapCL
+  const CD = Math.max(0, aeroCoeffs.CD + storeDragCD + flapCD)
   const Cm = aeroCoeffs.Cm + ctrlDeltas.dCm
   const CY = aeroCoeffs.CY
   const Cl = aeroCoeffs.Cl + ctrlDeltas.dCl
@@ -148,15 +150,17 @@ export function stepRK4(
   massKg: number,
   penalties: FlightPenalties,
   storeDragCD: number,
-  dt: number
+  dt: number,
+  flapCL = 0,
+  flapCD = 0
 ): StateVec {
-  const k1 = computeDerivative(sv, spec, controls, massKg, penalties, storeDragCD)
+  const k1 = computeDerivative(sv, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
   const sv2 = addSV(sv, scaleSV(k1, dt * 0.5))
-  const k2 = computeDerivative(sv2, spec, controls, massKg, penalties, storeDragCD)
+  const k2 = computeDerivative(sv2, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
   const sv3 = addSV(sv, scaleSV(k2, dt * 0.5))
-  const k3 = computeDerivative(sv3, spec, controls, massKg, penalties, storeDragCD)
+  const k3 = computeDerivative(sv3, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
   const sv4 = addSV(sv, scaleSV(k3, dt))
-  const k4 = computeDerivative(sv4, spec, controls, massKg, penalties, storeDragCD)
+  const k4 = computeDerivative(sv4, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
 
   const result = addSV(sv, scaleSV(addSV4(k1, k2, k3, k4), dt / 6)) as StateVec
 

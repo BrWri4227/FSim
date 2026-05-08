@@ -107,6 +107,86 @@ function addCanopy(g: THREE.Group, x: number, y: number): void {
   g.add(mesh)
 }
 
+/**
+ * Add deployed flap surfaces as a hidden 'flaps-group' child.
+ * Flaps are thin trailing-edge panels angled ~35° down from the wing plane.
+ * flapX: X position (chord-wise), flapZ: half-span start, flapSpan: panel span.
+ */
+function addFlapsGroup(
+  g: THREE.Group,
+  flapX: number,
+  flapZ: number,
+  flapSpan: number,
+  flapChord: number,
+  wingY: number
+): void {
+  const fm = new THREE.MeshPhongMaterial({ color: 0x556677, shininess: 20, side: THREE.DoubleSide })
+  const flaps = new THREE.Group()
+  flaps.name = 'flaps-group'
+
+  const angleRad = 35 * Math.PI / 180
+  const halfC = flapChord / 2
+
+  for (const side of [1, -1] as const) {
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(flapChord, 0.05, flapSpan), fm)
+    panel.position.set(flapX - halfC * Math.cos(angleRad), wingY - halfC * Math.sin(angleRad), side * flapZ)
+    panel.rotation.z = -side * 0 // symmetric; rotate around chord
+    panel.rotation.x = angleRad  // angle down from wing plane
+    flaps.add(panel)
+  }
+
+  flaps.visible = false
+  g.add(flaps)
+}
+
+/**
+ * Add retractable landing gear (nose + two main gear) as a hidden 'gear-group' child.
+ * Struts extend downward (−Y). All positions are in local mesh space (+X = nose).
+ */
+function addGearGroup(
+  g: THREE.Group,
+  noseX: number,
+  mainX: number,
+  mainZ: number,
+  bellyY: number,
+  strutH: number,
+  wheelR: number
+): void {
+  const gm = new THREE.MeshPhongMaterial({ color: 0x2a2a2a, shininess: 20 })
+  const gear = new THREE.Group()
+  gear.name = 'gear-group'
+
+  // Nose strut + wheel
+  const nStrut = new THREE.Mesh(new THREE.BoxGeometry(0.08, strutH, 0.08), gm)
+  nStrut.position.set(noseX, bellyY - strutH / 2, 0)
+  gear.add(nStrut)
+  const nWheel = new THREE.Mesh(new THREE.CylinderGeometry(wheelR, wheelR, 0.18, 8), gm)
+  nWheel.rotation.x = Math.PI / 2
+  nWheel.position.set(noseX, bellyY - strutH - wheelR, 0)
+  gear.add(nWheel)
+
+  // Left main strut + wheel
+  const lStrut = new THREE.Mesh(new THREE.BoxGeometry(0.10, strutH, 0.10), gm)
+  lStrut.position.set(mainX, bellyY - strutH / 2, mainZ)
+  gear.add(lStrut)
+  const lWheel = new THREE.Mesh(new THREE.CylinderGeometry(wheelR * 1.3, wheelR * 1.3, 0.22, 8), gm)
+  lWheel.rotation.x = Math.PI / 2
+  lWheel.position.set(mainX, bellyY - strutH - wheelR * 1.3, mainZ)
+  gear.add(lWheel)
+
+  // Right main strut + wheel
+  const rStrut = new THREE.Mesh(new THREE.BoxGeometry(0.10, strutH, 0.10), gm)
+  rStrut.position.set(mainX, bellyY - strutH / 2, -mainZ)
+  gear.add(rStrut)
+  const rWheel = new THREE.Mesh(new THREE.CylinderGeometry(wheelR * 1.3, wheelR * 1.3, 0.22, 8), gm)
+  rWheel.rotation.x = Math.PI / 2
+  rWheel.position.set(mainX, bellyY - strutH - wheelR * 1.3, -mainZ)
+  gear.add(rWheel)
+
+  gear.visible = false
+  g.add(gear)
+}
+
 /** Place the invisible nozzle Object3D (average of provided positions). */
 function placeNozzle(g: THREE.Group, positions: [number, number, number][]): void {
   const n = positions.length
@@ -156,6 +236,8 @@ function buildF15C(): THREE.Group {
   addCylX(g, bm(Cd), 0.42, 0.52, 4.5, -3.0, -0.05, 0.55)
   addCylX(g, bm(Cd), 0.42, 0.52, 4.5, -3.0, -0.05, -0.55)
 
+  addFlapsGroup(g, 0.0, 0.8, 2.0, 1.2, -0.28)
+  addGearGroup(g, 4.0, 1.0, 1.0, -0.55, 0.5, 0.22)
   placeNozzle(g, [[-5.4, -0.05, 0.55], [-5.4, -0.05, -0.55]])
   g.rotation.y = Math.PI / 2
   return g
@@ -200,6 +282,8 @@ function buildF16C(): THREE.Group {
   // Single engine nacelle
   addCylX(g, dm, 0.38, 0.48, 4.0, -2.8, 0.0, 0)
 
+  addFlapsGroup(g, 0.2, 0.65, 1.8, 1.0, -0.26)
+  addGearGroup(g, 3.5, 1.0, 0.9, -0.45, 0.5, 0.20)
   placeNozzle(g, [[-5.0, 0.0, 0]])
   g.rotation.y = Math.PI / 2
   return g
@@ -250,6 +334,8 @@ function buildFA18C(): THREE.Group {
   addCylX(g, dm, 0.38, 0.46, 3.8, -3.0, -0.05, 0.52)
   addCylX(g, dm, 0.38, 0.46, 3.8, -3.0, -0.05, -0.52)
 
+  addFlapsGroup(g, 0.0, 0.7, 1.9, 1.1, -0.28)
+  addGearGroup(g, 3.5, 0.5, 0.9, -0.50, 0.5, 0.21)
   placeNozzle(g, [[-5.1, -0.05, 0.52], [-5.1, -0.05, -0.52]])
   g.rotation.y = Math.PI / 2
   return g
@@ -294,6 +380,8 @@ function buildMiG29(): THREE.Group {
   addCylX(g, dm, 0.42, 0.52, 4.8, -3.0, 0.0, 0.65)
   addCylX(g, dm, 0.42, 0.52, 4.8, -3.0, 0.0, -0.65)
 
+  addFlapsGroup(g, 0.2, 0.85, 2.0, 1.2, -0.28)
+  addGearGroup(g, 3.8, 0.8, 1.0, -0.525, 0.55, 0.22)
   placeNozzle(g, [[-5.5, 0.0, 0.65], [-5.5, 0.0, -0.65]])
   g.rotation.y = Math.PI / 2
   return g
@@ -341,6 +429,8 @@ function buildSu27(): THREE.Group {
   addCylX(g, dm, 0.45, 0.55, 6.0, -3.5, -0.05, 0.72)
   addCylX(g, dm, 0.45, 0.55, 6.0, -3.5, -0.05, -0.72)
 
+  addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, -0.30)
+  addGearGroup(g, 5.0, 0.5, 1.0, -0.55, 0.55, 0.24)
   placeNozzle(g, [[-6.7, -0.05, 0.72], [-6.7, -0.05, -0.72]])
   g.rotation.y = Math.PI / 2
   return g
@@ -397,6 +487,8 @@ function buildSu35(): THREE.Group {
   addCylX(g, bm(0x333333, 60), 0.52, 0.42, 0.6, -6.8, -0.05, 0.72, 8)
   addCylX(g, bm(0x333333, 60), 0.52, 0.42, 0.6, -6.8, -0.05, -0.72, 8)
 
+  addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, -0.30)
+  addGearGroup(g, 5.0, 0.5, 1.0, -0.55, 0.55, 0.24)
   placeNozzle(g, [[-7.0, -0.05, 0.72], [-7.0, -0.05, -0.72]])
   g.rotation.y = Math.PI / 2
   return g
@@ -417,6 +509,8 @@ function buildGeneric(nation: 'USA' | 'RUS'): THREE.Group {
   addBox(g, wm, 0.9, 0.12, 3.2, -3.5, 0.0)
   addBox(g, wm, 0.9, 1.4, 0.13, -3.5, 0.6)
 
+  addFlapsGroup(g, 0.0, 0.65, 1.4, 0.9, -0.20)
+  addGearGroup(g, 3.0, 0.5, 0.8, -0.50, 0.5, 0.20)
   placeNozzle(g, [[-4.1, 0.0, 0.0]])
   g.rotation.y = Math.PI / 2
   return g
@@ -438,6 +532,16 @@ export function createPlaceholderAircraftMesh(aircraftId: string, nation: 'USA' 
 
 export function createNozzlePoint(group: THREE.Group): THREE.Object3D {
   return group.getObjectByName('nozzle') ?? group
+}
+
+export function setGearVisible(group: THREE.Group, visible: boolean): void {
+  const gear = group.getObjectByName('gear-group')
+  if (gear) gear.visible = visible
+}
+
+export function setFlapsVisible(group: THREE.Group, visible: boolean): void {
+  const flaps = group.getObjectByName('flaps-group')
+  if (flaps) flaps.visible = visible
 }
 
 /**

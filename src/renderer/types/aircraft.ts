@@ -96,6 +96,8 @@ export interface ControlInputs {
   cycleMissile: boolean
   dispenseFlare: boolean
   dispenseChaff: boolean
+  toggleGear: boolean
+  cycleFlaps: boolean
   radarModeNext: boolean
   radarSelectNext: boolean
   radarLockTarget: boolean
@@ -128,6 +130,8 @@ export interface AircraftState {
   loadedStores: LoadedStore[]
   totalMassKg: number
   onGround: boolean
+  gearDown: boolean
+  flaps: 0 | 1 | 2   // 0=up, 1=takeoff (~20°), 2=landing (~40°)
   ejected: boolean
   invincible: boolean
 

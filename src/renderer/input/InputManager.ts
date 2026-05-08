@@ -8,6 +8,8 @@ export class InputManager {
 
   private fireMissilePrev = false
   private cycleMissilePrev = false
+  private gearPrev = false
+  private flapsPrev = false
   private radarModePrev = false
   private radarSelectPrev = false
   private radarLockPrev = false
@@ -57,6 +59,8 @@ export class InputManager {
 
     const fireMissile = this.keys.has(DEFAULT_BINDINGS.fireMissile)
     const cycleMissile = this.keys.has(DEFAULT_BINDINGS.cycleMissile)
+    const gear = this.keys.has(DEFAULT_BINDINGS.gear)
+    const flaps = this.keys.has(DEFAULT_BINDINGS.flaps)
     const radarMode = this.keys.has(DEFAULT_BINDINGS.radarMode)
     const radarSelect = this.keys.has(DEFAULT_BINDINGS.radarSelectNext)
     const radarLock = this.keys.has(DEFAULT_BINDINGS.radarLockTarget)
@@ -65,6 +69,8 @@ export class InputManager {
     // Edge detection for one-shot actions
     const fireMissileEdge = fireMissile && !this.fireMissilePrev
     const cycleMissileEdge = cycleMissile && !this.cycleMissilePrev
+    const gearEdge = gear && !this.gearPrev
+    const flapsEdge = flaps && !this.flapsPrev
     const radarModeEdge = radarMode && !this.radarModePrev
     const radarSelectEdge = radarSelect && !this.radarSelectPrev
     const radarLockEdge = radarLock && !this.radarLockPrev
@@ -72,10 +78,14 @@ export class InputManager {
 
     this.fireMissilePrev = fireMissile
     this.cycleMissilePrev = cycleMissile
+    this.gearPrev = gear
+    this.flapsPrev = flaps
     this.radarModePrev = radarMode
     this.radarSelectPrev = radarSelect
     this.radarLockPrev = radarLock
     this.radarUnlockPrev = radarUnlock
+
+    ;(window as unknown as Record<string, unknown>)['_fsimEjectPressed'] = this.keys.has(DEFAULT_BINDINGS.eject)
 
     return {
       pitch,
@@ -87,6 +97,8 @@ export class InputManager {
       cycleMissile: cycleMissileEdge,
       dispenseFlare: this.keys.has(DEFAULT_BINDINGS.flare),
       dispenseChaff: this.keys.has(DEFAULT_BINDINGS.chaff),
+      toggleGear: gearEdge,
+      cycleFlaps: flapsEdge,
       radarModeNext: radarModeEdge,
       radarSelectNext: radarSelectEdge,
       radarLockTarget: radarLockEdge,

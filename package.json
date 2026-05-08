@@ -1,6 +1,6 @@
 {
   "name": "fsim",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Combat flight simulator — US vs Russian fighters",
   "main": "dist-electron/main/index.js",
   "type": "module",
@@ -9,10 +9,12 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis --x64 --config.win.signAndEditExecutable=false"
   },
   "dependencies": {
-    "three": "^0.165.0"
+    "three": "^0.165.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.0",
@@ -26,6 +28,10 @@
   "build": {
     "appId": "com.fsim.app",
     "productName": "FSim",
+    "asar": true,
+    "asarUnpack": [
+      "dist-electron/renderer/sounds/**"
+    ],
     "directories": {
       "output": "release"
     },

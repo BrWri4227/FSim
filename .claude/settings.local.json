@@ -3,7 +3,12 @@
     "allow": [
       "Bash(npm run *)",
       "Bash(npm install *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(cd \"/c/Users/Bry-PC/Documents/GitHub/FSim\" && ls -la)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Bry-PC\\\\Documents\\\\GitHub\\\\FSim\" -Recurse -Force)",
+      "Bash(Select-Object -First 50)",
+      "Bash(Format-Table Name, FullName)",
+      "Bash(xargs grep -l \"missile\\\\|gun\")"
     ]
   }
 }
