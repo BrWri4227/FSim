@@ -4,3 +4,5 @@ dist-electron/
 release/
 *.local
 .DS_Store
+release-temp/
+release-20260508-155730/

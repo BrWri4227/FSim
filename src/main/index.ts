@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell, ipcMain } from 'electron'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { networkInterfaces } from 'os'
 import { WebSocketServer, WebSocket } from 'ws'
 
@@ -69,6 +70,15 @@ const peers = new Map<string, PeerRecord>()
 let peerCounter = 0
 let lanServerPort = 0
 
+function emitLobbyEvent(message: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('mp:lobby-event', {
+      message,
+      timestamp: Date.now(),
+    })
+  }
+}
+
 function send(socket: WebSocket, msg: ServerMessage): void {
   if (socket.readyState !== WebSocket.OPEN) return
   socket.send(JSON.stringify(msg))
@@ -96,6 +106,7 @@ async function stopLanHost(): Promise<void> {
   peers.clear()
   peerCounter = 0
   if (!lanServer) return
+  emitLobbyEvent('LAN host stopped.')
   await new Promise<void>(resolve => {
     lanServer?.close(() => resolve())
   })
@@ -110,8 +121,11 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
   await stopLanHost()
   lanServer = new WebSocketServer({ host: '0.0.0.0', port })
   lanServerPort = port
+  emitLobbyEvent(`LAN host started on ${getPrimaryLanIp()}:${port}`)
 
-  lanServer.on('connection', socket => {
+  lanServer.on('connection', (socket, request) => {
+    const remote = request.socket.remoteAddress ?? 'unknown-client'
+    emitLobbyEvent(`Socket connection attempt from ${remote}`)
     const peerId = `peer_${++peerCounter}`
     const peer: PeerRecord = { id: peerId, socket, profile: null, state: null }
     peers.set(peerId, peer)
@@ -127,6 +141,7 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
 
       if (msg.type === 'join') {
         peer.profile = msg.profile
+        emitLobbyEvent(`Player ${peerId} joined (${msg.profile.aircraftId.toUpperCase()})`)
         send(socket, {
           type: 'welcome',
           playerId: peerId,
@@ -167,7 +182,10 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
       const leaving = peers.get(peerId)
       peers.delete(peerId)
       if (leaving?.profile) {
+        emitLobbyEvent(`Player ${peerId} disconnected`)
         broadcast({ type: 'peer-leave', playerId: peerId })
+      } else {
+        emitLobbyEvent(`Socket ${peerId} disconnected before join`)
       }
     })
   })
@@ -180,15 +198,23 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
 }
 
 function createWindow(): void {
+  const preloadPath = (() => {
+    const mjs = join(__dirname, '../preload/index.mjs')
+    const js = join(__dirname, '../preload/index.js')
+    if (existsSync(mjs)) return mjs
+    return js
+  })()
+
   const win = new BrowserWindow({
     width: 1920,
     height: 1080,
     fullscreen: false,
     backgroundColor: '#000000',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: preloadPath,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: false
     }
   })
 

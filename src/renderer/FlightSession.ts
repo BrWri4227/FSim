@@ -48,10 +48,12 @@ export class FlightSession {
     spec: AircraftSpec,
     stores: LoadedStore[],
     multiplayer: MultiplayerConfig,
+    existingMultiplayerClient: MultiplayerClient | null,
     onComplete: (result: FlightResult) => void
   ) {
     this.onComplete = onComplete
     this.multiplayerConfig = multiplayer
+    this.multiplayer = existingMultiplayerClient
 
     const threeCanvas = document.getElementById('three-canvas') as HTMLCanvasElement
     const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement
@@ -120,6 +122,10 @@ export class FlightSession {
   private async initMultiplayer(): Promise<void> {
     if (this.multiplayerConfig.mode === 'single') return
     try {
+      if (this.multiplayer && this.multiplayer.isConnected()) {
+        this.localNetworkId = this.multiplayer.getLocalPlayerId()
+        return
+      }
       if (this.multiplayerConfig.mode === 'host') {
         await window.fsim.multiplayer.startHost(this.multiplayerConfig.port)
       }
