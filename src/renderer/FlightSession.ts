@@ -46,6 +46,7 @@ export class FlightSession {
   private sessionStartTime = 0
   private disposed = false
   private gSmoothed = 1.0   // low-pass filtered G for visual effects
+  private glocEnabled: boolean
 
   private onComplete: (result: FlightResult) => void
 
@@ -54,9 +55,11 @@ export class FlightSession {
     stores: LoadedStore[],
     multiplayer: MultiplayerConfig,
     existingMultiplayerClient: MultiplayerClient | null,
-    onComplete: (result: FlightResult) => void
+    onComplete: (result: FlightResult) => void,
+    glocEnabled = true
   ) {
     this.onComplete = onComplete
+    this.glocEnabled = glocEnabled
     this.multiplayerConfig = multiplayer
     this.multiplayer = existingMultiplayerClient
 
@@ -274,7 +277,7 @@ export class FlightSession {
     this.sceneManager.updateSky(this.sceneManager.camera)
 
     // G-effect post processing (use smoothed value so vignette ramps gradually)
-    this.postFX.setGLoad(this.gSmoothed)
+    this.postFX.setGLoad(this.glocEnabled ? this.gSmoothed : 1.0)
     this.postFX.render()
 
     // Canvas HUD

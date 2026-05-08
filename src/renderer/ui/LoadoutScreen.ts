@@ -25,8 +25,10 @@ export class LoadoutScreen {
     spec: AircraftSpec,
     stores: LoadedStore[],
     multiplayer: MultiplayerConfig,
-    multiplayerClient: MultiplayerClient | null
+    multiplayerClient: MultiplayerClient | null,
+    glocEnabled: boolean
   ) => void
+  private glocEnabled = true
   private multiplayerMode: MultiplayerConfig['mode'] = 'single'
   private joinHost = '127.0.0.1'
   private hostLanIp = '127.0.0.1'
@@ -49,7 +51,8 @@ export class LoadoutScreen {
       spec: AircraftSpec,
       stores: LoadedStore[],
       multiplayer: MultiplayerConfig,
-      multiplayerClient: MultiplayerClient | null
+      multiplayerClient: MultiplayerClient | null,
+      glocEnabled: boolean
     ) => void
   ) {
     this.onLaunch = onLaunch
@@ -161,6 +164,25 @@ export class LoadoutScreen {
       hpSection.appendChild(row)
     }
     this.el.appendChild(hpSection)
+
+    const optSection = document.createElement('div')
+    optSection.style.cssText = 'border:1px solid #226644;padding:12px;max-width:900px;width:100%'
+    optSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">FLIGHT OPTIONS</div>'
+
+    const glocRow = document.createElement('label')
+    glocRow.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px'
+    const glocChk = document.createElement('input')
+    glocChk.type = 'checkbox'
+    glocChk.checked = this.glocEnabled
+    glocChk.style.cssText = 'cursor:pointer;accent-color:#00ff88'
+    glocChk.onchange = () => { this.glocEnabled = glocChk.checked }
+    const glocLbl = document.createElement('span')
+    glocLbl.textContent = 'G-LOC Visual Effect'
+    glocLbl.style.color = '#88bb88'
+    glocRow.appendChild(glocChk)
+    glocRow.appendChild(glocLbl)
+    optSection.appendChild(glocRow)
+    this.el.appendChild(optSection)
 
     const mpSection = document.createElement('div')
     mpSection.style.cssText = 'border:1px solid #226644;padding:12px;max-width:900px;width:100%'
@@ -386,7 +408,7 @@ export class LoadoutScreen {
           this.lobbyClient = null
           this.lobbyConnected = false
         }
-        this.onLaunch(this.selectedSpec, stores, multiplayer, handoffClient)
+        this.onLaunch(this.selectedSpec, stores, multiplayer, handoffClient, this.glocEnabled)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         this.launchError = `Launch failed: ${msg}`
