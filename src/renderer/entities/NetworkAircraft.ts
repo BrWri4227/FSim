@@ -3,6 +3,8 @@ import type { AircraftSpec } from '../types/aircraft'
 import type { NetPlayerState, NetRadarState, NetMissileState } from '../network/MultiplayerTypes'
 import { Aircraft } from './Aircraft'
 import { nedToThree } from '../utils/MathUtils'
+import type { ChaffCloud } from '../avionics/CMDS'
+import type { FlareContact } from '../types/ir'
 
 // Shared missile geometry: cylinder with long axis along +Z so lookAt() aligns with velocity.
 const REMOTE_MISSILE_GEO = (() => {
@@ -15,7 +17,13 @@ const REMOTE_MISSILE_MAT = new THREE.MeshPhongMaterial({ color: 0xdddddd, emissi
 export class NetworkAircraft extends Aircraft {
   private _netRadarState: NetRadarState | null = null
   private _netMissiles: NetMissileState[] = []
+  private _netFlares: FlareContact[] = []
+  private _netChaffClouds: ChaffCloud[] = []
   private _missileMeshes = new Map<string, THREE.Mesh>()
+  readonly cmds = {
+    getActiveFlares: (): ReadonlyArray<FlareContact> => this._netFlares,
+    getActiveChaffClouds: (): ReadonlyArray<ChaffCloud> => this._netChaffClouds,
+  }
 
   constructor(spec: AircraftSpec, scene: THREE.Scene, entityId: string) {
     super(spec, [], scene, entityId)
@@ -31,6 +39,17 @@ export class NetworkAircraft extends Aircraft {
     this.damage.structuralFailure = net.structuralFailure
     this._netRadarState = net.radar ?? null
     this._netMissiles = net.missiles ?? []
+    this._netFlares = (net.countermeasures?.flares ?? []).map(f => ({
+      positionNED: [...f.positionNED] as [number, number, number],
+      heatSignatureKW: f.heatSignatureKW,
+      ageSec: f.ageSec,
+    }))
+    this._netChaffClouds = (net.countermeasures?.chaffClouds ?? []).map(c => ({
+      positionNED: [...c.positionNED] as [number, number, number],
+      velocityNED: [...c.velocityNED] as [number, number, number],
+      rcsM2: c.rcsM2,
+      ageSec: c.ageSec,
+    }))
   }
 
   override updateMesh(dt?: number): void {
