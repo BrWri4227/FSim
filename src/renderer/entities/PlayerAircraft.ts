@@ -178,6 +178,7 @@ export class PlayerAircraft extends Aircraft {
   reloadWeapons(): void {
     for (const store of this.state.loadedStores) store.remainingRounds = 1
     this.gun.refill()
+    this.cmds.reloadCountermeasures()
   }
 
   resetPosition(): void {
