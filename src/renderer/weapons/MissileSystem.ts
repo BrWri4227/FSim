@@ -3,6 +3,7 @@ import type { MissileState } from '../types/weapons'
 import type { AircraftState } from '../types/aircraft'
 import type { Aircraft } from '../entities/Aircraft'
 import { guideMissile, guideMissileCoast, checkIRSeekerLock } from './MissileGuidance'
+import { evaluateFlareSeduction } from './IRSeeker'
 import { checkProximityFuse, computeLethality, hitZoneFromMissileApproach } from './Warhead'
 import { v3add, v3scale, v3norm, v3sub, v3dist, nedToThree, v3len, quatRotateVec } from '../utils/MathUtils'
 import { AIM9M }   from '../data/weapons/aim9m'
@@ -17,6 +18,13 @@ import { computeAtmosphere } from '../physics/Atmosphere'
 
 const MISSILE_SPECS: Record<string, MissileSpec> = { aim9m: AIM9M, aim120b: AIM120B, r73: R73, r77: R77 }
 const G0 = 9.80665
+
+interface CountermeasureProvider {
+  cmds?: {
+    getActiveFlares?: () => ReadonlyArray<{ positionNED: [number, number, number]; heatSignatureKW: number; ageSec: number }>
+    getActiveChaffClouds?: () => ReadonlyArray<{ positionNED: [number, number, number]; velocityNED: [number, number, number]; rcsM2: number; ageSec: number }>
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Build a detailed missile Group: body + nose cone + 4 tail fins + 4 canards
@@ -80,7 +88,8 @@ export class MissileSystem {
     targetId: string,
     shooterEntityId: string,
     initialTargetPos?: [number,number,number],
-    initialTargetVel?: [number,number,number]
+    initialTargetVel?: [number,number,number],
+    hardpointPosBody?: [number,number,number]
   ): void {
     const spec = MISSILE_SPECS[weaponId]
     if (!spec) return
@@ -90,19 +99,29 @@ export class MissileSystem {
     const forwardNED = quatRotateVec(shooterState.attitudeQuat, bodyForward)
     const initVel = v3add(shooterState.velocityNED, v3scale(forwardNED, 120))
 
+    // Launch position: aircraft centre + hardpoint offset rotated into NED frame.
+    // Without this all missiles appear to spawn from the fuselage centreline.
+    const hpNED = hardpointPosBody
+      ? quatRotateVec(shooterState.attitudeQuat, hardpointPosBody)
+      : [0, 0, 0] as [number,number,number]
+    const initPos: [number,number,number] = [
+      shooterState.positionNED[0] + hpNED[0],
+      shooterState.positionNED[1] + hpNED[1],
+      shooterState.positionNED[2] + hpNED[2],
+    ]
+
     const knownPos: [number,number,number] = initialTargetPos ?? [0, 0, 0]
     const knownVel: [number,number,number] = initialTargetVel ?? [0, 0, 0]
 
     // Seed prevLOS with the actual launch-time LOS so there's no first-tick spike.
-    // If we don't have a target position yet, fall back to shooter's forward axis.
     const launchLOS: [number,number,number] = knownPos[0] !== 0 || knownPos[1] !== 0 || knownPos[2] !== 0
-      ? v3norm(v3sub(knownPos, shooterState.positionNED)) as [number,number,number]
+      ? v3norm(v3sub(knownPos, initPos)) as [number,number,number]
       : v3norm(forwardNED) as [number,number,number]
 
     const missile: MissileState = {
       id: `missile_${Date.now()}_${Math.random()}`,
       spec,
-      positionNED: [...shooterState.positionNED] as [number,number,number],
+      positionNED: initPos,
       velocityNED: initVel,
       attitudeQuat: [...shooterState.attitudeQuat] as [number,number,number,number],
       ageSec: 0,
@@ -161,6 +180,9 @@ export class MissileSystem {
       const target: Aircraft | undefined =
         enemies.find(e => e.entityId === m.targetEntityId) ??
         (m.targetEntityId === 'player' ? playerAircraft : undefined)
+      const targetWithCMDS = target as (Aircraft & CountermeasureProvider) | undefined
+      let guidanceTargetPos: [number,number,number] | undefined = target?.state.positionNED as [number,number,number] | undefined
+      let guidanceTargetVel: [number,number,number] | undefined = target?.state.velocityNED as [number,number,number] | undefined
 
       // ── Guidance mode state machine ────────────────────────────────────────
 
@@ -173,11 +195,27 @@ export class MissileSystem {
         m.lastKnownTargetVel = [...tVel] as [number,number,number]
 
         if (m.spec.category === 'IR_MISSILE') {
+          const seeker = m.spec.irSeeker
+          const flares = targetWithCMDS?.cmds?.getActiveFlares?.() ?? []
+          if (seeker && flares.length > 0) {
+            const nearestFlare = flares.reduce((best, flare) => {
+              if (!best) return flare
+              return v3dist(m.positionNED, flare.positionNED) < v3dist(m.positionNED, best.positionNED) ? flare : best
+            }, null as (typeof flares[number] | null))
+            if (
+              nearestFlare &&
+              Math.random() < Math.min(1, dt * 4) &&
+              evaluateFlareSeduction(seeker, Math.max(1, target.spec.heatSignatureBaseKW), nearestFlare.heatSignatureKW)
+            ) {
+              guidanceTargetPos = [...nearestFlare.positionNED] as [number,number,number]
+              guidanceTargetVel = [0, 0, 0]
+            }
+          }
           // IR seeker: allow 0.8 s for the missile to physically turn toward
           // the target after launch before the gimbal check engages.
           // This simulates the pilot having a seeker-slew lock before firing.
           if (m.guidanceMode === 'IR_TRACK' && m.ageSec > 0.8) {
-            if (!checkIRSeekerLock(m, tPos)) {
+            if (!guidanceTargetPos || !checkIRSeekerLock(m, guidanceTargetPos)) {
               m.locked = false
               m.guidanceMode = 'COAST'
             }
@@ -197,6 +235,19 @@ export class MissileSystem {
               m.lastKnownTargetVel = [...radarTargetVel] as [number,number,number]
             }
           }
+          if (m.guidanceMode === 'ACTIVE') {
+            const chaffClouds = targetWithCMDS?.cmds?.getActiveChaffClouds?.() ?? []
+            if (chaffClouds.length > 0) {
+              const nearestChaff = chaffClouds.reduce((best, chaff) => {
+                if (!best) return chaff
+                return v3dist(m.positionNED, chaff.positionNED) < v3dist(m.positionNED, best.positionNED) ? chaff : best
+              }, null as (typeof chaffClouds[number] | null))
+              if (nearestChaff && nearestChaff.rcsM2 > 2.0 && Math.random() < Math.min(1, dt * 3.2)) {
+                guidanceTargetPos = [...nearestChaff.positionNED] as [number,number,number]
+                guidanceTargetVel = [...nearestChaff.velocityNED] as [number,number,number]
+              }
+            }
+          }
         }
       } else {
         // Target entity gone — enter coast mode if we were still tracking
@@ -211,15 +262,22 @@ export class MissileSystem {
 
       if (m.guidanceMode === 'COAST') {
         guidanceAccel = guideMissileCoast(m, dt)
-      } else if (target !== undefined) {
-        guidanceAccel = guideMissile(m, target.state, dt)
+      } else if (guidanceTargetPos && guidanceTargetVel) {
+        guidanceAccel = guideMissile(m, guidanceTargetPos, guidanceTargetVel, dt)
 
         // Proximity fuse
-        if (checkProximityFuse(m, target.state)) {
+        if (target !== undefined && checkProximityFuse(m, target.state)) {
           const lethality = computeLethality(m.positionNED, target.state.positionNED, m.spec.lethalRadiusM)
           if (lethality > 0.3) {
             const zone = hitZoneFromMissileApproach(m.velocityNED, target.state.attitudeQuat)
-            applyHit(target.damage, zone, lethality * 0.6)
+            applyHit(target.damage, zone, lethality * 0.65, target.state.invincible)
+            // Proximity blast: secondary fragments can hit adjacent zones
+            if (lethality > 0.7 && !target.state.invincible) {
+              const secondary: import('../types/damage').DamageZone[] = ['FUSELAGE', 'ENGINE', 'WING_LEFT', 'WING_RIGHT']
+              for (const sz of secondary) {
+                if (sz !== zone) applyHit(target.damage, sz, lethality * 0.15)
+              }
+            }
           }
           this.explode(i, m)
           continue

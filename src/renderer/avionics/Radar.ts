@@ -32,6 +32,8 @@ export class Radar {
     if (cycleMode) this.cycleMode()
 
     if (this.state.mode === 'OFF') return
+    const liveEnemies = enemies.filter(e => this.isRadarTrackable(e))
+    const liveIds = new Set(liveEnemies.map(e => e.entityId))
 
     // Advance scan bar
     this.state.azimuthDeg += this.state.scanRateDegs * dt
@@ -43,10 +45,12 @@ export class Radar {
 
     // STT: full energy on one target
     if (this.state.mode === 'STT' && this.state.sttTargetId) {
-      const target = enemies.find(e => e.entityId === this.state.sttTargetId)
+      const target = liveEnemies.find(e => e.entityId === this.state.sttTargetId)
       if (target) {
         this.updateTrack(target, ownState)
       } else {
+        this.state.tracks = this.state.tracks.filter(t => t.entityId !== this.state.sttTargetId)
+        if (this.state.selectedTrackId === this.state.sttTargetId) this.state.selectedTrackId = null
         this.state.sttTargetId = null
         this.state.mode = 'TWS'
       }
@@ -54,7 +58,7 @@ export class Radar {
     }
 
     // Sweep detection
-    for (const enemy of enemies) {
+    for (const enemy of liveEnemies) {
       const dist = v3dist(ownState.positionNED, enemy.state.positionNED)
       if (dist > this.state.rangeModeM * 1.5) continue
 
@@ -66,6 +70,9 @@ export class Radar {
         this.updateTrack(enemy, ownState)
       }
     }
+
+    // Remove contacts that no longer exist/alive before confidence decay.
+    this.state.tracks = this.state.tracks.filter(t => liveIds.has(t.entityId))
 
     // Decay confidence on stale tracks
     this.state.tracks = this.state.tracks.filter(t => {
@@ -81,6 +88,14 @@ export class Radar {
     if (!this.state.selectedTrackId && this.state.tracks.length > 0) {
       this.state.selectedTrackId = this.state.tracks[0]!.entityId
     }
+  }
+
+  private isRadarTrackable(target: Aircraft): boolean {
+    return !target.state.ejected &&
+      !target.damage.structuralFailure &&
+      target.damage.zones['ENGINE'] < 1.0 &&
+      target.damage.zones['FUSELAGE'] < 1.0 &&
+      target.damage.zones['COCKPIT'] < 1.0
   }
 
   selectNextTrack(): void {

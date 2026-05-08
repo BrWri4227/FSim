@@ -50,6 +50,8 @@ export class FlightSession {
     this.cameraManager = new CameraManager(this.sceneManager.camera)
     this.inputManager = new InputManager()
     this.audioManager = new AudioManager()
+    // Attempt to load real sound files from public/sounds/. Falls back to synthesis silently.
+    void this.audioManager.loadSounds('sounds/')
 
     this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene)
     this.entityManager = new EntityManager(this.sceneManager.scene, this.player)

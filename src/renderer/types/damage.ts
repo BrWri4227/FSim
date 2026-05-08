@@ -5,6 +5,7 @@ export interface DamageState {
   onFire: boolean
   engineFailed: boolean
   ejected: boolean
+  structuralFailure: boolean         // catastrophic airframe loss
 }
 
 export interface FlightPenalties {
@@ -27,6 +28,7 @@ export function defaultDamageState(): DamageState {
     },
     onFire: false,
     engineFailed: false,
-    ejected: false
+    ejected: false,
+    structuralFailure: false,
   }
 }

@@ -16,64 +16,219 @@ export type AudioEvent =
   | 'ENGINE_FLAMEOUT'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AudioManager
-// All synthesis is done with the Web Audio API — no external files required.
+// Sound file map
+//
+// Drop WAV or MP3 files into public/sounds/ (or the path you pass to loadSounds).
+// Files that exist replace the synthesized equivalent; missing files fall back
+// automatically to the Web-Audio synthesis paths.
+//
+// Recommended filenames (stereo or mono, any sample rate — the browser resamples):
+//
+//   engine_idle.wav        — jet engine at idle thrust
+//   engine_mil.wav         — military (dry) power
+//   engine_ab.wav          — full afterburner
+//   engine_flameout.wav    — engine wind-down / compressor stall
+//   gun_20mm.wav           — M61A1 burst (looped)
+//   gun_30mm.wav           — GSh-30 burst (looped)
+//   ir_growl_cold.wav      — AIM-9 / R-73 seeker acquiring (looped)
+//   ir_growl_hot.wav       — AIM-9 / R-73 seeker locked   (looped)
+//   rwr_search.wav         — single RWR search ping
+//   rwr_track.wav          — RWR track ping (faster than search)
+//   rwr_lock.wav           — RWR continuous lock tone (looped)
+//   missile_launch.wav     — missile motor ignition
+//   pull_up.wav            — GPWS "pull up" voice
+//   pull_up_urgent.wav     — GPWS "pull up pull up" voice
 // ─────────────────────────────────────────────────────────────────────────────
+
+const SOUND_FILES: Record<string, string> = {
+  engine_idle:       'engine_idle.wav',
+  engine_ab:         'engine_ab.wav',
+  engine_flameout:   'engine_flameout.wav',
+  gun_20mm:          'gun_20mm.wav',
+  gun_30mm:          'gun_30mm.wav',
+  ir_growl_cold:     'ir_growl_cold.wav',
+  ir_growl_hot:      'ir_growl_hot.wav',
+  rwr_search:        'rwr_search.wav',
+  rwr_track:         'rwr_track.wav',
+  rwr_lock:          'rwr_lock.wav',
+  missile_launch:    'missile_launch.wav',
+  pull_up:           'pull_up.wav',
+  pull_up_urgent:    'pull_up_urgent.wav',
+}
+
 export class AudioManager {
   private ctx: AudioContext
 
-  // Engine
-  private engineOsc: OscillatorNode
-  private engineGain: GainNode
+  // ── Sound buffer cache ──────────────────────────────────────────────────
+  private buffers = new Map<string, AudioBuffer>()
+  private soundsBasePath = 'sounds/'
 
-  // RWR / radar tones
-  private radarToneOsc: OscillatorNode | null = null
-  private radarToneGain: GainNode | null = null
+  // ── Engine (synthesis fallback) ─────────────────────────────────────────
+  private engineOsc:  OscillatorNode
+  private engineGain: GainNode
+  private engineLP:   BiquadFilterNode
+  // File-based engine looping nodes
+  private engineSrc:  AudioBufferSourceNode | null = null
+  private engineSrcGain: GainNode | null = null
+  private useFileEngine = false
+
+  // ── RWR / radar tones ───────────────────────────────────────────────────
+  private radarToneOsc:      OscillatorNode | null = null
+  private radarToneGain:     GainNode | null = null
   private radarToneInterval: ReturnType<typeof setInterval> | null = null
+  private radarLockSrc:      AudioBufferSourceNode | null = null
   private activeRWRMode: 'SEARCH' | 'TRACK' | 'LOCK' | 'INCOMING' | null = null
 
-  // IR seeker growl  (AIM-9 / R-73 lock tone)
+  // ── IR seeker growl ─────────────────────────────────────────────────────
   private growlCarrier: OscillatorNode | null = null
   private growlAmpGain: GainNode | null = null
   private growlFmOsc:   OscillatorNode | null = null
   private growlAmOsc:   OscillatorNode | null = null
+  private growlSrc:     AudioBufferSourceNode | null = null
+  private growlSrcGain: GainNode | null = null
   private growlLocked = false
 
-  // Cannon (M61A1 / GSh-30)
+  // ── Cannon ──────────────────────────────────────────────────────────────
   private gunOsc:    OscillatorNode | null = null
   private gunModOsc: OscillatorNode | null = null
   private gunGain:   GainNode | null = null
+  private gunSrc:    AudioBufferSourceNode | null = null
   private gunFiring  = false
+
+  // ── Master gain (global volume) ─────────────────────────────────────────
+  private masterGain: GainNode
 
   constructor() {
     this.ctx = new AudioContext()
 
-    // ── Engine tone ──────────────────────────────────────────────────────────
-    // Sawtooth oscillator pitch-shifted by throttle, light low-pass for warmth.
+    this.masterGain = this.ctx.createGain()
+    this.masterGain.gain.value = 1.0
+    this.masterGain.connect(this.ctx.destination)
+
+    // ── Synthesized engine tone (used until file loads) ──────────────────
     this.engineOsc  = this.ctx.createOscillator()
     this.engineOsc.type = 'sawtooth'
     this.engineOsc.frequency.value = 80
+
+    this.engineLP = this.ctx.createBiquadFilter()
+    this.engineLP.type = 'lowpass'
+    this.engineLP.frequency.value = 600
+
     this.engineGain = this.ctx.createGain()
     this.engineGain.gain.value = 0.04
 
-    const engineLP = this.ctx.createBiquadFilter()
-    engineLP.type = 'lowpass'
-    engineLP.frequency.value = 600
-
-    this.engineOsc.connect(engineLP)
-    engineLP.connect(this.engineGain)
-    this.engineGain.connect(this.ctx.destination)
+    this.engineOsc.connect(this.engineLP)
+    this.engineLP.connect(this.engineGain)
+    this.engineGain.connect(this.masterGain)
     this.engineOsc.start()
   }
 
-  // ── Public update called every frame ──────────────────────────────────────
+  // ── Sound file loading ──────────────────────────────────────────────────
+
+  /**
+   * Load all sound files from basePath (default: "sounds/").
+   * Call once at startup. Missing files are silently skipped — synthesis fills in.
+   *
+   * Drop WAV/MP3 files into src/renderer/public/sounds/ — Vite serves them at /sounds/.
+   * Works in both electron-vite dev mode (http://localhost) and production (file://).
+   */
+  async loadSounds(basePath?: string): Promise<void> {
+    if (basePath) this.soundsBasePath = basePath
+
+    // Build an absolute base URL that works under both http:// (dev) and file:// (prod).
+    // Relative paths are resolved against the current page URL.
+    let base = this.soundsBasePath
+    if (!base.startsWith('http') && !base.startsWith('file://')) {
+      const pageDir = window.location.href.replace(/\/[^/]*$/, '/')
+      base = pageDir + base
+    }
+    if (!base.endsWith('/')) base += '/'
+
+    const loads = Object.entries(SOUND_FILES).map(async ([key, file]) => {
+      const url = base + file
+      try {
+        const arrayBuf = await this.fetchArrayBuffer(url)
+        if (!arrayBuf) return
+        const audioBuf = await this.ctx.decodeAudioData(arrayBuf)
+        this.buffers.set(key, audioBuf)
+        console.log(`[Audio] Loaded ${file}`)
+      } catch (err) {
+        console.warn(`[Audio] Failed to decode ${file}:`, err)
+      }
+    })
+    await Promise.allSettled(loads)
+
+    console.log(`[Audio] ${this.buffers.size} / ${Object.keys(SOUND_FILES).length} sound files loaded.`)
+
+    if (this.buffers.has('engine_idle')) {
+      this.startFileEngine()
+    }
+  }
+
+  /** Fetch raw bytes — uses fetch first, falls back to XHR for file:// Electron environments. */
+  private fetchArrayBuffer(url: string): Promise<ArrayBuffer | null> {
+    return fetch(url)
+      .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+      .catch(() => new Promise<ArrayBuffer | null>(resolve => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('GET', url, true)
+        xhr.responseType = 'arraybuffer'
+        xhr.onload  = () => resolve(xhr.status === 200 || xhr.status === 0 ? xhr.response as ArrayBuffer : null)
+        xhr.onerror = () => resolve(null)
+        xhr.send()
+      }))
+  }
+
+  // ── Buffer playback helpers ─────────────────────────────────────────────
+
+  /** Play a one-shot sound buffer. Returns the source node so you can stop it. */
+  private playOnce(key: string, gainVal = 1.0): AudioBufferSourceNode | null {
+    const buf = this.buffers.get(key)
+    if (!buf) return null
+    const src = this.ctx.createBufferSource()
+    src.buffer = buf
+    const g = this.ctx.createGain()
+    g.gain.value = gainVal
+    src.connect(g)
+    g.connect(this.masterGain)
+    src.start()
+    return src
+  }
+
+  /** Start a looping sound buffer. Caller owns the returned nodes and must stop them. */
+  private startLoop(key: string, gainVal = 1.0): [AudioBufferSourceNode, GainNode] | null {
+    const buf = this.buffers.get(key)
+    if (!buf) return null
+    const src = this.ctx.createBufferSource()
+    src.buffer = buf
+    src.loop = true
+    const g = this.ctx.createGain()
+    g.gain.value = gainVal
+    src.connect(g)
+    g.connect(this.masterGain)
+    src.start()
+    return [src, g]
+  }
+
+  private stopLoop(src: AudioBufferSourceNode | null, g: GainNode | null): void {
+    if (!src) return
+    try {
+      if (g) {
+        g.gain.setTargetAtTime(0, this.ctx.currentTime, 0.04)
+        setTimeout(() => { try { src.stop() } catch { /* */ } }, 100)
+      } else {
+        src.stop()
+      }
+    } catch { /* */ }
+  }
+
+  // ── Public update called every frame ─────────────────────────────────────
 
   update(player: import('../entities/PlayerAircraft').PlayerAircraft, controls?: ControlInputs): void {
     this.resume()
-    this.updateEngine(player.state.throttle, player.state.mach)
+    this.updateEngine(player.state.throttle, player.state.mach, player.damage.engineFailed)
 
-    // Gun sound — start/stop based on fireGun control.
-    // Derive caliber from rate of fire: M61A1 = 6000 RPM (20mm), GSh-30 = ~1800 RPM (30mm)
+    // Gun
     if (controls) {
       const isFiring = controls.fireGun && player.gun.getRoundsRemaining() > 0
       const rpm      = player.spec.gunSpec?.rateOfFireRPM ?? 6000
@@ -82,30 +237,26 @@ export class AudioManager {
       if (!isFiring && this.gunFiring)  this.stopGun()
     }
 
-    // IR seeker growl — check if an IR missile is selected and seeker acquiring/locked
+    // IR seeker growl
     const irStore = player.state.loadedStores.find(
       s => s.category === 'IR_MISSILE' && s.remainingRounds > 0
     )
     const enemies: import('../entities/Aircraft').Aircraft[] = (window as any)._fsimEnemies ?? []
     if (irStore && enemies.length > 0) {
-      // IR seeker tone: target must be in the FORWARD hemisphere (within ≈50° of nose)
-      // and within range. A target behind the aircraft produces no tone.
       const playerVel = player.state.velocityNED
       const playerPos = player.state.positionNED
       const fwdSpd = Math.sqrt(playerVel[0]**2 + playerVel[1]**2 + playerVel[2]**2) || 1
 
-      let bestD = Infinity
-      let bestInFront = false
+      let bestD = Infinity, bestInFront = false
       for (const e of enemies) {
         const d = dist3(e.state.positionNED as [number,number,number], playerPos as [number,number,number])
         if (d < bestD) {
           bestD = d
-          // Dot product of (target - own) with own velocity vector
           const dx = e.state.positionNED[0] - playerPos[0]
           const dy = e.state.positionNED[1] - playerPos[1]
           const dz = e.state.positionNED[2] - playerPos[2]
           const dot = (dx * playerVel[0] + dy * playerVel[1] + dz * playerVel[2]) / (d * fwdSpd)
-          bestInFront = dot > 0.64  // cos(50°) ≈ 0.64 — within ±50° of nose
+          bestInFront = dot > 0.64
         }
       }
       const locked   = bestD < 5000  && bestInFront
@@ -131,66 +282,104 @@ export class AudioManager {
 
   play(event: AudioEvent): void {
     switch (event) {
-      case 'MISSILE_LAUNCH_IR':   this.speak('Fox Two');          break
-      case 'MISSILE_LAUNCH_ARH':  this.speak('Fox Three');        break
-      case 'PULL_UP':             this.speak('Pull up, terrain'); break
-      case 'PULL_UP_URGENT':      this.speak('Pull up, pull up'); break
+      case 'MISSILE_LAUNCH_IR':
+        if (!this.playOnce('missile_launch', 0.8)) this.speak('Fox Two')
+        else this.speak('Fox Two')
+        break
+      case 'MISSILE_LAUNCH_ARH':
+        if (!this.playOnce('missile_launch', 0.8)) this.speak('Fox Three')
+        else this.speak('Fox Three')
+        break
+      case 'PULL_UP':
+        if (!this.playOnce('pull_up', 0.9)) this.speak('Pull up, terrain')
+        break
+      case 'PULL_UP_URGENT':
+        if (!this.playOnce('pull_up_urgent', 1.0)) this.speak('Pull up, pull up')
+        break
       case 'ENGINE_FLAMEOUT':
-        this.speak('Engine flameout')
-        this.engineGain.gain.setTargetAtTime(0.005, this.ctx.currentTime, 0.5)
+        if (!this.playOnce('engine_flameout', 0.8)) this.speak('Engine flameout')
+        // Fade out synthesized engine
+        if (!this.useFileEngine) {
+          this.engineGain.gain.setTargetAtTime(0.005, this.ctx.currentTime, 0.5)
+        }
         break
     }
   }
 
-  // ── Engine ────────────────────────────────────────────────────────────────
+  // ── Engine ─────────────────────────────────────────────────────────────────
 
-  private updateEngine(throttle: number, _mach: number): void {
-    // 80 Hz idle → 280 Hz full afterburner
-    const freq = 80 + throttle * 200
-    const vol  = 0.02 + throttle * 0.07
-    this.engineOsc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.3)
-    this.engineGain.gain.setTargetAtTime(vol,  this.ctx.currentTime, 0.2)
+  private startFileEngine(): void {
+    if (this.engineSrc) return
+    this.useFileEngine = true
+    // Mute the synthesis path
+    this.engineGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1)
+
+    const loop = this.startLoop('engine_idle', 0.3)
+    if (!loop) { this.useFileEngine = false; return }
+    ;[this.engineSrc, this.engineSrcGain] = loop
   }
 
-  // ── M61A1 / GSh-30 cannon BRRRT ──────────────────────────────────────────
-  //
-  // Synthesis: FM sawtooth carrier (base freq = firing rate) → bandpass filter.
-  // The firing rate modulates the carrier frequency giving the mechanical "chug".
-  // 20 mm: 6000 RPM = 100 Hz carrier → bright metallic tear
-  // 30 mm: 1800 RPM = 30 Hz carrier  → heavy percussive thud chain
+  private updateEngine(throttle: number, _mach: number, engineFailed: boolean): void {
+    if (engineFailed) {
+      if (this.useFileEngine && this.engineSrcGain) {
+        this.engineSrcGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.8)
+      } else {
+        this.engineGain.gain.setTargetAtTime(0.002, this.ctx.currentTime, 0.8)
+      }
+      return
+    }
+
+    if (this.useFileEngine && this.engineSrcGain) {
+      // Pitch-shift via playbackRate: 0.85 at idle → 1.25 at afterburner
+      if (this.engineSrc) this.engineSrc.playbackRate.setTargetAtTime(0.85 + throttle * 0.4, this.ctx.currentTime, 0.3)
+      const vol = 0.15 + throttle * 0.45
+      this.engineSrcGain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.2)
+    } else {
+      const freq = 80 + throttle * 200
+      const vol  = 0.02 + throttle * 0.07
+      this.engineOsc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.3)
+      this.engineGain.gain.setTargetAtTime(vol,  this.ctx.currentTime, 0.2)
+    }
+  }
+
+  // ── Cannon ────────────────────────────────────────────────────────────────
 
   private startGun(caliber: '20mm' | '30mm'): void {
     if (this.gunFiring) return
     this.gunFiring = true
-    const ctx = this.ctx
 
+    const fileKey = caliber === '20mm' ? 'gun_20mm' : 'gun_30mm'
+    const loop = this.startLoop(fileKey, caliber === '20mm' ? 0.7 : 0.85)
+    if (loop) {
+      ;[this.gunSrc] = loop
+      return
+    }
+
+    // Synthesis fallback
+    const ctx = this.ctx
     const rateHz   = caliber === '20mm' ? 100 : 30
-    const baseFreq = caliber === '20mm' ? 140 : 80   // mechanical resonance
-    const fmDepth  = caliber === '20mm' ? 60  : 30   // ±Hz frequency wobble
-    const bpFreq   = caliber === '20mm' ? 900 : 250  // bandpass centre
+    const baseFreq = caliber === '20mm' ? 140 : 80
+    const fmDepth  = caliber === '20mm' ? 60  : 30
+    const bpFreq   = caliber === '20mm' ? 900 : 250
     const gain     = caliber === '20mm' ? 0.22 : 0.40
 
-    // Carrier — sawtooth for gritty metallic texture
     const osc = ctx.createOscillator()
     osc.type = 'sawtooth'
     osc.frequency.value = baseFreq
 
-    // FM modulator — same frequency as firing rate gives per-shot pulse feel
     const modOsc = ctx.createOscillator()
     modOsc.type = 'square'
     modOsc.frequency.value = rateHz
     const modGainNode = ctx.createGain()
     modGainNode.gain.value = fmDepth
     modOsc.connect(modGainNode)
-    modGainNode.connect(osc.frequency)   // FM: modulates pitch
+    modGainNode.connect(osc.frequency)
 
-    // Bandpass to shape tone
     const bp = ctx.createBiquadFilter()
     bp.type = 'bandpass'
     bp.frequency.value = bpFreq
     bp.Q.value = 1.8
 
-    // Soft high-shelf to add crack on 20 mm
     const shelf = ctx.createBiquadFilter()
     shelf.type = 'highshelf'
     shelf.frequency.value = 2000
@@ -202,8 +391,7 @@ export class AudioManager {
     osc.connect(bp)
     bp.connect(shelf)
     shelf.connect(gainNode)
-    gainNode.connect(ctx.destination)
-
+    gainNode.connect(this.masterGain)
     osc.start()
     modOsc.start()
 
@@ -215,47 +403,49 @@ export class AudioManager {
   private stopGun(): void {
     if (!this.gunFiring) return
     this.gunFiring = false
+
+    if (this.gunSrc) {
+      this.stopLoop(this.gunSrc, null)
+      this.gunSrc = null
+      return
+    }
+
     const now = this.ctx.currentTime
-    // Quick 60 ms fade-out so the burst doesn't click
     this.gunGain?.gain.setTargetAtTime(0, now, 0.02)
-    const osc    = this.gunOsc
-    const modOsc = this.gunModOsc
+    const osc = this.gunOsc, modOsc = this.gunModOsc
     setTimeout(() => {
-      try { osc?.stop()    } catch { /* already stopped */ }
-      try { modOsc?.stop() } catch { /* already stopped */ }
+      try { osc?.stop()    } catch { /* */ }
+      try { modOsc?.stop() } catch { /* */ }
     }, 80)
-    this.gunOsc    = null
-    this.gunModOsc = null
-    this.gunGain   = null
+    this.gunOsc = null; this.gunModOsc = null; this.gunGain = null
   }
 
-  // ── AIM-9 / R-73 IR seeker growl ─────────────────────────────────────────
-  //
-  // Synthesis:
-  //   • Sawtooth carrier at ~480 Hz (the seeker gyro/cooling noise pitch)
-  //   • FM LFO at ~40 Hz with deep index → creates the characteristic pitch warble
-  //   • AM LFO at ~38 Hz (slightly offset from FM for complexity) → amplitude rattle
-  //     that gives the "rattlesnake" / "GROWL" sensation
-  //   • Cold (acquiring): lower amplitude, slower LFOs, lower carrier
-  //   • Hot (locked):     higher amplitude, faster LFOs, higher carrier
+  // ── IR seeker growl ───────────────────────────────────────────────────────
 
   private startGrowl(locked: boolean): void {
     this.stopGrowl()
-    const ctx = this.ctx
 
+    const fileKey = locked ? 'ir_growl_hot' : 'ir_growl_cold'
+    const loop = this.startLoop(fileKey, locked ? 0.65 : 0.35)
+    if (loop) {
+      ;[this.growlSrc, this.growlSrcGain] = loop
+      this.growlLocked = locked
+      return
+    }
+
+    // Synthesis fallback
+    const ctx = this.ctx
     const carrierFreq = locked ? 480 : 340
-    const fmRate      = locked ? 42  : 22   // Hz wobble rate
-    const fmDepth     = locked ? 130 : 60   // ±Hz
-    const amRate      = locked ? 38  : 18   // Hz rattle rate
+    const fmRate      = locked ? 42  : 22
+    const fmDepth     = locked ? 130 : 60
+    const amRate      = locked ? 38  : 18
     const baseGain    = locked ? 0.11 : 0.05
     const amDepth     = locked ? 0.08 : 0.04
 
-    // ── Carrier
     const carrier = ctx.createOscillator()
     carrier.type = 'sawtooth'
     carrier.frequency.value = carrierFreq
 
-    // ── FM (pitch wobble → rattlesnake quality)
     const fmOsc  = ctx.createOscillator()
     fmOsc.frequency.value = fmRate
     const fmGain = ctx.createGain()
@@ -263,9 +453,6 @@ export class AudioManager {
     fmOsc.connect(fmGain)
     fmGain.connect(carrier.frequency)
 
-    // ── AM (amplitude rattle → the iconic "growl" character)
-    //    ampGain.gain starts at baseGain; amOsc adds ±amDepth on top.
-    //    Result: gain oscillates between (baseGain - amDepth) and (baseGain + amDepth)
     const amOsc  = ctx.createOscillator()
     amOsc.frequency.value = amRate
     const amScaleGain = ctx.createGain()
@@ -274,29 +461,31 @@ export class AudioManager {
 
     const ampGain = ctx.createGain()
     ampGain.gain.value = baseGain
-    amScaleGain.connect(ampGain.gain)  // AM modulates the amp gain
+    amScaleGain.connect(ampGain.gain)
 
-    // ── Slight high-pass to cut mud
     const hp = ctx.createBiquadFilter()
     hp.type = 'highpass'
     hp.frequency.value = 200
 
     carrier.connect(hp)
     hp.connect(ampGain)
-    ampGain.connect(ctx.destination)
+    ampGain.connect(this.masterGain)
 
-    carrier.start()
-    fmOsc.start()
-    amOsc.start()
-
-    this.growlCarrier  = carrier
-    this.growlAmpGain  = ampGain
-    this.growlFmOsc    = fmOsc
-    this.growlAmOsc    = amOsc
-    this.growlLocked   = locked
+    carrier.start(); fmOsc.start(); amOsc.start()
+    this.growlCarrier = carrier
+    this.growlAmpGain = ampGain
+    this.growlFmOsc   = fmOsc
+    this.growlAmOsc   = amOsc
+    this.growlLocked  = locked
   }
 
   private stopGrowl(): void {
+    // File-based path
+    if (this.growlSrc) {
+      this.stopLoop(this.growlSrc, this.growlSrcGain)
+      this.growlSrc = null; this.growlSrcGain = null
+    }
+    // Synthesis path
     const now = this.ctx.currentTime
     this.growlAmpGain?.gain.setTargetAtTime(0, now, 0.05)
     const c = this.growlCarrier, f = this.growlFmOsc, a = this.growlAmOsc
@@ -305,22 +494,20 @@ export class AudioManager {
       try { f?.stop() } catch { /* */ }
       try { a?.stop() } catch { /* */ }
     }, 100)
-    this.growlCarrier = null
-    this.growlAmpGain = null
-    this.growlFmOsc   = null
-    this.growlAmOsc   = null
-    this.growlLocked  = false
+    this.growlCarrier = null; this.growlAmpGain = null
+    this.growlFmOsc = null; this.growlAmOsc = null
+    this.growlLocked = false
   }
 
   setIRSeekerState(acquired: boolean, locked: boolean): void {
     if (locked) {
-      if (this.growlCarrier && this.growlLocked) return   // already hot
+      if ((this.growlSrc || this.growlCarrier) && this.growlLocked) return
       this.startGrowl(true)
     } else if (acquired) {
-      if (this.growlCarrier && !this.growlLocked) return  // already cold
+      if ((this.growlSrc || this.growlCarrier) && !this.growlLocked) return
       this.startGrowl(false)
     } else {
-      if (!this.growlCarrier) return
+      if (!this.growlSrc && !this.growlCarrier) return
       this.stopGrowl()
     }
   }
@@ -334,11 +521,27 @@ export class AudioManager {
     if (!mode) return
 
     if (mode === 'LOCK') {
-      this.playTone(880, 0.15, 0)   // continuous STT lock
+      // Try file-based lock tone first
+      if (this.buffers.has('rwr_lock')) {
+        const loop = this.startLoop('rwr_lock', 0.4)
+        if (loop) { this.radarLockSrc = loop[0]; return }
+      }
+      this.playTone(880, 0.15, 0)
     } else {
-      const ms = mode === 'SEARCH' ? 1000 : mode === 'TRACK' ? 333 : 100
-      this.radarToneInterval = setInterval(() => this.playTone(660, 0.12, 0.08), ms)
+      const ms     = mode === 'SEARCH' ? 1000 : mode === 'TRACK' ? 333 : 100
+      const fileKey = mode === 'SEARCH' ? 'rwr_search' : 'rwr_track'
+      this.radarToneInterval = setInterval(() => {
+        if (!this.playOnce(fileKey, 0.5)) {
+          this.playTone(660, 0.12, 0.08)
+        }
+      }, ms)
     }
+  }
+
+  // ── Master volume ────────────────────────────────────────────────────────
+
+  setMasterVolume(vol: number): void {
+    this.masterGain.gain.setTargetAtTime(Math.max(0, Math.min(1, vol)), this.ctx.currentTime, 0.05)
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -347,6 +550,7 @@ export class AudioManager {
     this.stopGun()
     this.stopGrowl()
     this.stopRadarTone()
+    if (this.engineSrc) { try { this.engineSrc.stop() } catch { /* */ } }
     try { this.engineOsc.stop() } catch { /* */ }
     try { this.ctx.close()      } catch { /* */ }
   }
@@ -363,7 +567,7 @@ export class AudioManager {
     osc.frequency.value = freq
     g.gain.value = gain
     osc.connect(g)
-    g.connect(this.ctx.destination)
+    g.connect(this.masterGain)
     osc.start()
     if (duration > 0) {
       osc.stop(this.ctx.currentTime + duration)
@@ -376,13 +580,14 @@ export class AudioManager {
 
   private stopRadarTone(): void {
     if (this.radarToneInterval !== null) { clearInterval(this.radarToneInterval); this.radarToneInterval = null }
-    if (this.radarToneOsc) { try { this.radarToneOsc.stop() } catch { /* */ }; this.radarToneOsc = null }
+    if (this.radarToneOsc)  { try { this.radarToneOsc.stop()  } catch { /* */ }; this.radarToneOsc  = null }
+    if (this.radarLockSrc)  { try { this.radarLockSrc.stop()  } catch { /* */ }; this.radarLockSrc  = null }
   }
 
   private speak(text: string): void {
-    const utt = new SpeechSynthesisUtterance(text)
-    utt.rate  = 1.2
-    utt.pitch = 0.9
+    const utt  = new SpeechSynthesisUtterance(text)
+    utt.rate   = 1.2
+    utt.pitch  = 0.9
     speechSynthesis.speak(utt)
   }
 }

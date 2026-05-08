@@ -86,8 +86,8 @@ export class PlayerAircraft extends Aircraft {
     if (controls.cycleMissile) this.cycleWeapon()
 
     // Countermeasures
-    if (controls.dispenseFlare) this.cmds.dispenseFlare(this.state.positionNED)
-    if (controls.dispenseChaff) this.cmds.dispenseChaff(this.state.positionNED)
+    if (controls.dispenseFlare) this.cmds.dispenseFlare(this.state.positionNED, this.state.velocityNED)
+    if (controls.dispenseChaff) this.cmds.dispenseChaff(this.state.positionNED, this.state.velocityNED)
     this.cmds.update(dt)
 
     // Avionics
@@ -122,7 +122,12 @@ export class PlayerAircraft extends Aircraft {
     const tgtAircraft = enemies.find(e => e.entityId === targetId)
     const tgtPos = tgtAircraft?.state.positionNED as [number,number,number] | undefined
     const tgtVel = tgtAircraft?.state.velocityNED as [number,number,number] | undefined
-    this.missiles.launch(store.weaponId, this.state, targetId, 'player', tgtPos, tgtVel)
+
+    // Find the hardpoint definition to get the body-frame launch offset
+    const hpDef = this.spec.hardpoints.find(h => h.id === store.hardpointId)
+    const hpBody = hpDef?.posBodyM as [number,number,number] | undefined
+
+    this.missiles.launch(store.weaponId, this.state, targetId, 'player', tgtPos, tgtVel, hpBody)
     store.remainingRounds = 0
   }
 

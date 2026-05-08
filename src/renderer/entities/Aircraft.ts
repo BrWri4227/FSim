@@ -6,9 +6,9 @@ import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
-import { createPlaceholderAircraftMesh, createNozzlePoint } from '../scene/PlaceholderMeshes'
+import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
-import { computeFlightPenalties } from '../systems/DamageModel'
+import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
 import { ThrusterEffect } from '../scene/ThrusterEffect'
 import { applyFCSLimits } from '../avionics/FCS'
@@ -115,8 +115,12 @@ export class Aircraft {
     this.mesh.position.copy(pos)
     this.mesh.quaternion.copy(quat.multiply(meshBias))
 
-    // Engine glow intensity: full at throttle 1, dim at idle
-    this.thrusterEffect.update(this.state.throttle, dt)
+    // Engine glow: extinguished when engine is failed
+    const thrThrottle = this.damage.engineFailed ? 0 : this.state.throttle
+    this.thrusterEffect.update(thrThrottle, dt)
+
+    // Visual damage: tint mesh based on accumulated damage
+    applyDamageTint(this.mesh, overallDamage(this.damage), this.damage.onFire)
   }
 
   dispose(): void {

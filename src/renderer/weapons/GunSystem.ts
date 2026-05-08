@@ -67,7 +67,16 @@ export class GunSystem {
       for (const enemy of enemies) {
         if (v3dist(round.positionNED, enemy.state.positionNED) < HIT_RADIUS) {
           round.active = false
-          applyHit(enemy.damage, 'FUSELAGE', 0.2)
+          // Vary hit zone by proximity position relative to target
+          const dx = round.positionNED[0] - enemy.state.positionNED[0]
+          const dz = round.positionNED[2] - enemy.state.positionNED[2]
+          const dy = round.positionNED[1] - enemy.state.positionNED[1]
+          let zone: import('../types/damage').DamageZone = 'FUSELAGE'
+          if (Math.abs(dy) > 2.5 && dy < 0) zone = 'ENGINE'      // from below
+          else if (Math.abs(dz) > 2.0) zone = Math.random() < 0.5 ? 'WING_LEFT' : 'WING_RIGHT'
+          else if (dx > 3.0) zone = 'COCKPIT'                     // nose-on
+          else if (dx < -3.0) zone = 'TAIL'
+          applyHit(enemy.damage, zone, 0.22, enemy.state.invincible)
         }
       }
 

@@ -29,8 +29,10 @@ export function followBehind(self: AIAircraft, leader: Aircraft, _dt: number): C
   // Speed control: match leader + correction for distance error
   const speedErr   = leader.state.iasKts - self.state.iasKts
   const throttle   = Math.max(0, Math.min(1, self.state.throttle + speedErr * 0.002 + (dist > FOLLOW_DIST_M ? 0.1 : -0.05)))
-  const pitch      = Math.max(-1, Math.min(1, -elErr / 20))
-  const roll       = Math.max(-1, Math.min(1,  azErr / 20))
+  // Positive elErr = desired is above the nose → pitch UP (positive command).
+  // The original code had a minus sign here which commanded the wrong direction.
+  const pitch      = Math.max(-1, Math.min(1,  elErr / 18))
+  const roll       = Math.max(-1, Math.min(1,  azErr / 18))
 
   return { pitch, roll, yaw: 0, throttle, fireMissile: false, fireGun: false, cycleMissile: false, dispenseFlare: false, dispenseChaff: false, radarModeNext: false, radarSelectNext: false, radarLockTarget: false, radarUnlock: false }
 }

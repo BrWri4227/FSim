@@ -1,5 +1,4 @@
 import type { MissileState } from '../types/weapons'
-import type { AircraftState } from '../types/aircraft'
 import type { Vec3 } from '../types/common'
 import { v3sub, v3add, v3scale, v3dot, v3len, v3norm } from '../utils/MathUtils'
 
@@ -103,9 +102,9 @@ export function checkIRSeekerLock(missile: MissileState, targetPos: Vec3): boole
 // Main per-tick guidance call — mutates missile.prevLOSUnit and
 // missile.prevTargetVel as side-effects (same pattern as before).
 // ---------------------------------------------------------------------------
-export function guideMissile(missile: MissileState, targetState: AircraftState, dt: number): Vec3 {
-  let tgtPos = targetState.positionNED
-  const tgtVel = targetState.velocityNED
+export function guideMissile(missile: MissileState, targetPos: Vec3, targetVel: Vec3, dt: number): Vec3 {
+  let tgtPos = targetPos
+  const tgtVel = targetVel
 
   // ARH mid-course: steer toward predicted intercept, not current target pos
   if (missile.spec.category === 'ARH_MISSILE' && missile.guidanceMode !== 'ACTIVE') {

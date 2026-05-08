@@ -63,7 +63,13 @@ export class EntityManager {
 
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const ai = this.enemies[i]!
-      if (ai.state.ejected || ai.damage.zones['ENGINE'] > 0.95) {
+      if (
+        ai.state.ejected ||
+        ai.damage.structuralFailure ||
+        ai.damage.zones['ENGINE']   >= 1.0 ||
+        ai.damage.zones['FUSELAGE'] >= 1.0 ||
+        ai.damage.zones['COCKPIT']  >= 1.0
+      ) {
         this.despawn(ai.entityId)
         continue
       }
