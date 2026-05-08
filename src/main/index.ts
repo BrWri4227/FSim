@@ -10,6 +10,19 @@ interface NetPlayerProfile {
   aircraftId: string
 }
 
+interface NetRadarState {
+  mode: 'OFF' | 'RWS' | 'TWS' | 'STT'
+  sttTargetId: string | null
+}
+
+interface NetMissileState {
+  id: string
+  positionNED: [number, number, number]
+  velocityNED: [number, number, number]
+  targetEntityId: string
+  active: boolean
+}
+
 interface NetPlayerState {
   positionNED: [number, number, number]
   velocityNED: [number, number, number]
@@ -17,6 +30,8 @@ interface NetPlayerState {
   throttle: number
   ejected: boolean
   structuralFailure: boolean
+  radar: NetRadarState
+  missiles: NetMissileState[]
 }
 
 interface HitEvent {
@@ -29,6 +44,7 @@ interface HitEvent {
 
 type ClientMessage =
   | { type: 'join'; profile: NetPlayerProfile }
+  | { type: 'profile-update'; profile: NetPlayerProfile }
   | { type: 'state'; state: NetPlayerState }
   | { type: 'hit'; hit: HitEvent }
 
@@ -46,6 +62,11 @@ type ServerMessage =
   | {
       type: 'peer-leave'
       playerId: string
+    }
+  | {
+      type: 'peer-profile-update'
+      playerId: string
+      profile: NetPlayerProfile
     }
   | {
       type: 'state'
@@ -158,6 +179,13 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
           playerId: peerId,
           profile: msg.profile,
         }, peerId)
+        return
+      }
+
+      if (msg.type === 'profile-update') {
+        if (!peer.profile) return
+        peer.profile = msg.profile
+        broadcast({ type: 'peer-profile-update', playerId: peerId, profile: msg.profile }, peerId)
         return
       }
 

@@ -1,6 +1,6 @@
 {
   "name": "fsim",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "description": "Combat flight simulator — US vs Russian fighters",
   "main": "dist-electron/main/index.js",
   "type": "module",
@@ -28,6 +28,10 @@
   "build": {
     "appId": "com.fsim.app",
     "productName": "FSim",
+    "asar": true,
+    "asarUnpack": [
+      "dist-electron/renderer/sounds/**"
+    ],
     "directories": {
       "output": "release"
     },

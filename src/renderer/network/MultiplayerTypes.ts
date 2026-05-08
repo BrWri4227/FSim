@@ -12,6 +12,19 @@ export interface NetPlayerProfile {
   aircraftId: string
 }
 
+export interface NetRadarState {
+  mode: 'OFF' | 'RWS' | 'TWS' | 'STT'
+  sttTargetId: string | null
+}
+
+export interface NetMissileState {
+  id: string
+  positionNED: [number, number, number]
+  velocityNED: [number, number, number]
+  targetEntityId: string
+  active: boolean
+}
+
 export interface NetPlayerState {
   positionNED: [number, number, number]
   velocityNED: [number, number, number]
@@ -19,6 +32,8 @@ export interface NetPlayerState {
   throttle: number
   ejected: boolean
   structuralFailure: boolean
+  radar: NetRadarState
+  missiles: NetMissileState[]
 }
 
 export interface HitEvent {
@@ -31,6 +46,7 @@ export interface HitEvent {
 
 export type ClientMessage =
   | { type: 'join'; profile: NetPlayerProfile }
+  | { type: 'profile-update'; profile: NetPlayerProfile }
   | { type: 'state'; state: NetPlayerState }
   | { type: 'hit'; hit: HitEvent }
 
@@ -48,6 +64,11 @@ export type ServerMessage =
   | {
       type: 'peer-leave'
       playerId: string
+    }
+  | {
+      type: 'peer-profile-update'
+      playerId: string
+      profile: NetPlayerProfile
     }
   | {
       type: 'state'

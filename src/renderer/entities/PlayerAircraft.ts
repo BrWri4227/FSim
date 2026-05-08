@@ -56,7 +56,7 @@ export class PlayerAircraft extends Aircraft {
     }
   }
 
-  update(dt: number, controls: ControlInputs, enemies: Aircraft[]): void {
+  update(dt: number, controls: ControlInputs, enemies: Aircraft[], ownNetId?: string): void {
     if (this.state.ejected) return
 
     if (this.damage.structuralFailure || this.damage.zones['COCKPIT'] >= 1.0) {
@@ -92,12 +92,21 @@ export class PlayerAircraft extends Aircraft {
     if (controls.dispenseChaff) this.cmds.dispenseChaff(this.state.positionNED, this.state.velocityNED)
     this.cmds.update(dt)
 
+    // Landing gear toggle
+    if (controls.toggleGear) this.state.gearDown = !this.state.gearDown
+
+    // Flap cycle: UP → TAKEOFF → LANDING → UP
+    if (controls.cycleFlaps) this.state.flaps = ((this.state.flaps + 1) % 3) as 0 | 1 | 2
+    // Auto-retract flaps above limit speed (250 kts for pos 1, 200 kts for pos 2)
+    if (this.state.flaps === 2 && this.state.iasKts > 200) this.state.flaps = 1
+    if (this.state.flaps === 1 && this.state.iasKts > 250) this.state.flaps = 0
+
     // Avionics
     this.radar.update(dt, this.state, enemies, controls.radarModeNext)
     if (controls.radarSelectNext) this.radar.selectNextTrack()
     if (controls.radarLockTarget) this.radar.lockSelectedTarget()
     if (controls.radarUnlock)     this.radar.unlockSTT()
-    this.rwr.update(enemies, this.state)
+    this.rwr.update(enemies, this.state, ownNetId ?? 'player')
     this.hms.update(this.state)
     this.gpws.update(this.state, dt, _event => {
       // GPWS audio events handled via AudioManager in FlightSession

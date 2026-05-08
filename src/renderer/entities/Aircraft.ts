@@ -6,7 +6,7 @@ import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
-import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint } from '../scene/PlaceholderMeshes'
+import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint, setGearVisible, setFlapsVisible } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
 import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
@@ -46,7 +46,7 @@ export class Aircraft {
       throttle: 0.3, fuelKg: spec.mass.fuelCapacityKg,
       loadedStores: [...stores],
       totalMassKg: spec.mass.emptyMassKg + spec.mass.fuelCapacityKg,
-      onGround: false, ejected: false, invincible: false,
+      onGround: false, ejected: false, invincible: false, gearDown: false, flaps: 0,
       sv,
     }
 
@@ -64,8 +64,13 @@ export class Aircraft {
     const storeDrag = computeStoreDrag(this.state.loadedStores)
     const massKg    = computeTotalMass(this.spec, this.state.fuelKg, this.state.loadedStores)
 
+    const gearDrag = this.state.gearDown ? 0.05 : 0
+    const FLAP_CL = [0, 0.5, 1.0] as const
+    const FLAP_CD = [0, 0.02, 0.08] as const
+    const flapCL = FLAP_CL[this.state.flaps]
+    const flapCD = FLAP_CD[this.state.flaps]
     const fcsControls = applyFCSLimits(controls, this.state, this.spec)
-    const newSV = stepRK4(this.state.sv, this.spec, fcsControls, massKg, penalties, storeDrag, dt)
+    const newSV = stepRK4(this.state.sv, this.spec, fcsControls, massKg, penalties, storeDrag + gearDrag, dt, flapCL, flapCD)
 
     // Update state from SV
     this.state.sv = newSV
@@ -121,6 +126,21 @@ export class Aircraft {
 
     // Visual damage: tint mesh based on accumulated damage
     applyDamageTint(this.mesh, overallDamage(this.damage), this.damage.onFire)
+
+    // Gear and flap visibility
+    setGearVisible(this.mesh, this.state.gearDown)
+    setFlapsVisible(this.mesh, this.state.flaps > 0)
+  }
+
+  /** Returns the minimal radar info the RWR needs. Overridden by NetworkAircraft. */
+  getRadarInfo(): { mode: string; sttTargetId: string | null; tracksPlayer: (id: string) => boolean } | null {
+    const rs = this.radar?.state
+    if (!rs || rs.mode === 'OFF') return null
+    return {
+      mode: rs.mode,
+      sttTargetId: rs.sttTargetId,
+      tracksPlayer: (id) => rs.tracks.some(t => t.entityId === id),
+    }
   }
 
   dispose(): void {

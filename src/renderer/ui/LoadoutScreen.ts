@@ -114,7 +114,11 @@ export class LoadoutScreen {
           Max AoA: ${spec.maxAoADeg}°
         </div>
       `
-      card.onclick = () => { this.selectedSpec = spec; this.render() }
+      card.onclick = () => {
+        this.selectedSpec = spec
+        this.lobbyClient?.updateProfile({ aircraftId: spec.id })
+        this.render()
+      }
       grid.appendChild(card)
     }
     this.el.appendChild(grid)
@@ -269,6 +273,82 @@ export class LoadoutScreen {
       mpSection.appendChild(events)
     }
     this.el.appendChild(mpSection)
+
+    if (this.lobbyConnected && this.multiplayerMode === 'join') {
+      const hint = document.createElement('div')
+      hint.style.cssText = 'font-size:11px;color:#88bb88;margin-top:4px'
+      hint.textContent = 'Select your aircraft and weapons, then click LAUNCH MISSION to join the game.'
+      this.el.appendChild(hint)
+    }
+
+    // Controls reference
+    const ctrlSection = document.createElement('div')
+    ctrlSection.style.cssText = 'border:1px solid #226644;padding:12px;max-width:900px;width:100%'
+    ctrlSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">CONTROLS</div>'
+
+    const ctrlGroups: Array<{ label: string; bindings: Array<[string, string]> }> = [
+      {
+        label: 'FLIGHT',
+        bindings: [
+          ['W / S',       'Pitch down / up'],
+          ['A / D',       'Roll left / right'],
+          ['Q / E',       'Yaw left / right'],
+          ['Shift',       'Throttle up'],
+          ['Ctrl',        'Throttle down'],
+          ['G',           'Landing gear toggle'],
+          ['V',           'Flaps cycle (UP → TO → LDG)'],
+        ],
+      },
+      {
+        label: 'WEAPONS',
+        bindings: [
+          ['Space',       'Fire gun'],
+          ['F',           'Fire missile'],
+          ['C',           'Cycle missile'],
+        ],
+      },
+      {
+        label: 'COUNTERMEASURES',
+        bindings: [
+          ['Z',           'Dispense flare'],
+          ['X',           'Dispense chaff'],
+        ],
+      },
+      {
+        label: 'RADAR / AVIONICS',
+        bindings: [
+          ['R',           'Radar mode cycle'],
+          ['T',           'Radar select next track'],
+          ['L',           'Lock selected target (STT)'],
+          ['U',           'Unlock STT'],
+        ],
+      },
+      {
+        label: 'MISC',
+        bindings: [
+          ['Tab',         'Toggle cockpit / external camera'],
+          ['F12',         'Toggle debug overlay'],
+          ['` (backtick)','Eject'],
+        ],
+      },
+    ]
+
+    const ctrlGrid = document.createElement('div')
+    ctrlGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px'
+
+    for (const group of ctrlGroups) {
+      const col = document.createElement('div')
+      col.style.cssText = 'font-size:11px'
+      col.innerHTML = `<div style="color:#aaffcc;margin-bottom:4px;letter-spacing:1px">${group.label}</div>` +
+        group.bindings.map(([key, desc]) =>
+          `<div style="display:flex;justify-content:space-between;gap:8px;margin:2px 0">` +
+          `<span style="color:#00ff88;min-width:100px">${key}</span>` +
+          `<span style="color:#88bb88">${desc}</span></div>`
+        ).join('')
+      ctrlGrid.appendChild(col)
+    }
+    ctrlSection.appendChild(ctrlGrid)
+    this.el.appendChild(ctrlSection)
 
     // Launch button
     const btn = document.createElement('button')

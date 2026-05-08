@@ -16,6 +16,8 @@ import type { LoadedStore } from './types/weapons'
 import { applyHit } from './systems/DamageModel'
 import { getAircraftById } from './data/aircraft/catalog'
 import type { FlightResult } from './App'
+import { FlareEffect } from './scene/FlareEffect'
+import { ChaffEffect } from './scene/ChaffEffect'
 
 const FIXED_DT = 1 / 60
 
@@ -34,6 +36,9 @@ export class FlightSession {
   private multiplayer: MultiplayerClient | null = null
   private localNetworkId: string | null = null
   private trackedRemoteIds = new Set<string>()
+
+  private flareEffect: FlareEffect
+  private chaffEffect: ChaffEffect
 
   private rafId = 0
   private lastTime = 0
@@ -81,6 +86,9 @@ export class FlightSession {
 
     this.postFX = new PostFXManager(this.sceneManager.renderer, this.sceneManager.scene, this.sceneManager.camera)
 
+    this.flareEffect = new FlareEffect(this.sceneManager.scene)
+    this.chaffEffect = new ChaffEffect(this.sceneManager.scene)
+
     this.hud = new HUD(hudCanvas, this.player, this.entityManager)
     this.debugOverlay = new DebugOverlay(this.player, this.entityManager, this.sceneManager.scene)
     this.debugVisuals = new DebugVisuals(this.sceneManager.scene)
@@ -114,9 +122,23 @@ export class FlightSession {
 
   private async startInternal(): Promise<void> {
     await this.initMultiplayer()
+    this.applyPeerSpawnOffset()
     this.sessionStartTime = performance.now()
     this.lastTime = this.sessionStartTime
     this.loop(this.sessionStartTime)
+  }
+
+  private applyPeerSpawnOffset(): void {
+    if (!this.localNetworkId) return
+    const match = this.localNetworkId.match(/^peer_(\d+)$/)
+    if (!match) return
+    const peerNum = parseInt(match[1]!, 10)
+    if (peerNum <= 1) return
+    // Each peer beyond the first is offset 600 m east so players spawn in different positions.
+    const eastM = (peerNum - 1) * 600
+    this.player.state.positionNED[1] = eastM
+    // Keep state vector consistent with the new position (sv index 1 = East).
+    this.player.state.sv[1] = eastM
   }
 
   private async initMultiplayer(): Promise<void> {
@@ -163,8 +185,11 @@ export class FlightSession {
   private tick(dt: number): void {
     const controls = this.inputManager.getControls()
     this.syncMultiplayer()
-    this.player.update(dt, controls, this.entityManager.getEnemies())
+    this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined)
     this.entityManager.update(dt, this.player)
+    const targetIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
+    const inboundMissiles = this.entityManager.getInboundMissiles(targetIds)
+    this.player.rwr.addMissileThreats(inboundMissiles, this.player.state)
     this.audioManager.update(this.player, controls)
 
     // Smooth G with ~0.4 s time-constant so vignette builds gradually
@@ -188,6 +213,7 @@ export class FlightSession {
     if (!this.multiplayer || !this.multiplayer.isConnected()) return
 
     this.localNetworkId = this.multiplayer.getLocalPlayerId() ?? this.localNetworkId
+    const radarState = this.player.radar.state
     this.multiplayer.sendState({
       positionNED: [...this.player.state.positionNED] as [number, number, number],
       velocityNED: [...this.player.state.velocityNED] as [number, number, number],
@@ -195,6 +221,19 @@ export class FlightSession {
       throttle: this.player.state.throttle,
       ejected: this.player.state.ejected,
       structuralFailure: this.player.damage.structuralFailure,
+      radar: {
+        mode: radarState.mode,
+        sttTargetId: radarState.sttTargetId,
+      },
+      missiles: this.player.missiles.getMissiles()
+        .filter(m => m.active)
+        .map(m => ({
+          id: m.id,
+          positionNED: [...m.positionNED] as [number, number, number],
+          velocityNED: [...m.velocityNED] as [number, number, number],
+          targetEntityId: m.targetEntityId,
+          active: m.active,
+        })),
     })
 
     const snapshots = this.multiplayer.getRemoteSnapshots()
@@ -227,6 +266,10 @@ export class FlightSession {
     this.player.updateMesh()
     this.entityManager.updateMeshes()
 
+    // Countermeasure visual effects
+    this.flareEffect.update(this.player.cmds.getActiveFlares())
+    this.chaffEffect.update(this.player.cmds.getActiveChaffClouds())
+
     // Keep sky centred on camera before rendering
     this.sceneManager.updateSky(this.sceneManager.camera)
 
@@ -257,6 +300,8 @@ export class FlightSession {
     this.hud.dispose()
     this.debugOverlay.dispose()
     this.debugVisuals.dispose()
+    this.flareEffect.dispose()
+    this.chaffEffect.dispose()
     this.sceneManager.dispose()
     this.audioManager.dispose()
     this.multiplayer?.disconnect()

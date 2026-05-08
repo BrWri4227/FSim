@@ -90,6 +90,68 @@ export class HUD {
     ctx.moveTo(fpmX, fpmY - 6);  ctx.lineTo(fpmX, fpmY - 14)
     ctx.stroke()
 
+    // ── Bottom-center status strip ───────────────────────────────────────────
+    ctx.font = '11px monospace'
+    const stripY = H - 12
+    const stripCX = cx
+
+    // Gear indicator: solid box when down
+    const gearLabel = 'GEAR'
+    const gearW = 44, gearH = 16
+    const gearX = stripCX - 108
+    if (state.gearDown) {
+      ctx.fillStyle = '#00ff44'
+      ctx.fillRect(gearX, stripY - gearH + 2, gearW, gearH)
+      ctx.fillStyle = '#000'
+      ctx.fillText(gearLabel, gearX + 5, stripY - 1)
+    } else {
+      ctx.strokeStyle = '#226644'
+      ctx.strokeRect(gearX, stripY - gearH + 2, gearW, gearH)
+      ctx.fillStyle = '#226644'
+      ctx.fillText(gearLabel, gearX + 5, stripY - 1)
+    }
+
+    // Flap position indicator: three segments [UP][TO][LDG]
+    const flapLabels = ['UP', 'TO', 'LDG']
+    const flapSegW = [28, 24, 32]
+    let flapX = stripCX - 52
+    for (let i = 0; i < 3; i++) {
+      const active = state.flaps === i
+      const segW = flapSegW[i]!
+      if (active) {
+        ctx.fillStyle = i === 0 ? '#226644' : '#00ff44'
+        ctx.fillRect(flapX, stripY - gearH + 2, segW, gearH)
+        ctx.fillStyle = i === 0 ? '#88bb88' : '#000'
+      } else {
+        ctx.strokeStyle = '#226644'
+        ctx.strokeRect(flapX, stripY - gearH + 2, segW, gearH)
+        ctx.fillStyle = '#226644'
+      }
+      ctx.fillText(flapLabels[i]!, flapX + 3, stripY - 1)
+      flapX += segW + 2
+    }
+
+    // ── CMDS counters (lower left, above weapons panel) ───────────────────────
+    ctx.font = '11px monospace'
+    const cmdsX = 16
+    const cmdsY = H - 60
+    const flareCount = player.cmds.flareCount
+    const chaffCount = player.cmds.chaffCount
+    const flareColor = flareCount === 0 ? '#ff4444' : flareCount <= 5 ? '#ffaa00' : '#00ff44'
+    const chaffColor = chaffCount === 0 ? '#ff4444' : chaffCount <= 5 ? '#ffaa00' : '#00ff44'
+    ctx.fillStyle = '#88bb88'
+    ctx.fillText('FLARE', cmdsX, cmdsY)
+    ctx.fillStyle = flareColor
+    ctx.fillText(String(flareCount).padStart(3, ' '), cmdsX + 40, cmdsY)
+    ctx.fillStyle = '#88bb88'
+    ctx.fillText('CHAFF', cmdsX, cmdsY + 14)
+    ctx.fillStyle = chaffColor
+    ctx.fillText(String(chaffCount).padStart(3, ' '), cmdsX + 40, cmdsY + 14)
+
+    ctx.strokeStyle = '#00ff44'
+    ctx.fillStyle   = '#00ff44'
+    ctx.font        = '12px monospace'
+
     // STT lock cues — world-space projection
     if (camera && radar.mode === 'STT' && radar.sttTargetId) {
       const enemies = this.entityManager.getEnemies()

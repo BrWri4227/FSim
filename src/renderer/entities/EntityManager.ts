@@ -91,6 +91,24 @@ export class EntityManager {
     return [...this.enemies, ...this.remotePlayers.values()]
   }
 
+  /** Returns all active missiles targeting any of the given IDs. */
+  getInboundMissiles(targetIds: string[]): Array<{ id: string; positionNED: [number, number, number] }> {
+    const idSet = new Set(targetIds)
+    const out: Array<{ id: string; positionNED: [number, number, number] }> = []
+
+    for (const m of this.debugMissiles.getMissiles()) {
+      if (m.active && idSet.has(m.targetEntityId)) out.push(m)
+    }
+
+    for (const remote of this.remotePlayers.values()) {
+      for (const m of remote.getNetMissiles()) {
+        if (m.active && idSet.has(m.targetEntityId)) out.push(m)
+      }
+    }
+
+    return out
+  }
+
   upsertRemotePlayer(
     playerId: string,
     aircraftSpec: AircraftSpec,

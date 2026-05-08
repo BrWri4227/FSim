@@ -12,7 +12,7 @@ export class MultiplayerClient {
   private inboundHits: HitEvent[] = []
   private connected = false
   private localPlayerId: string | null = null
-  private readonly profile: NetPlayerProfile
+  private profile: NetPlayerProfile
   private rosterListeners: Array<() => void> = []
 
   constructor(profile: NetPlayerProfile) {
@@ -78,12 +78,24 @@ export class MultiplayerClient {
       }
 
       if (msg.type === 'state') {
+        const wasInLobby = !this.remotePlayers.get(msg.playerId)?.state
         this.remotePlayers.set(msg.playerId, {
           playerId: msg.playerId,
           profile: msg.profile,
           state: msg.state,
         })
-        this.notifyRosterChanged()
+        // Only notify on first state received (lobby → flight transition); subsequent
+        // updates are polled each frame by syncMultiplayer() via getRemoteSnapshots().
+        if (wasInLobby) this.notifyRosterChanged()
+        return
+      }
+
+      if (msg.type === 'peer-profile-update') {
+        const peer = this.remotePlayers.get(msg.playerId)
+        if (peer) {
+          peer.profile = msg.profile
+          this.notifyRosterChanged()
+        }
         return
       }
 
@@ -117,6 +129,11 @@ export class MultiplayerClient {
     return () => {
       this.rosterListeners = this.rosterListeners.filter(listener => listener !== cb)
     }
+  }
+
+  updateProfile(profile: NetPlayerProfile): void {
+    this.profile = profile
+    this.send({ type: 'profile-update', profile })
   }
 
   sendState(state: NetPlayerState): void {
