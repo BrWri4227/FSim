@@ -75,7 +75,7 @@ export class HUD {
     drawRadarScope(ctx, cx - 110, H - 185, 220, 170, radar, state.positionNED)
 
     // RWR threat ring — bottom right
-    drawThreatDisplay(ctx, W - 70, H - 60, rwr)
+    drawThreatDisplay(ctx, W - 80, H - 75, rwr, performance.now() / 1000)
 
     // Flight path marker
     const betaPx  = (state.betaDeg  / 60) * (W / 2)

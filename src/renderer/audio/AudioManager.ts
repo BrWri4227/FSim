@@ -48,9 +48,12 @@ const SOUND_FILES: Record<string, string> = {
   gun_30mm:          'gun_30mm.wav',
   ir_growl_cold:     'ir_growl_cold.wav',
   ir_growl_hot:      'ir_growl_hot.wav',
+  chaff:             'chaff.wav',
+  flare:             'flare.wav',
   rwr_search:        'rwr_search.wav',
   rwr_track:         'rwr_track.wav',
   rwr_lock:          'rwr_lock.wav',
+  rwr_launch:        'rwr_launch.wav',
   missile_launch:    'missile_launch.wav',
   pull_up:           'pull_up.wav',
   pull_up_urgent:    'pull_up_urgent.wav',
@@ -77,7 +80,11 @@ export class AudioManager {
   private radarToneGain:     GainNode | null = null
   private radarToneInterval: ReturnType<typeof setInterval> | null = null
   private radarLockSrc:      AudioBufferSourceNode | null = null
-  private activeRWRMode: 'SEARCH' | 'TRACK' | 'LOCK' | 'INCOMING' | null = null
+  private activeRWRMode: 'TRACK' | 'LOCK' | 'INCOMING' | null = null
+  private prevHasMissile = false
+  private seenSearchIds = new Set<string>()
+  private prevFlareCount = -1
+  private prevChaffCount = -1
 
   // ── IR seeker growl ─────────────────────────────────────────────────────
   private growlCarrier: OscillatorNode | null = null
@@ -237,6 +244,13 @@ export class AudioManager {
       if (!isFiring && this.gunFiring)  this.stopGun()
     }
 
+    // Countermeasures
+    const fc = player.cmds.flareCount, cc = player.cmds.chaffCount
+    if (this.prevFlareCount >= 0 && fc < this.prevFlareCount) this.playOnce('flare', 0.7)
+    if (this.prevChaffCount >= 0 && cc < this.prevChaffCount) this.playOnce('chaff', 0.7)
+    this.prevFlareCount = fc
+    this.prevChaffCount = cc
+
     // IR seeker growl
     const irStore = player.state.loadedStores.find(
       s => s.category === 'IR_MISSILE' && s.remainingRounds > 0
@@ -266,15 +280,31 @@ export class AudioManager {
       this.setIRSeekerState(false, false)
     }
 
-    // RWR tones
-    const threats  = player.rwr.state.threats
-    const hasSTT   = threats.some(t => t.type === 'TRACK' && t.priority >= 3)
-    const hasTrack = threats.some(t => t.type === 'TRACK')
-    const hasScan  = threats.length > 0
+    // RWR tones — priority: MISSILE > STT LOCK > TRACK > SEARCH
+    const rwrState = player.rwr.state
+    const threats  = rwrState.threats
+    const hasMissile = threats.some(t => t.type === 'MISSILE')
+    const hasSTT     = threats.some(t => t.type === 'TRACK' && t.priority >= 4)
+    const hasTrack   = threats.some(t => t.type === 'TRACK')
 
-    if (hasSTT)        this.setRWRMode('LOCK')
+    // SEARCH: one-shot ping per newly-detected target (never loops)
+    const currentSearchIds = new Set(threats.filter(t => t.type === 'SEARCH').map(t => t.entityId))
+    for (const id of currentSearchIds) {
+      if (!this.seenSearchIds.has(id)) {
+        if (!this.playOnce('rwr_search', 0.45)) this.playTone(660, 0.12, 0.08)
+      }
+    }
+    this.seenSearchIds = currentSearchIds
+
+    // Voice callout on new missile detection
+    if (rwrState.hasMissileLaunch && !this.prevHasMissile) {
+      this.speak('Missile launch')
+    }
+    this.prevHasMissile = hasMissile
+
+    if (hasMissile)    this.setRWRMode('INCOMING')
+    else if (hasSTT)   this.setRWRMode('LOCK')
     else if (hasTrack) this.setRWRMode('TRACK')
-    else if (hasScan)  this.setRWRMode('SEARCH')
     else               this.setRWRMode(null)
   }
 
@@ -514,27 +544,43 @@ export class AudioManager {
 
   // ── RWR radar warning tones ───────────────────────────────────────────────
 
-  setRWRMode(mode: 'SEARCH' | 'TRACK' | 'LOCK' | 'INCOMING' | null): void {
+  setRWRMode(mode: 'TRACK' | 'LOCK' | 'INCOMING' | null): void {
     if (mode === this.activeRWRMode) return
     this.activeRWRMode = mode
     this.stopRadarTone()
     if (!mode) return
 
-    if (mode === 'LOCK') {
-      // Try file-based lock tone first
-      if (this.buffers.has('rwr_lock')) {
-        const loop = this.startLoop('rwr_lock', 0.4)
-        if (loop) { this.radarLockSrc = loop[0]; return }
+    // Each mode loops its dedicated file. Synthesis is a last-resort fallback only.
+    const fileKey =
+      mode === 'INCOMING' ? 'rwr_launch' :
+      mode === 'LOCK'     ? 'rwr_lock'   : 'rwr_track'
+
+    const gainVal =
+      mode === 'INCOMING' ? 0.55 :
+      mode === 'LOCK'     ? 0.45 : 0.40
+
+    const loop = this.startLoop(fileKey, gainVal)
+    if (loop) {
+      this.radarLockSrc = loop[0]   // reuse radarLockSrc to track the active loop
+      return
+    }
+
+    // Synthesis fallback (no file loaded)
+    if (mode === 'INCOMING') {
+      const scheduleBeep = (): void => {
+        this.playTone(1400, 0.20, 0.07)
+        this.radarToneInterval = setTimeout(scheduleBeep, 150) as unknown as ReturnType<typeof setInterval>
       }
+      scheduleBeep()
+    } else if (mode === 'LOCK') {
       this.playTone(880, 0.15, 0)
     } else {
-      const ms     = mode === 'SEARCH' ? 1000 : mode === 'TRACK' ? 333 : 100
-      const fileKey = mode === 'SEARCH' ? 'rwr_search' : 'rwr_track'
-      this.radarToneInterval = setInterval(() => {
-        if (!this.playOnce(fileKey, 0.5)) {
-          this.playTone(660, 0.12, 0.08)
-        }
-      }, ms)
+      // TRACK
+      const schedulePing = (): void => {
+        this.playTone(880, 0.12, 0.07)
+        this.radarToneInterval = setTimeout(schedulePing, 333) as unknown as ReturnType<typeof setInterval>
+      }
+      schedulePing()
     }
   }
 
@@ -579,7 +625,8 @@ export class AudioManager {
   }
 
   private stopRadarTone(): void {
-    if (this.radarToneInterval !== null) { clearInterval(this.radarToneInterval); this.radarToneInterval = null }
+    // Works for both setInterval and setTimeout handles (browser timers share the same namespace)
+    if (this.radarToneInterval !== null) { clearTimeout(this.radarToneInterval); this.radarToneInterval = null }
     if (this.radarToneOsc)  { try { this.radarToneOsc.stop()  } catch { /* */ }; this.radarToneOsc  = null }
     if (this.radarLockSrc)  { try { this.radarLockSrc.stop()  } catch { /* */ }; this.radarLockSrc  = null }
   }

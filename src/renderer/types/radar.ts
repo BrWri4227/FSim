@@ -37,11 +37,13 @@ export interface DataLinkContact {
 
 export interface RWRThreat {
   entityId: string
-  azimuthDeg: number   // relative to player nose
+  azimuthDeg: number   // relative to player nose, 0 = nose, 90 = right wing
   type: 'SEARCH' | 'TRACK' | 'SAM' | 'MISSILE'
-  priority: number     // 0-3
+  priority: number     // 1=search, 3=track, 4=stt, 5=missile
+  distanceM?: number   // distance to missile (missiles only)
 }
 
 export interface RWRState {
   threats: RWRThreat[]
+  hasMissileLaunch: boolean  // true on the frame a new inbound missile is first detected
 }

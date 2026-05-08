@@ -56,7 +56,7 @@ export class MFDRenderer {
         drawRadarPage(this.ctx, w, h, radar, state.positionNED)
         break
       case 'EW':
-        drawEWPage(this.ctx, w, h, rwr, flareCount, chaffCount)
+        drawEWPage(this.ctx, w, h, rwr, flareCount, chaffCount, performance.now() / 1000)
         break
       case 'STORES':
         drawStoresPage(this.ctx, w, h, stores, gunRounds, selectedWeapon)
