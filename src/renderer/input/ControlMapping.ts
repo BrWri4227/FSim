@@ -14,6 +14,7 @@ export interface KeyBindings {
   chaff:      string
   gear:       string
   flaps:      string
+  brake:      string
   radarMode:  string
   radarSelectNext: string
   radarLockTarget: string
@@ -37,6 +38,7 @@ export const DEFAULT_BINDINGS: KeyBindings = {
   chaff:        'KeyX',
   gear:         'KeyG',
   flaps:        'KeyV',
+  brake:        'KeyB',
   radarMode:    'KeyR',
   radarSelectNext: 'KeyT',
   radarLockTarget: 'KeyL',

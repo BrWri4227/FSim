@@ -130,8 +130,7 @@ function addFlapsGroup(
   for (const side of [1, -1] as const) {
     const panel = new THREE.Mesh(new THREE.BoxGeometry(flapChord, 0.05, flapSpan), fm)
     panel.position.set(flapX - halfC * Math.cos(angleRad), wingY - halfC * Math.sin(angleRad), side * flapZ)
-    panel.rotation.z = -side * 0 // symmetric; rotate around chord
-    panel.rotation.x = angleRad  // angle down from wing plane
+    panel.rotation.z = angleRad  // rotate around span axis: trailing edge deflects down
     flaps.add(panel)
   }
 
@@ -532,6 +531,20 @@ export function createPlaceholderAircraftMesh(aircraftId: string, nation: 'USA' 
 
 export function createNozzlePoint(group: THREE.Group): THREE.Object3D {
   return group.getObjectByName('nozzle') ?? group
+}
+
+const GEAR_CLEARANCE: Record<string, { gearUp: number; gearDown: number }> = {
+  f15c:  { gearUp: 0.55, gearDown: 1.27 },
+  f16c:  { gearUp: 0.45, gearDown: 1.15 },
+  fa18c: { gearUp: 0.50, gearDown: 1.21 },
+  mig29: { gearUp: 0.53, gearDown: 1.30 },
+  su27:  { gearUp: 0.55, gearDown: 1.34 },
+  su35:  { gearUp: 0.55, gearDown: 1.34 },
+}
+
+export function getGroundClearance(aircraftId: string, gearDown: boolean): number {
+  const c = GEAR_CLEARANCE[aircraftId] ?? { gearUp: 0.50, gearDown: 1.20 }
+  return gearDown ? c.gearDown : c.gearUp
 }
 
 export function setGearVisible(group: THREE.Group, visible: boolean): void {

@@ -98,6 +98,8 @@ export interface ControlInputs {
   dispenseChaff: boolean
   toggleGear: boolean
   cycleFlaps: boolean
+  brakeHeld: boolean
+  speedBrakeToggle: boolean
   radarModeNext: boolean
   radarSelectNext: boolean
   radarLockTarget: boolean
@@ -132,6 +134,8 @@ export interface AircraftState {
   onGround: boolean
   gearDown: boolean
   flaps: 0 | 1 | 2   // 0=up, 1=takeoff (~20°), 2=landing (~40°)
+  speedBrake: boolean
+  brakeHeld: boolean
   ejected: boolean
   invincible: boolean
 

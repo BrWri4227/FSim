@@ -297,6 +297,7 @@ export class LoadoutScreen {
           ['Ctrl',        'Throttle down'],
           ['G',           'Landing gear toggle'],
           ['V',           'Flaps cycle (UP → TO → LDG)'],
+          ['B',           'Wheel brakes (hold)'],
         ],
       },
       {
