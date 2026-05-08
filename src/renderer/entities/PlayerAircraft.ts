@@ -74,7 +74,13 @@ export class PlayerAircraft extends Aircraft {
     this.gun.update(dt, enemies)
 
     if (controls.fireMissile) this.fireMissile(enemies)
-    this.missiles.update(dt, this.state, enemies)
+
+    // Pass current STT / TWS target position to MissileSystem for ARH datalink
+    const sttId = this.radar.getSttTargetId() ?? this.radar.state.selectedTrackId
+    const sttTrack = sttId ? this.radar.state.tracks.find(t => t.entityId === sttId) : null
+    const radarTgtPos = sttTrack?.positionNED as [number,number,number] | undefined
+    const radarTgtVel = sttTrack?.velocityNED as [number,number,number] | undefined
+    this.missiles.update(dt, this.state, enemies, undefined, radarTgtPos, radarTgtVel)
 
     // Cycle missile
     if (controls.cycleMissile) this.cycleWeapon()
@@ -86,6 +92,9 @@ export class PlayerAircraft extends Aircraft {
 
     // Avionics
     this.radar.update(dt, this.state, enemies, controls.radarModeNext)
+    if (controls.radarSelectNext) this.radar.selectNextTrack()
+    if (controls.radarLockTarget) this.radar.lockSelectedTarget()
+    if (controls.radarUnlock)     this.radar.unlockSTT()
     this.rwr.update(enemies, this.state)
     this.hms.update(this.state)
     this.gpws.update(this.state, dt, _event => {
@@ -110,7 +119,10 @@ export class PlayerAircraft extends Aircraft {
     }
     if (!targetId) return
 
-    this.missiles.launch(store.weaponId, this.state, targetId, 'player')
+    const tgtAircraft = enemies.find(e => e.entityId === targetId)
+    const tgtPos = tgtAircraft?.state.positionNED as [number,number,number] | undefined
+    const tgtVel = tgtAircraft?.state.velocityNED as [number,number,number] | undefined
+    this.missiles.launch(store.weaponId, this.state, targetId, 'player', tgtPos, tgtVel)
     store.remainingRounds = 0
   }
 
@@ -127,7 +139,7 @@ export class PlayerAircraft extends Aircraft {
     return store.weaponId.toUpperCase()
   }
 
-  private cycleWeapon(): void {
+  cycleWeapon(): void {
     const count = this.state.loadedStores.filter(s => s.remainingRounds > 0 && s.category !== 'FUEL_TANK').length
     if (count > 0) this.selectedWeaponIndex = (this.selectedWeaponIndex + 1) % count
   }

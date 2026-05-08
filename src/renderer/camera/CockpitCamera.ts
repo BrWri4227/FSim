@@ -29,15 +29,19 @@ export class CockpitCamera {
   update(camera: THREE.PerspectiveCamera, player: PlayerAircraft): void {
     const { spec, state } = player
 
-    // Aircraft position in Three.js world
-    const aircraftPos = nedToThree(state.positionNED)
+    // Aircraft position / attitude in Three.js world
+    const aircraftPos  = nedToThree(state.positionNED)
     const aircraftQuat = nedQuatToThree(state.attitudeQuat)
 
-    // Pilot eye point in body frame → world
+    // pilotEyePointM is in NED body frame: [forward, right, down]
+    // Convert to Three.js body frame: right=+X, up=+Y, -forward=-Z
+    //   Three.x = NED.right (ey)
+    //   Three.y = -NED.down  (-ez)
+    //   Three.z = -NED.fwd   (-ex)
     const [ex, ey, ez] = spec.pilotEyePointM
-    const eyeBody = new THREE.Vector3(ex, ey, ez)
-    eyeBody.applyQuaternion(aircraftQuat)
-    const eyeWorld = aircraftPos.clone().add(eyeBody)
+    const eyeThreeBody = new THREE.Vector3(ey, -ez, -ex)
+    eyeThreeBody.applyQuaternion(aircraftQuat)
+    const eyeWorld = aircraftPos.clone().add(eyeThreeBody)
 
     // Slight G-effect head shake
     const gShake = Math.max(0, state.gCurrent - 4) * 0.008

@@ -13,6 +13,9 @@ export interface KeyBindings {
   flare:      string
   chaff:      string
   radarMode:  string
+  radarSelectNext: string
+  radarLockTarget: string
+  radarUnlock: string
   eject:      string
 }
 
@@ -31,5 +34,8 @@ export const DEFAULT_BINDINGS: KeyBindings = {
   flare:        'KeyZ',
   chaff:        'KeyX',
   radarMode:    'KeyR',
+  radarSelectNext: 'KeyT',
+  radarLockTarget: 'KeyL',
+  radarUnlock:  'KeyU',
   eject:        'Backquote',
 }

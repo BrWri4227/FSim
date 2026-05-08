@@ -6,10 +6,12 @@ import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
-import { createPlaceholderAircraftMesh } from '../scene/PlaceholderMeshes'
+import { createPlaceholderAircraftMesh, createNozzlePoint } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
 import { computeFlightPenalties } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
+import { ThrusterEffect } from '../scene/ThrusterEffect'
+import { applyFCSLimits } from '../avionics/FCS'
 
 let _entityCounter = 0
 
@@ -22,6 +24,7 @@ export class Aircraft {
 
   mesh: THREE.Group
   protected scene: THREE.Scene
+  private thrusterEffect: ThrusterEffect
 
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, entityId?: string) {
     this.entityId = entityId ?? `aircraft_${++_entityCounter}`
@@ -50,6 +53,10 @@ export class Aircraft {
     this.damage = defaultDamageState()
     this.mesh = createPlaceholderAircraftMesh(spec.id, spec.nation)
     scene.add(this.mesh)
+
+    // Attach engine glow to the nozzle point
+    const nozzle = createNozzlePoint(this.mesh)
+    this.thrusterEffect = new ThrusterEffect(nozzle, 1.8)
   }
 
   protected integrate(controls: ControlInputs, dt: number): void {
@@ -57,7 +64,8 @@ export class Aircraft {
     const storeDrag = computeStoreDrag(this.state.loadedStores)
     const massKg    = computeTotalMass(this.spec, this.state.fuelKg, this.state.loadedStores)
 
-    const newSV = stepRK4(this.state.sv, this.spec, controls, massKg, penalties, storeDrag, dt)
+    const fcsControls = applyFCSLimits(controls, this.state, this.spec)
+    const newSV = stepRK4(this.state.sv, this.spec, fcsControls, massKg, penalties, storeDrag, dt)
 
     // Update state from SV
     this.state.sv = newSV
@@ -93,12 +101,22 @@ export class Aircraft {
     this.state.fuelKg = Math.max(0, this.state.fuelKg - burn)
   }
 
-  updateMesh(): void {
+  updateMesh(dt = 0.016): void {
     if (this.state.ejected) { this.mesh.visible = false; return }
     const pos  = nedToThree(this.state.positionNED)
     const quat = nedQuatToThree(this.state.attitudeQuat)
+    // PlaceholderMesh fuselage runs along local +X; we need it to face Three.js -Z (NED North).
+    // nedQuatToThree(identity) = identity, so add a +90° Y-bias to rotate +X → -Z.
+    // This mirrors the group.rotation.y = π/2 in PlaceholderMeshes but is applied
+    // AFTER the attitude quaternion so it isn't silently overwritten.
+    const meshBias = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), Math.PI / 2
+    )
     this.mesh.position.copy(pos)
-    this.mesh.quaternion.copy(quat)
+    this.mesh.quaternion.copy(quat.multiply(meshBias))
+
+    // Engine glow intensity: full at throttle 1, dim at idle
+    this.thrusterEffect.update(this.state.throttle, dt)
   }
 
   dispose(): void {

@@ -5,7 +5,10 @@ import { clamp } from '../utils/MathUtils'
 
 export class ExternalCamera {
   private distance = 30
-  private azimuth = Math.PI    // behind aircraft
+  // azimuth=0 → offset is in +Z direction (Three.js South), which is behind an
+  // aircraft heading North (-Z). camera.lookAt() then faces the tail. π would
+  // place the camera in front of the aircraft (head-on view).
+  private azimuth = 0
   private elevation = 0.3
   private isDragging = false
   private lastMouse = { x: 0, y: 0 }

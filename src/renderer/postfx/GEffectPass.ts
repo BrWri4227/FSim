@@ -23,15 +23,15 @@ const GEffectShader = {
     void main() {
       vec4 color = texture2D(tDiffuse, vUv);
 
-      // G tunnel vignette
-      float vigRadius = clamp(1.0 - (uGLoad - 1.0) / 8.0, 0.1, 1.0);
+      // G tunnel vignette — onset 4.5 G, full blackout at 9 G
+      float vigRadius = clamp(1.0 - (uGLoad - 4.5) / 4.5, 0.1, 1.0);
       vec2 center = vUv - 0.5;
       float dist = length(center) / 0.707;  // normalise to corner = 1
-      float vignette = smoothstep(vigRadius, vigRadius * 0.5, dist);
+      float vignette = smoothstep(vigRadius, vigRadius * 0.45, dist);
       color.rgb *= vignette;
 
-      // Greyscale desaturation above 5G
-      float desat = clamp((uGLoad - 5.0) / 4.0, 0.0, 1.0);
+      // Greyscale desaturation 7 G → 9 G
+      float desat = clamp((uGLoad - 7.0) / 2.0, 0.0, 1.0);
       float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
       color.rgb = mix(color.rgb, vec3(lum), desat);
 

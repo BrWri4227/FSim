@@ -1,3 +1,4 @@
+import * as THREE from 'three'
 import type { PlayerAircraft } from '../entities/PlayerAircraft'
 import type { EntityManager } from '../entities/EntityManager'
 import { drawAttitudeIndicator } from './HUDElements/AttitudeIndicator'
@@ -22,7 +23,7 @@ export class HUD {
     this.entityManager = entityManager
   }
 
-  render(): void {
+  render(camera?: THREE.PerspectiveCamera): void {
     const { canvas: c, ctx, player } = this
     const state = player.state
     const radar = player.radar.state
@@ -66,7 +67,7 @@ export class HUD {
     drawWeaponsStatus(ctx, 16, H - 48, stores, selectedWeapon, gunRounds)
 
     // Radar B-scope — bottom center
-    drawRadarScope(ctx, cx - 60, H - 100, 120, 90, radar, state.positionNED)
+    drawRadarScope(ctx, cx - 110, H - 185, 220, 170, radar, state.positionNED)
 
     // RWR threat ring — bottom right
     drawThreatDisplay(ctx, W - 70, H - 60, rwr)
@@ -83,6 +84,39 @@ export class HUD {
     ctx.moveTo(fpmX + 6,  fpmY); ctx.lineTo(fpmX + 14, fpmY)
     ctx.moveTo(fpmX, fpmY - 6);  ctx.lineTo(fpmX, fpmY - 14)
     ctx.stroke()
+
+    // STT lock diamond — world-space projection
+    if (camera && radar.mode === 'STT' && radar.sttTargetId) {
+      const enemies = this.entityManager.getEnemies()
+      const target = enemies.find(e => e.entityId === radar.sttTargetId)
+      if (target) {
+        const p = target.state.positionNED
+        // NED → Three.js: x=East(p[1]), y=Up(-p[2]), z=South(-p[0])
+        const worldVec = new THREE.Vector3(p[1], -p[2], -p[0])
+        worldVec.project(camera)
+        if (worldVec.z < 1) {  // in front of camera
+          const sx = (worldVec.x + 1) / 2 * W
+          const sy = (1 - worldVec.y) / 2 * H
+          const r = 22
+          ctx.strokeStyle = '#ff2020'
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.moveTo(sx,     sy - r)  // top
+          ctx.lineTo(sx + r, sy)      // right
+          ctx.lineTo(sx,     sy + r)  // bottom
+          ctx.lineTo(sx - r, sy)      // left
+          ctx.closePath()
+          ctx.stroke()
+          // Inner cross-hairs
+          ctx.beginPath()
+          ctx.moveTo(sx - 5, sy); ctx.lineTo(sx + 5, sy)
+          ctx.moveTo(sx, sy - 5); ctx.lineTo(sx, sy + 5)
+          ctx.stroke()
+          ctx.lineWidth = 1.5
+          ctx.strokeStyle = '#00ff44'
+        }
+      }
+    }
   }
 
   resize(w: number, h: number): void {

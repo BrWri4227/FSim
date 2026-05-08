@@ -6,6 +6,7 @@ import { EntityManager } from './entities/EntityManager'
 import { InputManager } from './input/InputManager'
 import { HUD } from './ui/HUD'
 import { DebugOverlay } from './debug/DebugOverlay'
+import { DebugVisuals } from './debug/DebugVisuals'
 import { AudioManager } from './audio/AudioManager'
 import { PostFXManager } from './postfx/PostFXManager'
 import type { AircraftSpec } from './types/aircraft'
@@ -22,6 +23,7 @@ export class FlightSession {
   private entityManager: EntityManager
   private hud: HUD
   private debugOverlay: DebugOverlay
+  private debugVisuals: DebugVisuals
   private audioManager: AudioManager
   private postFX: PostFXManager
 
@@ -30,6 +32,7 @@ export class FlightSession {
   private accumulator = 0
   private sessionStartTime = 0
   private disposed = false
+  private gSmoothed = 1.0   // low-pass filtered G for visual effects
 
   private onComplete: (result: FlightResult) => void
 
@@ -55,10 +58,29 @@ export class FlightSession {
 
     this.hud = new HUD(hudCanvas, this.player, this.entityManager)
     this.debugOverlay = new DebugOverlay(this.player, this.entityManager, this.sceneManager.scene)
+    this.debugVisuals = new DebugVisuals(this.sceneManager.scene)
+
+    // Size the HUD canvas to fill the window (it defaults to 300×150)
+    this.hud.resize(window.innerWidth, window.innerHeight)
+    window.addEventListener('resize', this.onResize)
+
+    // F12 toggles debug overlay
+    window.addEventListener('keydown', this.onKeyDown)
 
     // Position spawn at 5000m altitude, flying north
     this.player.state.positionNED = [0, 0, -5000]
     this.player.state.velocityNED = [250, 0, 0] // ~250 m/s north
+  }
+
+  private onResize = (): void => {
+    this.hud.resize(window.innerWidth, window.innerHeight)
+  }
+
+  private onKeyDown = (e: KeyboardEvent): void => {
+    if (e.code === 'F12') {
+      e.preventDefault()
+      this.debugOverlay.toggle()
+    }
   }
 
   start(): void {
@@ -87,7 +109,11 @@ export class FlightSession {
     const controls = this.inputManager.getControls()
     this.player.update(dt, controls)
     this.entityManager.update(dt, this.player)
-    this.audioManager.update(this.player)
+    this.audioManager.update(this.player, controls)
+
+    // Smooth G with ~0.4 s time-constant so vignette builds gradually
+    const tau = 0.4
+    this.gSmoothed += (this.player.state.gCurrent - this.gSmoothed) * Math.min(1, dt / tau)
 
     if (this.player.state.ejected) {
       const elapsed = (performance.now() - this.sessionStartTime) / 1000
@@ -110,20 +136,36 @@ export class FlightSession {
     this.player.updateMesh()
     this.entityManager.updateMeshes()
 
-    // G-effect post processing
-    this.postFX.setGLoad(playerState.gCurrent)
+    // Keep sky centred on camera before rendering
+    this.sceneManager.updateSky(this.sceneManager.camera)
+
+    // G-effect post processing (use smoothed value so vignette ramps gradually)
+    this.postFX.setGLoad(this.gSmoothed)
     this.postFX.render()
 
     // Canvas HUD
-    this.hud.render()
+    this.hud.render(this.sceneManager.camera)
+
+    // Debug overlay telemetry (cheap — only updates text when visible)
+    this.debugOverlay.update(playerState)
+
+    // 3-D debug visuals (velocity vector, radar cone, seeker cones)
+    this.debugVisuals.update(
+      playerState,
+      this.player.radar.state,
+      this.player.missiles.getMissiles()
+    )
   }
 
   dispose(): void {
     this.disposed = true
     cancelAnimationFrame(this.rafId)
+    window.removeEventListener('keydown', this.onKeyDown)
+    window.removeEventListener('resize',  this.onResize)
     this.inputManager.dispose()
     this.hud.dispose()
     this.debugOverlay.dispose()
+    this.debugVisuals.dispose()
     this.sceneManager.dispose()
     this.audioManager.dispose()
   }

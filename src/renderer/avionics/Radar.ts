@@ -20,7 +20,8 @@ export class Radar {
       scanRateDegs: 60,
       tracks: [],
       sttTargetId: null,
-      rangeModeM: 74080,  // 40nm default
+      selectedTrackId: null,
+      rangeModeM: 148160,  // 80nm default
       lastFullScanSec: 0,
     }
   }
@@ -55,7 +56,7 @@ export class Radar {
     // Sweep detection
     for (const enemy of enemies) {
       const dist = v3dist(ownState.positionNED, enemy.state.positionNED)
-      if (dist > this.state.rangeModeM * 1.2) continue
+      if (dist > this.state.rangeModeM * 1.5) continue
 
       const rcs = this.getTargetRCS(enemy)
       const maxRange = computeDetectionRange(this.spec, rcs)
@@ -72,10 +73,35 @@ export class Radar {
       return t.confidence > 0.05
     })
 
-    // Auto-lock first track in TWS if no STT
-    if (this.state.mode === 'TWS' && this.state.tracks.length > 0 && !this.state.sttTargetId) {
-      // sort by range
+    // Keep selectedTrackId valid
+    if (this.state.selectedTrackId && !this.state.tracks.find(t => t.entityId === this.state.selectedTrackId)) {
+      this.state.selectedTrackId = this.state.tracks[0]?.entityId ?? null
     }
+    // Auto-select first contact if none selected
+    if (!this.state.selectedTrackId && this.state.tracks.length > 0) {
+      this.state.selectedTrackId = this.state.tracks[0]!.entityId
+    }
+  }
+
+  selectNextTrack(): void {
+    if (this.state.tracks.length === 0) { this.state.selectedTrackId = null; return }
+    const ids = this.state.tracks.map(t => t.entityId)
+    const idx = this.state.selectedTrackId != null ? ids.indexOf(this.state.selectedTrackId) : -1
+    this.state.selectedTrackId = ids[(idx + 1) % ids.length]!
+  }
+
+  lockSelectedTarget(): void {
+    if (this.state.selectedTrackId) this.lockSTT(this.state.selectedTrackId)
+  }
+
+  unlockSTT(): void {
+    if (this.state.mode !== 'STT') return
+    const prevSelected = this.state.sttTargetId
+    this.state.mode = 'TWS'
+    this.state.sttTargetId = null
+    for (const t of this.state.tracks) t.isSTT = false
+    // Keep the cursor on the just-unlocked target so the player can see it
+    if (prevSelected) this.state.selectedTrackId = prevSelected
   }
 
   private updateTrack(enemy: Aircraft, ownState: AircraftState): void {

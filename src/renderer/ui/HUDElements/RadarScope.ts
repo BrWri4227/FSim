@@ -4,16 +4,31 @@ import { mToNm } from '../../utils/Units'
 import { v3dist } from '../../utils/MathUtils'
 
 export function drawRadarScope(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radar: RadarState, ownPos: Vec3): void {
+  ctx.strokeStyle = '#00ff44'
+  ctx.lineWidth = 1
   ctx.strokeRect(x, y, w, h)
 
   const rangeNm = mToNm(radar.rangeModeM)
   ctx.font = '10px monospace'
+  ctx.fillStyle = '#00ff44'
   ctx.fillText(`${Math.round(rangeNm)}nm`, x + 2, y + 10)
   ctx.fillText(radar.mode, x + w - 28, y + 10)
+  ctx.fillText(`${radar.tracks.length}TGT`, x + w / 2 - 12, y + 10)
+
+  // Range lines at 1/4, 1/2, 3/4
+  ctx.globalAlpha = 0.15
+  for (let i = 1; i < 4; i++) {
+    const ly = y + h - (i / 4) * h
+    ctx.beginPath()
+    ctx.moveTo(x, ly)
+    ctx.lineTo(x + w, ly)
+    ctx.stroke()
+  }
+  ctx.globalAlpha = 1
 
   // Scan cursor
   const scanX = x + ((radar.azimuthDeg + 60) / 120) * w
-  ctx.globalAlpha = 0.3
+  ctx.globalAlpha = 0.25
   ctx.beginPath()
   ctx.moveTo(scanX, y)
   ctx.lineTo(scanX, y + h)
@@ -30,20 +45,52 @@ export function drawRadarScope(ctx: CanvasRenderingContext2D, x: number, y: numb
     const tx = x + ((azDeg + 60) / 120) * w
     const ty = y + h - (rangeM / radar.rangeModeM) * h
     const isSTT = radar.mode === 'STT' && t.entityId === radar.sttTargetId
+    const isSelected = !isSTT && t.entityId === radar.selectedTrackId
 
-    ctx.fillStyle = isSTT ? '#ffffff' : '#00ff44'
     if (isSTT) {
+      // White square — hard lock
       ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 1.5
+      ctx.strokeRect(tx - 5, ty - 5, 10, 10)
+      ctx.strokeStyle = '#00ff44'
+      ctx.lineWidth = 1
+    } else if (isSelected) {
+      // Yellow bracket — cursor selection
+      ctx.strokeStyle = '#ffee00'
+      ctx.lineWidth = 1.5
+      const bs = 7
       ctx.beginPath()
-      ctx.rect(tx - 4, ty - 4, 8, 8)
+      // top-left bracket
+      ctx.moveTo(tx - bs, ty - bs + 3); ctx.lineTo(tx - bs, ty - bs); ctx.lineTo(tx - bs + 3, ty - bs)
+      // top-right bracket
+      ctx.moveTo(tx + bs - 3, ty - bs); ctx.lineTo(tx + bs, ty - bs); ctx.lineTo(tx + bs, ty - bs + 3)
+      // bottom-right bracket
+      ctx.moveTo(tx + bs, ty + bs - 3); ctx.lineTo(tx + bs, ty + bs); ctx.lineTo(tx + bs - 3, ty + bs)
+      // bottom-left bracket
+      ctx.moveTo(tx - bs + 3, ty + bs); ctx.lineTo(tx - bs, ty + bs); ctx.lineTo(tx - bs, ty + bs - 3)
       ctx.stroke()
       ctx.strokeStyle = '#00ff44'
+      ctx.lineWidth = 1
     } else {
+      // Green circle — normal track
+      ctx.fillStyle = '#00ff44'
       ctx.beginPath()
       ctx.arc(tx, ty, 3, 0, Math.PI * 2)
       ctx.fill()
     }
-    ctx.fillStyle = '#00ff44'
-    ctx.fillText(`${Math.round(mToNm(rangeM))}`, tx + 3, ty - 2)
+
+    // Range label
+    ctx.fillStyle = isSTT ? '#ffffff' : isSelected ? '#ffee00' : '#00ff44'
+    ctx.font = '9px monospace'
+    ctx.fillText(`${Math.round(mToNm(rangeM))}`, tx + 5, ty - 2)
+  }
+
+  // Mode hint
+  ctx.fillStyle = '#888888'
+  ctx.font = '8px monospace'
+  if (radar.mode === 'STT') {
+    ctx.fillText('T:sel  U:unlock', x + 2, y + h - 3)
+  } else if (radar.tracks.length > 0) {
+    ctx.fillText('T:sel  L:lock', x + 2, y + h - 3)
   }
 }

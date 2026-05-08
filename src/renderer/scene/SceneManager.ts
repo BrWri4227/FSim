@@ -43,14 +43,14 @@ export class SceneManager {
     const ambient = new THREE.AmbientLight(0x8090b0, 0.8)
     this.scene.add(ambient)
 
-    const sky_hemi = new THREE.HemisphereLight(0x87ceeb, 0x4a7c3f, 0.6)
+    const sky_hemi = new THREE.HemisphereLight(0x3ab8f0, 0x4a7c3f, 0.7)
     this.scene.add(sky_hemi)
 
     this.terrain = new Terrain(this.scene)
     this.sky = new Sky(this.scene)
 
     // Fog for depth
-    this.scene.fog = new THREE.FogExp2(0xc8d8e8, 0.000008)
+    this.scene.fog = new THREE.FogExp2(0x90cce8, 0.000008)
 
     window.addEventListener('resize', this.onResize)
   }
@@ -59,6 +59,10 @@ export class SceneManager {
     this.camera.aspect = window.innerWidth / window.innerHeight
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(window.innerWidth, window.innerHeight)
+  }
+
+  updateSky(camera: THREE.Camera): void {
+    this.sky.update(camera.position)
   }
 
   render(camera: THREE.Camera): void {

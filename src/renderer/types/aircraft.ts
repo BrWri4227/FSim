@@ -97,6 +97,9 @@ export interface ControlInputs {
   dispenseFlare: boolean
   dispenseChaff: boolean
   radarModeNext: boolean
+  radarSelectNext: boolean
+  radarLockTarget: boolean
+  radarUnlock: boolean
 }
 
 export interface AircraftState {

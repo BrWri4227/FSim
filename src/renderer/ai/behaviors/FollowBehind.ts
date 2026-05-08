@@ -1,4 +1,4 @@
-import type { ControlInputs } from '../../types/aircraft'
+﻿import type { ControlInputs } from '../../types/aircraft'
 import type { AIAircraft } from '../AIAircraft'
 import type { Aircraft } from '../../entities/Aircraft'
 import { v3sub, v3len, quatRotateVec, quatConjugate, RAD2DEG } from '../../utils/MathUtils'
@@ -32,5 +32,5 @@ export function followBehind(self: AIAircraft, leader: Aircraft, _dt: number): C
   const pitch      = Math.max(-1, Math.min(1, -elErr / 20))
   const roll       = Math.max(-1, Math.min(1,  azErr / 20))
 
-  return { pitch, roll, yaw: 0, throttle, fireMissile: false, fireGun: false, cycleMissile: false, dispenseFlare: false, dispenseChaff: false, radarModeNext: false }
+  return { pitch, roll, yaw: 0, throttle, fireMissile: false, fireGun: false, cycleMissile: false, dispenseFlare: false, dispenseChaff: false, radarModeNext: false, radarSelectNext: false, radarLockTarget: false, radarUnlock: false }
 }

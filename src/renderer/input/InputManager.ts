@@ -9,6 +9,9 @@ export class InputManager {
   private fireMissilePrev = false
   private cycleMissilePrev = false
   private radarModePrev = false
+  private radarSelectPrev = false
+  private radarLockPrev = false
+  private radarUnlockPrev = false
 
   constructor() {
     window.addEventListener('keydown', this.onKeyDown)
@@ -55,15 +58,24 @@ export class InputManager {
     const fireMissile = this.keys.has(DEFAULT_BINDINGS.fireMissile)
     const cycleMissile = this.keys.has(DEFAULT_BINDINGS.cycleMissile)
     const radarMode = this.keys.has(DEFAULT_BINDINGS.radarMode)
+    const radarSelect = this.keys.has(DEFAULT_BINDINGS.radarSelectNext)
+    const radarLock = this.keys.has(DEFAULT_BINDINGS.radarLockTarget)
+    const radarUnlock = this.keys.has(DEFAULT_BINDINGS.radarUnlock)
 
     // Edge detection for one-shot actions
     const fireMissileEdge = fireMissile && !this.fireMissilePrev
     const cycleMissileEdge = cycleMissile && !this.cycleMissilePrev
     const radarModeEdge = radarMode && !this.radarModePrev
+    const radarSelectEdge = radarSelect && !this.radarSelectPrev
+    const radarLockEdge = radarLock && !this.radarLockPrev
+    const radarUnlockEdge = radarUnlock && !this.radarUnlockPrev
 
     this.fireMissilePrev = fireMissile
     this.cycleMissilePrev = cycleMissile
     this.radarModePrev = radarMode
+    this.radarSelectPrev = radarSelect
+    this.radarLockPrev = radarLock
+    this.radarUnlockPrev = radarUnlock
 
     return {
       pitch,
@@ -76,6 +88,9 @@ export class InputManager {
       dispenseFlare: this.keys.has(DEFAULT_BINDINGS.flare),
       dispenseChaff: this.keys.has(DEFAULT_BINDINGS.chaff),
       radarModeNext: radarModeEdge,
+      radarSelectNext: radarSelectEdge,
+      radarLockTarget: radarLockEdge,
+      radarUnlock: radarUnlockEdge,
     }
   }
 

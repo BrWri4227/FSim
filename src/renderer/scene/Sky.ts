@@ -5,16 +5,16 @@ export class Sky {
 
   constructor(scene: THREE.Scene) {
     const geo = new THREE.SphereGeometry(180000, 32, 16)
-    geo.scale(-1, 1, 1) // invert normals
+    // No scale flip — BackSide renders interior facing the camera correctly
 
     // Gradient sky shader
     const mat = new THREE.ShaderMaterial({
       uniforms: {
-        topColor:    { value: new THREE.Color(0x0a1a3a) },
-        horizonColor:{ value: new THREE.Color(0x87b8d8) },
-        groundColor: { value: new THREE.Color(0x1a2a10) },
-        offset:      { value: 400 },
-        exponent:    { value: 0.6 },
+        topColor:    { value: new THREE.Color(0x05103a) },
+        horizonColor:{ value: new THREE.Color(0x3ab8f0) },
+        groundColor: { value: new THREE.Color(0x2a3c18) },
+        offset:      { value: 500 },
+        exponent:    { value: 0.45 },
       },
       vertexShader: `
         varying vec3 vWorldPos;
@@ -43,9 +43,17 @@ export class Sky {
       `,
       side: THREE.BackSide,
       depthWrite: false,
+      depthTest: false,    // always render behind everything
+      toneMapped: false,   // skip ACESFilmic so sky colours display as authored
     })
 
     this.mesh = new THREE.Mesh(geo, mat)
+    this.mesh.renderOrder = -1   // draw first, before any opaque geometry
     scene.add(this.mesh)
+  }
+
+  /** Keep the sky dome centred on the camera so it never clips. */
+  update(cameraPos: THREE.Vector3): void {
+    this.mesh.position.copy(cameraPos)
   }
 }

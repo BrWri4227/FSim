@@ -132,16 +132,24 @@ export function nedVelToThreeDir(vel: Vec3): THREE.Vector3 {
   return new THREE.Vector3(vel[1], -vel[2], -vel[0])
 }
 
-// Convert NED quaternion to Three.js quaternion
+// Convert NED quaternion to Three.js quaternion.
+//
+// Coordinate mappings (nedToThree):
+//   NED +X (North/forward) → Three.js -Z
+//   NED +Y (East/right)    → Three.js +X
+//   NED +Z (Down)          → Three.js -Y
+//
+// The correct transform is a similarity: q_three = q_M * q_ned * q_M⁻¹
+// where q_M = [w=0.5, x=0.5, y=0.5, z=-0.5] encodes the basis change.
+//
+// Sanity check: identity NED attitude → identity Three.js quaternion
+// (camera default forward −Z already equals Three.js North).
 export function nedQuatToThree(q: Quat): THREE.Quaternion {
-  // Body frame in NED: x=forward, y=right, z=down
-  // Three.js: x=right, y=up, z=-forward
-  // We need to apply a basis change
-  const ned = new THREE.Quaternion(q[1], q[2], q[3], q[0]) // xyzw
-  const basisChange = new THREE.Quaternion()
-  // Rotate so that NED body forward (x) maps to Three.js -z
-  basisChange.setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0))
-  return ned.multiply(basisChange)
+  // q_M in Three.js (x,y,z,w) order
+  const qM    = new THREE.Quaternion( 0.5,  0.5, -0.5, 0.5)
+  const qMInv = new THREE.Quaternion(-0.5, -0.5,  0.5, 0.5)   // conjugate of unit quat
+  const qN    = new THREE.Quaternion(q[1], q[2],  q[3], q[0]) // wxyz → xyzw
+  return qM.clone().multiply(qN).multiply(qMInv)
 }
 
 export function stateVecToArrays(sv: StateVec): { pos: Vec3; vel: Vec3; q: Quat; omega: Vec3 } {

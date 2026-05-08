@@ -11,16 +11,18 @@ export function applyFCSLimits(
 
   // AoA limiter: reduce pitch authority when approaching AoA limit
   const aoaMargin = spec.maxAoADeg - state.alphaDeg
-  if (aoaMargin < 5 && controls.pitch > 0) {
-    pitch *= clamp(aoaMargin / 5, 0, 1)
+  if (aoaMargin < 8 && controls.pitch > 0) {
+    pitch *= clamp(aoaMargin / 8, 0, 1)
   }
 
-  // G limiter
-  if (state.gCurrent > spec.maxGPositive - 0.5 && controls.pitch > 0) {
-    pitch *= 0.2
+  // G limiter: smooth ramp over 2G margin (avoids jarring cutoff)
+  const gUpperMargin = spec.maxGPositive - state.gCurrent
+  if (gUpperMargin < 2.0 && controls.pitch > 0) {
+    pitch *= clamp(gUpperMargin / 2.0, 0.05, 1.0)
   }
-  if (state.gCurrent < spec.maxGNegative + 0.5 && controls.pitch < 0) {
-    pitch *= 0.2
+  const gLowerMargin = state.gCurrent - spec.maxGNegative
+  if (gLowerMargin < 2.0 && controls.pitch < 0) {
+    pitch *= clamp(gLowerMargin / 2.0, 0.05, 1.0)
   }
 
   return { ...controls, pitch }

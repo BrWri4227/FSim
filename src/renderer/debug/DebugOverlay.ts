@@ -12,6 +12,7 @@ const BEHAVIORS   = ['FOLLOW_BEHIND', 'FOLLOW_IN_FRONT', 'FLY_STRAIGHT', 'TURN_C
 export class DebugOverlay {
   private panel: HTMLDivElement
   private telemetry: HTMLPreElement
+  private weaponLabel: HTMLDivElement
   private visible = false
 
   constructor(
@@ -19,8 +20,9 @@ export class DebugOverlay {
     private entityManager: EntityManager,
     private scene: THREE.Scene
   ) {
-    this.panel     = document.createElement('div')
-    this.telemetry = document.createElement('pre')
+    this.panel       = document.createElement('div')
+    this.telemetry   = document.createElement('pre')
+    this.weaponLabel = document.createElement('div')
     this.buildPanel()
     document.body.appendChild(this.panel)
   }
@@ -30,128 +32,176 @@ export class DebugOverlay {
     p.id = 'debug-overlay'
     Object.assign(p.style, {
       position: 'fixed', top: '0', right: '0',
-      background: 'rgba(0,0,0,0.8)', color: '#0f0',
+      background: 'rgba(0,0,0,0.88)', color: '#0f0',
       fontFamily: 'monospace', fontSize: '12px',
-      padding: '10px', width: '260px', zIndex: '9999',
-      display: 'none', userSelect: 'none',
-      maxHeight: '100vh', overflowY: 'auto'
+      padding: '10px', width: '270px', zIndex: '9999',
+      display: 'none',
+      maxHeight: '100vh', overflowY: 'auto',
+      boxShadow: '0 0 12px rgba(0,255,0,0.3)'
     })
 
-    // --- Spawn controls ---
+    // ── SPAWN ENEMY ──────────────────────────────────────────────────────────
     const spawnSection = this.makeSection('SPAWN ENEMY')
 
+    // Behaviour selector
     const behaviorSel = document.createElement('select')
+    Object.assign(behaviorSel.style, this.selectStyle())
     BEHAVIORS.forEach(b => {
       const opt = document.createElement('option')
       opt.value = opt.textContent = b
       behaviorSel.appendChild(opt)
     })
-    behaviorSel.style.width = '100%'
     spawnSection.appendChild(behaviorSel)
 
+    // Aircraft type selector
     const acSel = document.createElement('select')
+    Object.assign(acSel.style, this.selectStyle())
     Object.keys(ENEMY_SPECS).forEach(k => {
       const opt = document.createElement('option')
       opt.value = opt.textContent = k
       acSel.appendChild(opt)
     })
-    acSel.style.width = '100%'
     spawnSection.appendChild(acSel)
 
-    const spawnBtn = this.makeButton('Spawn Enemy', () => {
+    // Spawn distance slider (500–20000 m)
+    const distRow = document.createElement('div')
+    Object.assign(distRow.style, { display: 'flex', alignItems: 'center', gap: '6px', margin: '4px 0' })
+
+    const distSlider = document.createElement('input')
+    distSlider.type = 'range'
+    distSlider.min = '500'; distSlider.max = '20000'; distSlider.step = '500'; distSlider.value = '3000'
+    Object.assign(distSlider.style, { flex: '1', cursor: 'pointer', accentColor: '#0f0' })
+
+    const distLabel = document.createElement('span')
+    distLabel.textContent = '3.0 km'
+    Object.assign(distLabel.style, { color: '#0ff', fontSize: '11px', whiteSpace: 'nowrap', minWidth: '42px' })
+
+    distSlider.oninput = () => {
+      distLabel.textContent = `${(parseFloat(distSlider.value) / 1000).toFixed(1)} km`
+    }
+
+    distRow.appendChild(distSlider)
+    distRow.appendChild(distLabel)
+    spawnSection.appendChild(distRow)
+
+    const spawnBtn = this.makeButton('▶ Spawn Enemy (head-on)', () => {
       const behavior = behaviorSel.value as typeof BEHAVIORS[number]
       const spec     = ENEMY_SPECS[acSel.value as keyof typeof ENEMY_SPECS]!
-      const ps       = this.player.state.positionNED
-      const spawnPos: [number,number,number] = [ps[0] - 2000, ps[1], ps[2]]
-      const spawnVel: [number,number,number] = [200, 0, 0]
-      this.entityManager.spawnEnemy(spec, [
-        { hardpointId: 'W1', weaponId: 'r73', category: 'IR_MISSILE' as const, massKg: 105, dragPenalty: 0.002, remainingRounds: 1 },
-        { hardpointId: 'E1', weaponId: 'r73', category: 'IR_MISSILE' as const, massKg: 105, dragPenalty: 0.002, remainingRounds: 1 }
-      ], behavior, spawnPos, spawnVel)
+      const ps  = this.player.state.positionNED
+      const vel = this.player.state.velocityNED
+      const spawnDistM = parseFloat(distSlider.value)
+
+      // Unit vector along player's current velocity
+      const spd   = Math.hypot(vel[0], vel[1], vel[2]) || 250
+      const uN    = vel[0] / spd
+      const uE    = vel[1] / spd
+
+      // Spawn ahead of the player along their heading, same altitude
+      const spawnPos: [number,number,number] = [
+        ps[0] + uN * spawnDistM,
+        ps[1] + uE * spawnDistM,
+        ps[2]
+      ]
+
+      // Fly head-on toward the player at ~220 m/s (creates a classic BFM merge)
+      const spawnVel: [number,number,number] = [
+        -uN * 220,
+        -uE * 220,
+        0
+      ]
+
+      this.entityManager.spawnEnemy(
+        spec,
+        [
+          { hardpointId: 'W1', weaponId: 'r73', category: 'IR_MISSILE' as const, massKg: 105, dragPenalty: 0.002, remainingRounds: 1 },
+          { hardpointId: 'E1', weaponId: 'r73', category: 'IR_MISSILE' as const, massKg: 105, dragPenalty: 0.002, remainingRounds: 1 }
+        ],
+        behavior,
+        spawnPos,
+        spawnVel
+      )
     })
     spawnSection.appendChild(spawnBtn)
 
-    const missileBtn = this.makeButton('Spawn Missile at Player', () => {
-      // Launch a missile from a spawned enemy at the player
-      const enemies = this.entityManager.getEnemies()
-      if (enemies.length === 0) {
-        console.warn('[Debug] Spawn an enemy first')
-        return
-      }
-      // AI aircraft don't have a missile system — note in console
-      console.log('[Debug] Missile-at-player: spawn an enemy and let their AI fire')
+    const missileBtn = this.makeButton('🚀 Spawn Missile at Player', () => {
+      this.entityManager.launchMissileAtPlayer()
     })
     spawnSection.appendChild(missileBtn)
     p.appendChild(spawnSection)
 
-    // --- Player controls ---
+    // ── PLAYER CONTROLS ──────────────────────────────────────────────────────
     const playerSection = this.makeSection('PLAYER CONTROLS')
 
+    // Invincibility toggle
     const invincChk = document.createElement('input')
     invincChk.type = 'checkbox'
+    Object.assign(invincChk.style, { cursor: 'pointer' })
     invincChk.onchange = () => { this.player.state.invincible = invincChk.checked }
     const invincLabel = document.createElement('label')
+    Object.assign(invincLabel.style, { cursor: 'pointer' })
     invincLabel.textContent = ' Invincibility'
     invincLabel.prepend(invincChk)
     playerSection.appendChild(invincLabel)
     playerSection.appendChild(document.createElement('br'))
 
-    playerSection.appendChild(this.makeButton('Reload Weapons', () => this.player.reloadWeapons()))
-    playerSection.appendChild(this.makeButton('Reset Position', () => this.player.resetPosition()))
+    // Weapon cycle — shows selected weapon name and lets you cycle
+    const weaponRow = document.createElement('div')
+    Object.assign(weaponRow.style, { display: 'flex', gap: '4px', margin: '4px 0', alignItems: 'center' })
+
+    const cycleBtn = document.createElement('button')
+    cycleBtn.textContent = '⟳ Cycle Weapon'
+    cycleBtn.style.cssText = this.btnStyle() + 'flex:1;'
+    cycleBtn.onclick = () => {
+      this.player.cycleWeapon()
+      this.updateWeaponLabel()
+    }
+
+    this.weaponLabel.style.cssText = 'color:#0ff;font-size:11px;white-space:nowrap;padding:0 2px;'
+    this.updateWeaponLabel()
+
+    weaponRow.appendChild(cycleBtn)
+    weaponRow.appendChild(this.weaponLabel)
+    playerSection.appendChild(weaponRow)
+
+    playerSection.appendChild(this.makeButton('↺ Reload Weapons', () => {
+      this.player.reloadWeapons()
+      this.updateWeaponLabel()
+    }))
+    playerSection.appendChild(this.makeButton('⊕ Reset Position', () => this.player.resetPosition()))
     p.appendChild(playerSection)
 
-    // --- Telemetry ---
+    // ── TELEMETRY ────────────────────────────────────────────────────────────
     const telSection = this.makeSection('TELEMETRY')
-    this.telemetry.style.margin = '0'
+    this.telemetry.style.cssText = 'margin:0;font-size:11px;line-height:1.5;'
     telSection.appendChild(this.telemetry)
     p.appendChild(telSection)
 
-    // --- Visual toggles ---
+    // ── VISUAL TOGGLES ────────────────────────────────────────────────────────
     const visSection = this.makeSection('VISUALS')
     const visToggles = [
-      ['showVelocity', 'Velocity Vector'],
-      ['showSeekerCone', 'Missile Seeker Cone'],
-      ['showRadarCone', 'Radar Cone']
+      ['showVelocity',    'Velocity Vector'],
+      ['showSeekerCone',  'Missile Seeker Cone'],
+      ['showRadarCone',   'Radar Cone'],
     ] as const
 
     for (const [key, label] of visToggles) {
       const chk = document.createElement('input')
       chk.type = 'checkbox'
-      chk.onchange = () => {
-        ;(window as any)[key] = chk.checked
-      }
+      Object.assign(chk.style, { cursor: 'pointer' })
+      chk.onchange = () => { ;(window as any)[key] = chk.checked }
       const lbl = document.createElement('label')
+      Object.assign(lbl.style, { cursor: 'pointer' })
       lbl.textContent = ' ' + label
       lbl.prepend(chk)
       visSection.appendChild(lbl)
       visSection.appendChild(document.createElement('br'))
     }
     p.appendChild(visSection)
+
+    void this.scene  // silence unused warning
   }
 
-  private makeSection(title: string): HTMLDivElement {
-    const sec = document.createElement('div')
-    sec.style.marginBottom = '8px'
-    const h = document.createElement('div')
-    h.textContent = `── ${title} ──`
-    h.style.color = '#aaffaa'
-    h.style.marginBottom = '4px'
-    sec.appendChild(h)
-    return sec
-  }
-
-  private makeButton(label: string, onClick: () => void): HTMLButtonElement {
-    const btn = document.createElement('button')
-    btn.textContent = label
-    btn.style.cssText = 'display:block;width:100%;margin:2px 0;background:#1a3a1a;color:#0f0;border:1px solid #0f0;cursor:pointer;font:11px monospace;padding:3px'
-    btn.onclick = onClick
-    return btn
-  }
-
-  toggle(): void {
-    this.visible = !this.visible
-    this.panel.style.display = this.visible ? 'block' : 'none'
-  }
+  // ── Live telemetry update ─────────────────────────────────────────────────
 
   update(state: AircraftState): void {
     if (!this.visible) return
@@ -166,9 +216,61 @@ export class DebugOverlay {
       `Hdg:   ${Math.round(state.headingDeg).toString().padStart(3,'0')}°\n` +
       `Pitch: ${state.pitchDeg.toFixed(1)}°\n` +
       `Roll:  ${state.rollDeg.toFixed(1)}°`
+    this.updateWeaponLabel()
+  }
+
+  toggle(): void {
+    this.visible = !this.visible
+    this.panel.style.display = this.visible ? 'block' : 'none'
+    // Release pointer lock so the system cursor is visible and buttons are clickable
+    if (this.visible) {
+      document.exitPointerLock()
+      this.updateWeaponLabel()
+    }
   }
 
   dispose(): void {
     document.body.removeChild(this.panel)
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  private updateWeaponLabel(): void {
+    this.weaponLabel.textContent = this.player.getSelectedWeaponName()
+  }
+
+  private makeSection(title: string): HTMLDivElement {
+    const sec = document.createElement('div')
+    sec.style.cssText = 'margin-bottom:10px;'
+    const h = document.createElement('div')
+    h.textContent = `── ${title} ──`
+    h.style.cssText = 'color:#aaffaa;margin-bottom:5px;font-size:11px;letter-spacing:1px;'
+    sec.appendChild(h)
+    return sec
+  }
+
+  private makeButton(label: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement('button')
+    btn.textContent = label
+    btn.style.cssText = this.btnStyle()
+    btn.onclick = onClick
+    return btn
+  }
+
+  private btnStyle(): string {
+    return 'display:block;width:100%;margin:3px 0;background:#0a2a0a;color:#0f0;border:1px solid #0f0;cursor:pointer;font:11px monospace;padding:4px 6px;text-align:left;'
+  }
+
+  private selectStyle(): Partial<CSSStyleDeclaration> {
+    return {
+      width: '100%',
+      marginBottom: '4px',
+      background: '#0a2a0a',
+      color: '#0f0',
+      border: '1px solid #0f0',
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      cursor: 'pointer',
+    }
   }
 }

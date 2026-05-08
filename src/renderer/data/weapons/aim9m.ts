@@ -6,16 +6,16 @@ export const AIM9M: MissileSpec = {
   category: 'IR_MISSILE',
   nation: 'USA',
   massKg: 85,
-  dragCd: 0.4,
+  dragCd: 0.32,
   bodyDiameterM: 0.127,
-  maxThrustN: 14000,
-  burnTimeSec: 3.2,
-  maxGOverload: 35,
+  maxThrustN: 26000,
+  burnTimeSec: 3.4,    // ~2.5 s boost + coast
+  maxGOverload: 40,
   maxSpeedMach: 2.5,
   proxFuseRadiusM: 10,
-  lethalRadiusM: 8,
+  lethalRadiusM: 9,
   maxRangeM: 18000,
-  navigationConstant: 4,
+  navigationConstant: 4,   // pure PN, N=4 is standard for AIM-9M
   irSeeker: {
     gimbalLimitDeg: 35,
     trackingRateRadS: 12,

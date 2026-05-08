@@ -63,6 +63,9 @@ export interface MissileState {
   seekerElDeg: number
   locked: boolean
   prevLOSUnit: Vec3
+  prevTargetVel: Vec3        // for APN target-acceleration feedforward
+  lastKnownTargetPos: Vec3   // coast guidance when target lost
+  lastKnownTargetVel: Vec3
   active: boolean
   shooterEntityId: string
 }

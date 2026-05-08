@@ -12,7 +12,9 @@ export function computeDetectionRange(spec: AircraftSpec, targetRcsM2: number): 
   const freq = 10e9  // Hz
   const c    = 3e8
   const lambda = c / freq
-  const Pmin = 1e-12  // minimum detectable signal
+  // Realistic minimum detectable signal for a narrowband fighter radar
+  // (1e-15 ≈ -120 dBm → ~75 km against 5 m² target for APG-68 class)
+  const Pmin = 1e-15
   const L    = 6      // system losses (linear)
 
   const numerator = Pt * G * G * lambda * lambda * targetRcsM2
