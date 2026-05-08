@@ -22,7 +22,7 @@ export interface RadarState {
   tracks: RadarTrack[]
   sttTargetId: string | null
   selectedTrackId: string | null  // cursor-selected track on scope
-  rangeModeM: number       // 37040=20nm, 74080=40nm, 148160=80nm
+  rangeModeM: number       // 37040=20nm, 74080=40nm, 148160=80nm, 222240=120nm
   lastFullScanSec: number
 }
 

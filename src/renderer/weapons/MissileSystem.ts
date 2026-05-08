@@ -7,17 +7,13 @@ import { guideMissile, guideMissileCoast, checkIRSeekerLock } from './MissileGui
 import { evaluateFlareSeduction } from './IRSeeker'
 import { checkProximityFuse, computeLethality, hitZoneFromMissileApproach } from './Warhead'
 import { v3add, v3scale, v3norm, v3sub, v3dist, nedToThree, v3len, quatRotateVec } from '../utils/MathUtils'
-import { AIM9M }   from '../data/weapons/aim9m'
-import { AIM120B } from '../data/weapons/aim120b'
-import { R73 }     from '../data/weapons/r73'
-import { R77 }     from '../data/weapons/r77'
 import type { MissileSpec } from '../types/weapons'
+import { MISSILE_SPECS } from '../data/weapons/catalog'
 import { applyHit } from '../systems/DamageModel'
 import { ExplosionManager } from '../scene/ExplosionEffect'
 import { ThrusterEffect, RocketTrail } from '../scene/ThrusterEffect'
 import { computeAtmosphere } from '../physics/Atmosphere'
 
-const MISSILE_SPECS: Record<string, MissileSpec> = { aim9m: AIM9M, aim120b: AIM120B, r73: R73, r77: R77 }
 const G0 = 9.80665
 
 interface CountermeasureProvider {
@@ -97,7 +93,7 @@ export class MissileSystem {
     initialTargetVel?: [number,number,number],
     hardpointPosBody?: [number,number,number]
   ): void {
-    const spec = MISSILE_SPECS[weaponId]
+    const spec = MISSILE_SPECS[weaponId] as MissileSpec | undefined
     if (!spec) return
 
     // Initial velocity: shooter velocity + muzzle impulse along body axis
@@ -187,8 +183,8 @@ export class MissileSystem {
         enemies.find(e => e.entityId === m.targetEntityId) ??
         (m.targetEntityId === 'player' ? playerAircraft : undefined)
       const targetWithCMDS = target as (Aircraft & CountermeasureProvider) | undefined
-      let guidanceTargetPos: [number,number,number] | undefined = target?.state.positionNED as [number,number,number] | undefined
-      let guidanceTargetVel: [number,number,number] | undefined = target?.state.velocityNED as [number,number,number] | undefined
+      let guidanceTargetPos: [number,number,number] | undefined
+      let guidanceTargetVel: [number,number,number] | undefined
 
       // ── Guidance mode state machine ────────────────────────────────────────
 
@@ -196,11 +192,12 @@ export class MissileSystem {
         const tPos = target.state.positionNED
         const tVel = target.state.velocityNED
 
-        // Always refresh last-known so coast guidance is accurate
-        m.lastKnownTargetPos = [...tPos] as [number,number,number]
-        m.lastKnownTargetVel = [...tVel] as [number,number,number]
-
         if (m.spec.category === 'IR_MISSILE') {
+          m.lastKnownTargetPos = [...tPos] as [number,number,number]
+          m.lastKnownTargetVel = [...tVel] as [number,number,number]
+          guidanceTargetPos = [...tPos] as [number,number,number]
+          guidanceTargetVel = [...tVel] as [number,number,number]
+
           const seeker = m.spec.irSeeker
           const flares = targetWithCMDS?.cmds?.getActiveFlares?.() ?? []
           if (seeker && flares.length > 0) {
@@ -227,7 +224,11 @@ export class MissileSystem {
             }
           }
         } else {
-          // ARH: INERTIAL / DATALINK ─→ ACTIVE at terminal range
+          const isAim120 = m.spec.id === 'aim120b'
+
+          // ARH: INERTIAL / DATALINK ─→ ACTIVE at terminal range.
+          // AIM-120 specifically only gets midcourse updates while the launcher
+          // maintains lock; once ACTIVE it no longer depends on launcher radar.
           if (m.guidanceMode !== 'ACTIVE') {
             const dist = v3dist(m.positionNED, tPos)
             const termRange = m.spec.arSeeker?.terminalActivationRangeM ?? 12000
@@ -235,12 +236,42 @@ export class MissileSystem {
               m.guidanceMode = 'ACTIVE'
               m.locked = true
             }
-            // Datalink: update aim point from shooter's radar track
-            if (radarTargetVel && radarTargetPos && m.targetEntityId !== 'player') {
+          }
+
+          const hasDatalinkTrack = Boolean(
+            radarTargetVel && radarTargetPos && m.targetEntityId !== 'player'
+          )
+
+          if (m.guidanceMode === 'ACTIVE') {
+            guidanceTargetPos = [...tPos] as [number,number,number]
+            guidanceTargetVel = [...tVel] as [number,number,number]
+            m.lastKnownTargetPos = [...tPos] as [number,number,number]
+            m.lastKnownTargetVel = [...tVel] as [number,number,number]
+            m.locked = true
+          } else if (isAim120) {
+            if (hasDatalinkTrack && radarTargetPos && radarTargetVel) {
+              m.guidanceMode = 'DATALINK'
+              m.locked = true
+              m.lastKnownTargetPos = [...radarTargetPos] as [number,number,number]
+              m.lastKnownTargetVel = [...radarTargetVel] as [number,number,number]
+            } else {
+              m.guidanceMode = 'INERTIAL'
+              m.locked = false
+            }
+            guidanceTargetPos = [...m.lastKnownTargetPos] as [number,number,number]
+            guidanceTargetVel = [...m.lastKnownTargetVel] as [number,number,number]
+          } else {
+            // Non-AIM-120 ARH behavior remains unchanged.
+            guidanceTargetPos = [...tPos] as [number,number,number]
+            guidanceTargetVel = [...tVel] as [number,number,number]
+            m.lastKnownTargetPos = [...tPos] as [number,number,number]
+            m.lastKnownTargetVel = [...tVel] as [number,number,number]
+            if (hasDatalinkTrack && radarTargetPos && radarTargetVel) {
               m.lastKnownTargetPos = [...radarTargetPos] as [number,number,number]
               m.lastKnownTargetVel = [...radarTargetVel] as [number,number,number]
             }
           }
+
           if (m.guidanceMode === 'ACTIVE') {
             const chaffClouds = targetWithCMDS?.cmds?.getActiveChaffClouds?.() ?? []
             if (chaffClouds.length > 0) {
@@ -309,8 +340,8 @@ export class MissileSystem {
       m.velocityNED = v3add(m.velocityNED, v3scale(totalAccel, dt)) as [number,number,number]
       m.positionNED = v3add(m.positionNED, v3scale(m.velocityNED, dt)) as [number,number,number]
 
-      // Expire on max range or ground impact
-      if (m.ageSec > m.spec.maxRangeM / 350 || m.positionNED[2] > 50) {
+      // Expire when seeker battery is depleted or on ground impact.
+      if (m.ageSec > m.spec.batteryLifeSec || m.positionNED[2] > 50) {
         this.explode(i, m)
         continue
       }

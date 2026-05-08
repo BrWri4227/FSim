@@ -91,18 +91,50 @@ export class EntityManager {
     return [...this.enemies, ...this.remotePlayers.values()]
   }
 
+  private isInboundToPlayer(
+    missilePos: readonly [number, number, number],
+    missileVel: readonly [number, number, number]
+  ): boolean {
+    const targetPos = this.player.state.positionNED
+    const targetVel = this.player.state.velocityNED
+    const relPos: [number, number, number] = [
+      targetPos[0] - missilePos[0],
+      targetPos[1] - missilePos[1],
+      targetPos[2] - missilePos[2],
+    ]
+    const relVel: [number, number, number] = [
+      targetVel[0] - missileVel[0],
+      targetVel[1] - missileVel[1],
+      targetVel[2] - missileVel[2],
+    ]
+
+    const rangeM = Math.hypot(relPos[0], relPos[1], relPos[2])
+    if (rangeM < 200) return true
+
+    // Positive means closing, negative means opening.
+    const closingMS = -(
+      relPos[0] * relVel[0] +
+      relPos[1] * relVel[1] +
+      relPos[2] * relVel[2]
+    ) / Math.max(1, rangeM)
+
+    // Keep near threats with slight closure; otherwise require clear closure.
+    if (rangeM < 1500) return closingMS > 5
+    return closingMS > 25
+  }
+
   /** Returns all active missiles targeting any of the given IDs. */
-  getInboundMissiles(targetIds: string[]): Array<{ id: string; positionNED: [number, number, number] }> {
+  getInboundMissiles(targetIds: string[]): Array<{ id: string; positionNED: [number, number, number]; velocityNED: [number, number, number] }> {
     const idSet = new Set(targetIds)
-    const out: Array<{ id: string; positionNED: [number, number, number] }> = []
+    const out: Array<{ id: string; positionNED: [number, number, number]; velocityNED: [number, number, number] }> = []
 
     for (const m of this.debugMissiles.getMissiles()) {
-      if (m.active && idSet.has(m.targetEntityId)) out.push(m)
+      if (m.active && idSet.has(m.targetEntityId) && this.isInboundToPlayer(m.positionNED, m.velocityNED)) out.push(m)
     }
 
     for (const remote of this.remotePlayers.values()) {
       for (const m of remote.getNetMissiles()) {
-        if (m.active && idSet.has(m.targetEntityId)) out.push(m)
+        if (m.active && idSet.has(m.targetEntityId) && this.isInboundToPlayer(m.positionNED, m.velocityNED)) out.push(m)
       }
     }
 

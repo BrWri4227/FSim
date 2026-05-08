@@ -8,7 +8,7 @@ const RAD2DEG = 180 / Math.PI
 // ---------------------------------------------------------------------------
 // Augmented Proportional Navigation (APN)
 //
-// The law used by modern AAMs (AIM-9M uses pure PN; AIM-120B / R-77 use APN).
+// The law used by modern AAMs (AIM-9X / AIM-120B / R-77 all benefit from APN).
 //
 //   a_cmd  =  N · Vc · λ̇  +  (N/2) · a_target⊥
 //
@@ -64,21 +64,80 @@ function computeAPN(
 }
 
 // ---------------------------------------------------------------------------
-// Predicted intercept point — used during ARH inertial/datalink phase.
-// The missile steers toward where the target will be, not where it is now.
+// Solve first-order intercept time for constant-speed missile and
+// constant-velocity target:
+//   |r + v_t * t| = s_m * t
+// where r = tgtPos - misPos.
+// ---------------------------------------------------------------------------
+function solveInterceptTime(
+  relPos: Vec3,
+  tgtVel: Vec3,
+  missileSpeed: number
+): number {
+  const a = v3dot(tgtVel, tgtVel) - missileSpeed * missileSpeed
+  const b = 2 * v3dot(relPos, tgtVel)
+  const c = v3dot(relPos, relPos)
+
+  // Near-linear fallback when missile and target speed terms cancel.
+  if (Math.abs(a) < 1e-6) {
+    if (Math.abs(b) < 1e-6) return Math.sqrt(c) / Math.max(missileSpeed, 1)
+    const t = -c / b
+    return t > 0 ? t : Math.sqrt(c) / Math.max(missileSpeed, 1)
+  }
+
+  const disc = b * b - 4 * a * c
+  if (disc < 0) return Math.sqrt(c) / Math.max(missileSpeed, 1)
+
+  const root = Math.sqrt(disc)
+  const t1 = (-b - root) / (2 * a)
+  const t2 = (-b + root) / (2 * a)
+
+  let best = Number.POSITIVE_INFINITY
+  if (t1 > 0) best = Math.min(best, t1)
+  if (t2 > 0) best = Math.min(best, t2)
+  if (!Number.isFinite(best)) return Math.sqrt(c) / Math.max(missileSpeed, 1)
+  return best
+}
+
+// ---------------------------------------------------------------------------
+// Predicted intercept point for ARH missiles.
+// Uses analytic lead and a limited target-acceleration extrapolation.
 // ---------------------------------------------------------------------------
 function predictedInterceptPos(
+  missile: MissileState,
   misPos: Vec3, misVel: Vec3,
-  tgtPos: Vec3, tgtVel: Vec3
+  tgtPos: Vec3, tgtVel: Vec3,
+  dt: number
 ): Vec3 {
-  const range = v3len(v3sub(tgtPos, misPos))
-  const misSpeed = v3len(misVel)
-  // Rough time-to-go from current range and missile speed
-  const tgo = misSpeed > 1 ? range / misSpeed : 5.0
+  const relPos = v3sub(tgtPos, misPos)
+  const range = v3len(relPos)
+
+  // Estimate missile intercept speed from current velocity. Keep a floor so
+  // freshly launched missiles can still compute a meaningful lead solution.
+  const missileSpeed = Math.max(v3len(misVel), 180)
+  let tgo = solveInterceptTime(relPos, tgtVel, missileSpeed)
+
+  // Keep lead horizon bounded by guidance phase to avoid over-leading.
+  const maxLeadSec = missile.guidanceMode === 'ACTIVE' ? 3.0 : 10.0
+  tgo = Math.max(0.05, Math.min(maxLeadSec, tgo))
+  if (!Number.isFinite(tgo)) tgo = Math.min(maxLeadSec, range / missileSpeed)
+
+  const dtSafe = Math.max(dt, 1e-3)
+  const tgtAccelRaw: Vec3 = [
+    (tgtVel[0] - missile.prevTargetVel[0]) / dtSafe,
+    (tgtVel[1] - missile.prevTargetVel[1]) / dtSafe,
+    (tgtVel[2] - missile.prevTargetVel[2]) / dtSafe,
+  ]
+  // Cap acceleration extrapolation to suppress noisy radar-track jumps.
+  const accelMag = v3len(tgtAccelRaw)
+  const accelCap = 90 // ~9 g
+  const tgtAccel = accelMag > accelCap ? v3scale(tgtAccelRaw, accelCap / accelMag) : tgtAccelRaw
+
+  const t2 = tgo * tgo * 0.5
   return [
-    tgtPos[0] + tgtVel[0] * tgo,
-    tgtPos[1] + tgtVel[1] * tgo,
-    tgtPos[2] + tgtVel[2] * tgo,
+    tgtPos[0] + tgtVel[0] * tgo + tgtAccel[0] * t2,
+    tgtPos[1] + tgtVel[1] * tgo + tgtAccel[1] * t2,
+    tgtPos[2] + tgtVel[2] * tgo + tgtAccel[2] * t2,
   ]
 }
 
@@ -106,9 +165,9 @@ export function guideMissile(missile: MissileState, targetPos: Vec3, targetVel: 
   let tgtPos = targetPos
   const tgtVel = targetVel
 
-  // ARH mid-course: steer toward predicted intercept, not current target pos
-  if (missile.spec.category === 'ARH_MISSILE' && missile.guidanceMode !== 'ACTIVE') {
-    tgtPos = predictedInterceptPos(missile.positionNED, missile.velocityNED, tgtPos, tgtVel)
+  // ARH missiles always steer to an intercept aimpoint, not pure pursuit.
+  if (missile.spec.category === 'ARH_MISSILE') {
+    tgtPos = predictedInterceptPos(missile, missile.positionNED, missile.velocityNED, tgtPos, tgtVel, dt)
   }
 
   const { accel, newLOS } = computeAPN(

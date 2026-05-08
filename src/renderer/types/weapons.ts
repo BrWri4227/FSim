@@ -41,6 +41,7 @@ export interface MissileSpec {
   proxFuseRadiusM: number
   lethalRadiusM: number
   maxRangeM: number
+  batteryLifeSec: number
   navigationConstant: number
   irSeeker?: IRSeekerSpec
   arSeeker?: ActiveRadarSeekerSpec

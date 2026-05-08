@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { PlayerAircraft } from '../entities/PlayerAircraft'
 import type { EntityManager } from '../entities/EntityManager'
 import type { Aircraft } from '../entities/Aircraft'
+import type { MissileState } from '../types/weapons'
 import { drawAttitudeIndicator } from './HUDElements/AttitudeIndicator'
 import { drawAirspeed }          from './HUDElements/Airspeed'
 import { drawAltimeter }         from './HUDElements/Altimeter'
@@ -10,16 +11,64 @@ import { drawHeadingTape }       from './HUDElements/HeadingTape'
 import { drawRadarScope }        from './HUDElements/RadarScope'
 import { drawWeaponsStatus }     from './HUDElements/WeaponsStatus'
 import { drawThreatDisplay }     from './HUDElements/ThreatDisplay'
+import { AIM120B } from '../data/weapons/aim120b'
+import { R77 } from '../data/weapons/r77'
+import type { LoadedStore, MissileSpec } from '../types/weapons'
+import { MISSILE_SPECS } from '../data/weapons/catalog'
+import { computeAtmosphere } from '../physics/Atmosphere'
+import { quatRotateVec, v3len } from '../utils/MathUtils'
 
 const G0 = 9.80665
 const MIN_INTERCEPT_TIME_S = 0.05
 const MAX_INTERCEPT_TIME_S = 5
+const MAX_HUD_TTI_LINES = 3
+const ARH_MISSILE_RANGES_M: Record<string, number> = {
+  aim120b: AIM120B.maxRangeM,
+  r77: R77.maxRangeM,
+}
+
+interface LARInfo {
+  rangeM: number
+  rMinM: number
+  rNeM: number
+  rMaxM: number
+  inRange: boolean
+  inNoEscapeZone: boolean
+}
+
+interface MissileTTIInfo {
+  missile: MissileState
+  timeToImpactSec: number | null
+  pitbull: boolean
+}
+
+interface MissileLeadSolution {
+  interceptTimeSec: number
+  aimPointNED: [number, number, number]
+  offBoresightDeg: number
+  targetRangeM: number
+}
 
 export class HUD {
   private canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
   private player: PlayerAircraft
   private entityManager: EntityManager
+  private gunFunnelState: {
+    x: number
+    y: number
+    fitY: number
+    rangeM: number
+    lastTsMs: number
+    initialized: boolean
+  } = {
+    x: 0,
+    y: 0,
+    fitY: 0,
+    rangeM: 0,
+    lastTsMs: 0,
+    initialized: false,
+  }
 
   constructor(canvas: HTMLCanvasElement, player: PlayerAircraft, entityManager: EntityManager) {
     this.canvas = canvas
@@ -45,37 +94,78 @@ export class HUD {
 
     const W = c.width, H = c.height
     const cx = W / 2, cy = H / 2
+    const uiScale = THREE.MathUtils.clamp(Math.min(W / 1920, H / 1080), 0.75, 1.35)
+    const edgePadX = Math.round(THREE.MathUtils.clamp(W * 0.014, 10, 34))
+    const edgePadY = Math.round(THREE.MathUtils.clamp(H * 0.014, 8, 24))
+    const headingBandH = Math.round(THREE.MathUtils.clamp(30 * uiScale, 22, 38))
+    const bottomInfoReserve = Math.round(THREE.MathUtils.clamp(68 * uiScale, 52, 92))
+    const sideTapeOffset = Math.round(THREE.MathUtils.clamp(W * 0.24, 170, 370))
+    const airspeedX = Math.max(edgePadX, Math.round(cx - sideTapeOffset - 22))
+    const altimeterX = Math.min(W - edgePadX - 44, Math.round(cx + sideTapeOffset - 22))
+    const gMeterX = airspeedX + 2
+    const vviX = airspeedX + 2
+    const lowerClusterY = Math.round(cy + THREE.MathUtils.clamp(H * 0.11, 74, 142))
+    const radarW = Math.round(THREE.MathUtils.clamp(220 * uiScale, 185, 270))
+    const radarH = Math.round(THREE.MathUtils.clamp(170 * uiScale, 145, 210))
+    const radarX = Math.round(cx - radarW / 2)
+    const radarY = Math.min(H - bottomInfoReserve - edgePadY - radarH, Math.round(lowerClusterY))
+    const threatCx = THREE.MathUtils.clamp(
+      Math.round(cx + radarW * 0.5 + 120 * uiScale),
+      Math.round(cx + radarW * 0.5 + 80),
+      W - edgePadX - 62
+    )
+    const threatCy = THREE.MathUtils.clamp(
+      Math.round(radarY + radarH * 0.55),
+      edgePadY + headingBandH + 66,
+      H - bottomInfoReserve - 62
+    )
+    const ttiPanelX = W - edgePadX - 146
+    const ttiPanelY = edgePadY + headingBandH + 6
+    const larX = THREE.MathUtils.clamp(
+      Math.round(altimeterX - THREE.MathUtils.clamp(58 * uiScale, 44, 74)),
+      Math.round(cx + 68),
+      W - edgePadX - 12
+    )
+    const larY = THREE.MathUtils.clamp(
+      Math.round(cy - 118 * uiScale),
+      ttiPanelY + 66,
+      H - bottomInfoReserve - 134 - 16
+    )
+    const weaponsY = H - edgePadY
+    const cmdsY = weaponsY - Math.round(36 * uiScale)
 
     // Heading tape — top center
-    drawHeadingTape(ctx, cx, 8, state.headingDeg)
+    drawHeadingTape(ctx, cx, edgePadY, state.headingDeg)
 
     // Attitude indicator — center
     drawAttitudeIndicator(ctx, cx, cy, state.pitchDeg, state.rollDeg)
 
     // IAS tape — left (iasKts → convert to m/s for drawAirspeed which shows knots internally)
-    drawAirspeed(ctx, 30, cy, state.iasKts * 0.51444)
+    drawAirspeed(ctx, airspeedX, cy, state.iasKts * 0.51444)
 
     // Altimeter tape — right
-    drawAltimeter(ctx, W - 78, cy, state.altitudeM)
+    drawAltimeter(ctx, altimeterX, cy, state.altitudeM)
 
     // G-meter — lower left
-    drawGMeter(ctx, 32, cy + 80, state.gCurrent, state.gMax)
+    drawGMeter(ctx, gMeterX, cy + 80 * uiScale, state.gCurrent, state.gMax)
 
     // Mach — lower right
-    ctx.fillText(`M ${state.mach.toFixed(2)}`, W - 72, cy + 80)
+    ctx.fillText(`M ${state.mach.toFixed(2)}`, altimeterX + 2, cy + 80 * uiScale)
 
     // VVI
     const vvi = Math.round(state.vviMps * 196.85)
-    ctx.fillText(`VVI ${vvi >= 0 ? '+' : ''}${vvi}`, 32, cy - 80)
+    ctx.fillText(`VVI ${vvi >= 0 ? '+' : ''}${vvi}`, vviX, cy - 80 * uiScale)
 
     // Weapons status — bottom left
-    drawWeaponsStatus(ctx, 16, H - 48, stores, selectedWeapon, gunRounds)
+    drawWeaponsStatus(ctx, edgePadX, weaponsY, stores, selectedWeapon, gunRounds)
 
     // Radar B-scope — bottom center
-    drawRadarScope(ctx, cx - 110, H - 185, 220, 170, radar, state.positionNED)
+    drawRadarScope(ctx, radarX, radarY, radarW, radarH, radar, state.positionNED)
 
     // RWR threat ring — bottom right
-    drawThreatDisplay(ctx, W - 80, H - 75, rwr, performance.now() / 1000)
+    drawThreatDisplay(ctx, threatCx, threatCy, rwr, performance.now() / 1000)
+    this.drawMissileTTIPanel(ctx, ttiPanelX, ttiPanelY)
+    this.drawLAR(ctx, larX, larY)
 
     // Flight path marker
     const betaPx  = (state.betaDeg  / 60) * (W / 2)
@@ -92,7 +182,7 @@ export class HUD {
 
     // ── Bottom-center status strip ───────────────────────────────────────────
     ctx.font = '11px monospace'
-    const stripY = H - 12
+    const stripY = H - Math.max(10, edgePadY - 2)
     const stripCX = cx
 
     // Gear indicator: solid box when down
@@ -161,8 +251,7 @@ export class HUD {
 
     // ── CMDS counters (lower left, above weapons panel) ───────────────────────
     ctx.font = '11px monospace'
-    const cmdsX = 16
-    const cmdsY = H - 60
+    const cmdsX = edgePadX
     const flareCount = player.cmds.flareCount
     const chaffCount = player.cmds.chaffCount
     const flareColor = flareCount === 0 ? '#ff4444' : flareCount <= 5 ? '#ffaa00' : '#00ff44'
@@ -186,7 +275,8 @@ export class HUD {
       const target = enemies.find(e => e.entityId === radar.sttTargetId)
       if (target) {
         this.drawGunFunnel(ctx, camera, target, W, H)
-        this.drawLockDiamond(ctx, camera, target, W, H)
+        this.drawLockDiamond(ctx, camera, target, W, H, this.shouldShowRadarShootCue(target))
+        this.drawMissileLeadIndicator(ctx, camera, target, W, H)
       }
     }
 
@@ -232,47 +322,119 @@ export class HUD {
 
     const rangeM = Math.hypot(relPos[0], relPos[1], relPos[2])
     const wingspanM = Math.max(4, target.spec.mass.wingspanM)
-    const angularSpanRad = 2 * Math.atan2(wingspanM * 0.5, Math.max(1, rangeM))
     const horizontalFovRad = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * camera.aspect)
     const pxPerRad = W / horizontalFovRad
-    const halfSpanPx = THREE.MathUtils.clamp((angularSpanRad * 0.5) * pxPerRad, 12, W * 0.3)
-    const bracketHalfHeightPx = THREE.MathUtils.clamp(halfSpanPx * 0.65, 14, 80)
+    const nearRangeM = 180
+    const farRangeM = THREE.MathUtils.clamp(gunSpec.maxRangeM * 0.8, 800, 1600)
+    const nowMs = performance.now()
+    const dtSec = this.gunFunnelState.lastTsMs > 0
+      ? Math.min(0.1, Math.max(0.001, (nowMs - this.gunFunnelState.lastTsMs) / 1000))
+      : 1 / 60
+    this.gunFunnelState.lastTsMs = nowMs
 
-    const leftX = leadScreen.x - halfSpanPx
-    const rightX = leadScreen.x + halfSpanPx
-    const topY = leadScreen.y - bracketHalfHeightPx
-    const bottomY = leadScreen.y + bracketHalfHeightPx
+    const pipperTrackAlpha = this.computeSmoothingAlpha(dtSec, 0.11)
+    const rangeTrackAlpha = this.computeSmoothingAlpha(dtSec, 0.18)
+
+    if (!this.gunFunnelState.initialized) {
+      this.gunFunnelState.x = leadScreen.x
+      this.gunFunnelState.y = leadScreen.y
+      this.gunFunnelState.fitY = leadScreen.y
+      this.gunFunnelState.rangeM = rangeM
+      this.gunFunnelState.initialized = true
+    } else {
+      this.gunFunnelState.x = THREE.MathUtils.lerp(this.gunFunnelState.x, leadScreen.x, pipperTrackAlpha)
+      this.gunFunnelState.y = THREE.MathUtils.lerp(this.gunFunnelState.y, leadScreen.y, pipperTrackAlpha)
+      this.gunFunnelState.rangeM = THREE.MathUtils.lerp(this.gunFunnelState.rangeM, rangeM, rangeTrackAlpha)
+    }
+
+    const funnelTopY = this.gunFunnelState.y - 12
+    const funnelHeightPx = THREE.MathUtils.clamp(H * 0.2, 95, 165)
+    const railSteps = 18
+    const leftRail: Array<{x: number; y: number}> = []
+    const rightRail: Array<{x: number; y: number}> = []
+    for (let i = 0; i < railSteps; i++) {
+      const t = i / (railSteps - 1)
+      // Far range at top, near range at bottom for a realistic funnel profile.
+      const sampleRangeM = THREE.MathUtils.lerp(farRangeM, nearRangeM, t)
+      const angularHalfSpanRad = Math.atan2(wingspanM * 0.5, sampleRangeM)
+      const halfWidthPx = THREE.MathUtils.clamp(angularHalfSpanRad * pxPerRad, 9, W * 0.34)
+      const y = funnelTopY + t * funnelHeightPx
+      leftRail.push({ x: this.gunFunnelState.x - halfWidthPx, y })
+      rightRail.push({ x: this.gunFunnelState.x + halfWidthPx, y })
+    }
 
     ctx.save()
     ctx.strokeStyle = rangeM <= gunSpec.maxRangeM ? '#00ff44' : '#ffb000'
     ctx.lineWidth = 2
 
-    // Draw the range-driven funnel brackets (target wings should fit between these lines).
+    // Draw realistic stadiametric funnel rails (fit target wings between rails).
     ctx.beginPath()
-    ctx.moveTo(leftX + 8, topY)
-    ctx.bezierCurveTo(leftX - 6, topY + 8, leftX - 6, bottomY - 8, leftX + 8, bottomY)
-    ctx.moveTo(rightX - 8, topY)
-    ctx.bezierCurveTo(rightX + 6, topY + 8, rightX + 6, bottomY - 8, rightX - 8, bottomY)
+    for (let i = 0; i < leftRail.length; i++) {
+      const p = leftRail[i]!
+      if (i === 0) ctx.moveTo(p.x, p.y)
+      else ctx.lineTo(p.x, p.y)
+    }
+    for (let i = 0; i < rightRail.length; i++) {
+      const p = rightRail[i]!
+      if (i === 0) ctx.moveTo(p.x, p.y)
+      else ctx.lineTo(p.x, p.y)
+    }
     ctx.stroke()
 
-    // LCOS pipper at lead+drop compensated impact point.
-    const r = 10
+    // Range reference gates (distance where target wingspan should match rail spacing).
+    const gateRangesM = [1200, 900, 600, 400]
+    ctx.lineWidth = 1.5
+    for (const gateRangeM of gateRangesM) {
+      const gateT = THREE.MathUtils.clamp((farRangeM - gateRangeM) / Math.max(1, farRangeM - nearRangeM), 0, 1)
+      const gateY = funnelTopY + gateT * funnelHeightPx
+      const angularHalfSpanRad = Math.atan2(wingspanM * 0.5, Math.max(nearRangeM, gateRangeM))
+      const gateHalfWidthPx = THREE.MathUtils.clamp(angularHalfSpanRad * pxPerRad, 9, W * 0.34)
+      const innerGap = 9
+      ctx.beginPath()
+      ctx.moveTo(this.gunFunnelState.x - gateHalfWidthPx, gateY)
+      ctx.lineTo(this.gunFunnelState.x - innerGap, gateY)
+      ctx.moveTo(this.gunFunnelState.x + innerGap, gateY)
+      ctx.lineTo(this.gunFunnelState.x + gateHalfWidthPx, gateY)
+      ctx.stroke()
+    }
+
+    // Show the current target-size fit band on the funnel.
+    const rangeT = THREE.MathUtils.clamp((farRangeM - this.gunFunnelState.rangeM) / Math.max(1, farRangeM - nearRangeM), 0, 1)
+    const desiredFitY = funnelTopY + rangeT * funnelHeightPx
+    this.gunFunnelState.fitY = THREE.MathUtils.lerp(this.gunFunnelState.fitY, desiredFitY, rangeTrackAlpha)
+    const currentHalfSpanPx = THREE.MathUtils.clamp(Math.atan2(wingspanM * 0.5, Math.max(nearRangeM, this.gunFunnelState.rangeM)) * pxPerRad, 9, W * 0.34)
     ctx.beginPath()
-    ctx.arc(leadScreen.x, leadScreen.y, r, 0, Math.PI * 2)
-    ctx.moveTo(leadScreen.x - 16, leadScreen.y)
-    ctx.lineTo(leadScreen.x - 4, leadScreen.y)
-    ctx.moveTo(leadScreen.x + 4, leadScreen.y)
-    ctx.lineTo(leadScreen.x + 16, leadScreen.y)
-    ctx.moveTo(leadScreen.x, leadScreen.y - 16)
-    ctx.lineTo(leadScreen.x, leadScreen.y - 4)
-    ctx.moveTo(leadScreen.x, leadScreen.y + 4)
-    ctx.lineTo(leadScreen.x, leadScreen.y + 16)
+    ctx.moveTo(this.gunFunnelState.x - currentHalfSpanPx, this.gunFunnelState.fitY)
+    ctx.lineTo(this.gunFunnelState.x + currentHalfSpanPx, this.gunFunnelState.fitY)
     ctx.stroke()
+
+    // LCOS pipper at lead+drop compensated impact point (realistic small ring + center dot).
+    const r = 9
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(this.gunFunnelState.x, this.gunFunnelState.y, r, 0, Math.PI * 2)
+    ctx.moveTo(this.gunFunnelState.x - 15, this.gunFunnelState.y)
+    ctx.lineTo(this.gunFunnelState.x - 5, this.gunFunnelState.y)
+    ctx.moveTo(this.gunFunnelState.x + 5, this.gunFunnelState.y)
+    ctx.lineTo(this.gunFunnelState.x + 15, this.gunFunnelState.y)
+    ctx.moveTo(this.gunFunnelState.x, this.gunFunnelState.y - 15)
+    ctx.lineTo(this.gunFunnelState.x, this.gunFunnelState.y - 5)
+    ctx.moveTo(this.gunFunnelState.x, this.gunFunnelState.y + 5)
+    ctx.lineTo(this.gunFunnelState.x, this.gunFunnelState.y + 15)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(this.gunFunnelState.x, this.gunFunnelState.y, 2.2, 0, Math.PI * 2)
+    ctx.fillStyle = ctx.strokeStyle
+    ctx.fill()
 
     ctx.font = '11px monospace'
     ctx.fillStyle = ctx.strokeStyle
-    ctx.fillText(`GUN LCOS ${Math.round(rangeM)}m`, leadScreen.x + 14, leadScreen.y - 14)
+    ctx.fillText(`${Math.round(this.gunFunnelState.rangeM)}m`, this.gunFunnelState.x + 13, this.gunFunnelState.y - 14)
     ctx.restore()
+  }
+
+  private computeSmoothingAlpha(dtSec: number, timeConstantSec: number): number {
+    return 1 - Math.exp(-dtSec / Math.max(0.001, timeConstantSec))
   }
 
   private drawLockDiamond(
@@ -280,7 +442,8 @@ export class HUD {
     camera: THREE.PerspectiveCamera,
     target: Aircraft,
     W: number,
-    H: number
+    H: number,
+    showShootCue: boolean
   ): void {
     const screen = this.projectNEDToScreen(camera, target.state.positionNED, W, H)
     if (!screen) return
@@ -301,8 +464,271 @@ export class HUD {
     ctx.moveTo(screen.x - 5, screen.y); ctx.lineTo(screen.x + 5, screen.y)
     ctx.moveTo(screen.x, screen.y - 5); ctx.lineTo(screen.x, screen.y + 5)
     ctx.stroke()
+    if (showShootCue) {
+      ctx.fillStyle = '#00ff44'
+      ctx.font = 'bold 13px monospace'
+      ctx.fillText('SHOOT', screen.x + r + 10, screen.y + 4)
+      ctx.font = '12px monospace'
+    }
     ctx.lineWidth = 1.5
     ctx.strokeStyle = '#00ff44'
+  }
+
+  private drawMissileLeadIndicator(
+    ctx: CanvasRenderingContext2D,
+    camera: THREE.PerspectiveCamera,
+    target: Aircraft,
+    W: number,
+    H: number
+  ): void {
+    const selectedStore = this.getSelectedMissileStore()
+    if (!selectedStore) return
+    const missileSpec = MISSILE_SPECS[selectedStore.weaponId]
+    if (!missileSpec) return
+
+    const solution = this.computeMissileLeadSolution(missileSpec, target)
+    if (!solution) return
+
+    const leadScreen = this.projectNEDToScreen(camera, solution.aimPointNED, W, H)
+    if (!leadScreen) return
+
+    const targetScreen = this.projectNEDToScreen(camera, target.state.positionNED, W, H)
+    if (!targetScreen) return
+
+    const seekerLimitDeg = this.getMissileSeekerLimitDeg(missileSpec)
+    const optimalLaunchDeg = this.computeMissileOptimalLaunchAngleDeg(missileSpec, solution.targetRangeM)
+    const hardLimitDeg = Math.max(optimalLaunchDeg + 1, seekerLimitDeg)
+    const cueColor =
+      solution.offBoresightDeg <= optimalLaunchDeg ? '#00ff44' :
+      solution.offBoresightDeg <= hardLimitDeg ? '#ffb000' : '#ff4040'
+
+    const horizontalFovDeg = THREE.MathUtils.radToDeg(
+      2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * camera.aspect)
+    )
+    const pxPerDeg = W / Math.max(1, horizontalFovDeg)
+    const centerX = W * 0.5
+    const centerY = H * 0.5
+    const optRadiusPx = THREE.MathUtils.clamp(optimalLaunchDeg * pxPerDeg, 18, Math.min(W, H) * 0.18)
+    const maxRadiusPx = THREE.MathUtils.clamp(hardLimitDeg * pxPerDeg, optRadiusPx + 8, Math.min(W, H) * 0.28)
+
+    ctx.save()
+    ctx.strokeStyle = cueColor
+    ctx.fillStyle = cueColor
+    ctx.lineWidth = 1.7
+    ctx.font = '11px monospace'
+
+    // Steering line from boresight to dynamic lead point.
+    ctx.setLineDash([5, 4])
+    ctx.beginPath()
+    ctx.moveTo(centerX, centerY)
+    ctx.lineTo(leadScreen.x, leadScreen.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Predicted missile lead pipper.
+    this.drawDiamond(ctx, leadScreen.x, leadScreen.y, 10)
+    ctx.beginPath()
+    ctx.moveTo(leadScreen.x - 5, leadScreen.y)
+    ctx.lineTo(leadScreen.x + 5, leadScreen.y)
+    ctx.moveTo(leadScreen.x, leadScreen.y - 5)
+    ctx.lineTo(leadScreen.x, leadScreen.y + 5)
+    ctx.stroke()
+
+    // Lightweight target marker to align with lead pipper.
+    ctx.globalAlpha = 0.75
+    this.drawDiamond(ctx, targetScreen.x, targetScreen.y, 7)
+    ctx.globalAlpha = 1.0
+
+    // Launch-angle tick around boresight.
+    const angleNorm = THREE.MathUtils.clamp(solution.offBoresightDeg / Math.max(1, hardLimitDeg), 0, 1)
+    const angleRadiusPx = THREE.MathUtils.lerp(optRadiusPx, maxRadiusPx, Math.pow(angleNorm, 1.2))
+    const theta = Math.atan2(leadScreen.y - centerY, leadScreen.x - centerX)
+    const tickHalfLen = 8
+    const tx = centerX + Math.cos(theta) * angleRadiusPx
+    const ty = centerY + Math.sin(theta) * angleRadiusPx
+    const nx = -Math.sin(theta)
+    const ny = Math.cos(theta)
+    ctx.beginPath()
+    ctx.moveTo(tx - nx * tickHalfLen, ty - ny * tickHalfLen)
+    ctx.lineTo(tx + nx * tickHalfLen, ty + ny * tickHalfLen)
+    ctx.stroke()
+
+    const angleText = `${solution.offBoresightDeg.toFixed(0)}°`
+    ctx.fillText(`ANG ${angleText}`, leadScreen.x + 12, leadScreen.y - 4)
+    ctx.restore()
+  }
+
+  private shouldShowRadarShootCue(target: Aircraft): boolean {
+    const selectedStore = this.getSelectedMissileStore()
+    if (!selectedStore || selectedStore.category !== 'ARH_MISSILE') return false
+
+    const maxRangeM = ARH_MISSILE_RANGES_M[selectedStore.weaponId]
+    if (!maxRangeM) return false
+
+    const ownPos = this.player.state.positionNED
+    const tgtPos = target.state.positionNED
+    const rangeM = Math.hypot(
+      tgtPos[0] - ownPos[0],
+      tgtPos[1] - ownPos[1],
+      tgtPos[2] - ownPos[2]
+    )
+    return rangeM <= maxRangeM
+  }
+
+  isRadarShootCueActive(): boolean {
+    const radar = this.player.radar.state
+    if (radar.mode !== 'STT' || !radar.sttTargetId) return false
+    const target = this.entityManager.getEnemies().find(e => e.entityId === radar.sttTargetId)
+    if (!target) return false
+    return this.shouldShowRadarShootCue(target)
+  }
+
+  private drawLAR(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    const selectedStore = this.getSelectedMissileStore()
+    if (!selectedStore) return
+    const missileSpec = MISSILE_SPECS[selectedStore.weaponId]
+    if (!missileSpec) return
+
+    const target = this.getCurrentTargetForLAR()
+    const barH = 134
+    const barW = 12
+
+    ctx.save()
+    ctx.lineWidth = 1.2
+    ctx.font = '10px monospace'
+
+    // Base frame and labels stay visible whenever a missile is selected.
+    ctx.strokeStyle = '#00ff44'
+    ctx.fillStyle = '#00ff44'
+    ctx.strokeRect(x, y, barW, barH)
+    ctx.fillText('LAR', x - 20, y - 6)
+    ctx.fillText(missileSpec.id.toUpperCase(), x - 46, y + barH + 12)
+
+    if (!target) {
+      ctx.fillStyle = '#88bb88'
+      ctx.fillText('NO TGT', x - 44, y + barH + 25)
+      ctx.restore()
+      return
+    }
+
+    const lar = this.computeLARInfo(missileSpec, target)
+    if (!lar) {
+      ctx.restore()
+      return
+    }
+
+    // Draw no-escape region (Rmin..Rne) as a solid filled segment.
+    const yRMin = y + barH
+    const yRNe = this.rangeToLARY(lar.rNeM, lar.rMinM, lar.rMaxM, y, barH)
+    ctx.fillStyle = 'rgba(0, 255, 68, 0.25)'
+    ctx.fillRect(x + 1, yRNe, barW - 2, yRMin - yRNe)
+
+    // Reference lines.
+    ctx.strokeStyle = '#00ff44'
+    this.drawHorizontalTick(ctx, x - 6, x + barW + 6, y, 'RMAX')
+    this.drawHorizontalTick(ctx, x - 6, x + barW + 6, yRNe, 'RNE')
+    this.drawHorizontalTick(ctx, x - 6, x + barW + 6, yRMin, 'RMIN')
+
+    // Target range caret.
+    const targetY = this.rangeToLARY(lar.rangeM, lar.rMinM, lar.rMaxM, y, barH)
+    const caretY = THREE.MathUtils.clamp(targetY, y - 8, y + barH + 8)
+    const caretColor = lar.inRange ? '#00ff44' : '#ffb000'
+    ctx.strokeStyle = caretColor
+    ctx.fillStyle = caretColor
+    ctx.beginPath()
+    ctx.moveTo(x - 10, caretY)
+    ctx.lineTo(x - 2, caretY - 4)
+    ctx.lineTo(x - 2, caretY + 4)
+    ctx.closePath()
+    ctx.stroke()
+    ctx.fill()
+
+    const statusText = lar.inNoEscapeZone ? 'IN NEZ' : lar.inRange ? 'IN LAR' : lar.rangeM > lar.rMaxM ? 'OUT RNG' : 'TOO CLOSE'
+    ctx.fillText(statusText, x - 45, y - 18)
+    ctx.fillText(`${(lar.rangeM / 1000).toFixed(1)}km`, x - 45, y - 30)
+    ctx.restore()
+  }
+
+  private drawHorizontalTick(
+    ctx: CanvasRenderingContext2D,
+    x0: number,
+    x1: number,
+    y: number,
+    label: string
+  ): void {
+    ctx.beginPath()
+    ctx.moveTo(x0, y)
+    ctx.lineTo(x1, y)
+    ctx.stroke()
+    ctx.fillText(label, x1 + 3, y + 3)
+  }
+
+  private rangeToLARY(rangeM: number, rMinM: number, rMaxM: number, y: number, barH: number): number {
+    const norm = THREE.MathUtils.clamp((rangeM - rMinM) / Math.max(1, rMaxM - rMinM), 0, 1)
+    return y + barH - norm * barH
+  }
+
+  private computeLARInfo(missileSpec: MissileSpec, target: Aircraft): LARInfo | null {
+    const ownPos = this.player.state.positionNED
+    const ownVel = this.player.state.velocityNED
+    const tgtPos = target.state.positionNED
+    const tgtVel = target.state.velocityNED
+    const relPos: [number, number, number] = [
+      tgtPos[0] - ownPos[0],
+      tgtPos[1] - ownPos[1],
+      tgtPos[2] - ownPos[2],
+    ]
+    const relVel: [number, number, number] = [
+      tgtVel[0] - ownVel[0],
+      tgtVel[1] - ownVel[1],
+      tgtVel[2] - ownVel[2],
+    ]
+    const rangeM = Math.hypot(relPos[0], relPos[1], relPos[2])
+    if (!Number.isFinite(rangeM) || rangeM < 1) return null
+
+    const rangeRate = (
+      relPos[0] * relVel[0] +
+      relPos[1] * relVel[1] +
+      relPos[2] * relVel[2]
+    ) / rangeM
+    const closingMS = -rangeRate
+    const ownAltM = Math.max(0, -this.player.state.positionNED[2])
+    const altFactor = THREE.MathUtils.clamp(0.8 + ownAltM / 50000, 0.8, 1.2)
+    const closureFactor = THREE.MathUtils.clamp(0.55 + (closingMS + 120) / 520, 0.45, 1.15)
+
+    let rMaxM = missileSpec.maxRangeM * altFactor * closureFactor
+    let rMinM = missileSpec.category === 'ARH_MISSILE' ? 1800 : 500
+    rMinM += Math.max(0, -closingMS) * 5
+    rMinM = THREE.MathUtils.clamp(rMinM, 300, missileSpec.maxRangeM * 0.5)
+    rMaxM = Math.max(rMinM + 1000, rMaxM)
+
+    const nezSpan = missileSpec.category === 'ARH_MISSILE' ? 0.62 : 0.52
+    const rNeM = THREE.MathUtils.clamp(rMinM + (rMaxM - rMinM) * nezSpan, rMinM + 300, rMaxM - 250)
+    return {
+      rangeM,
+      rMinM,
+      rNeM,
+      rMaxM,
+      inRange: rangeM >= rMinM && rangeM <= rMaxM,
+      inNoEscapeZone: rangeM >= rMinM && rangeM <= rNeM,
+    }
+  }
+
+  private getCurrentTargetForLAR(): Aircraft | null {
+    const sttTargetId = this.player.radar.state.sttTargetId
+    const hmsTargetId = this.player.hms.state.lockedEntityId
+    const targetId = sttTargetId ?? hmsTargetId
+    if (!targetId) return null
+    return this.entityManager.getEnemies().find(e => e.entityId === targetId) ?? null
+  }
+
+  private getSelectedMissileStore(): LoadedStore | null {
+    const selectedWeaponId = this.player.getSelectedWeaponName().toLowerCase()
+    return this.player.state.loadedStores.find(s =>
+      s.weaponId === selectedWeaponId &&
+      (s.category === 'IR_MISSILE' || s.category === 'ARH_MISSILE') &&
+      s.remainingRounds > 0
+    ) ?? null
   }
 
   private drawSituationalMarkers(
@@ -342,8 +768,14 @@ export class HUD {
     for (const m of ownMissiles) {
       const screen = this.projectNEDToScreen(camera, m.positionNED, W, H)
       if (!screen) continue
-      ctx.strokeStyle = '#66ccff'
-      this.drawDiamond(ctx, screen.x, screen.y, 7)
+      const pitbull = m.spec.category === 'ARH_MISSILE' && m.guidanceMode === 'ACTIVE'
+      ctx.strokeStyle = pitbull ? '#ffe66d' : '#66ccff'
+      ctx.fillStyle = pitbull ? '#ffe66d' : '#66ccff'
+      if (pitbull) {
+        this.fillDiamond(ctx, screen.x, screen.y, 7)
+      } else {
+        this.drawDiamond(ctx, screen.x, screen.y, 7)
+      }
     }
 
     const inbound = this.entityManager.getInboundMissiles(['player'])
@@ -365,6 +797,105 @@ export class HUD {
     ctx.lineTo(x - r, y)
     ctx.closePath()
     ctx.stroke()
+  }
+
+  private fillDiamond(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+    ctx.beginPath()
+    ctx.moveTo(x, y - r)
+    ctx.lineTo(x + r, y)
+    ctx.lineTo(x, y + r)
+    ctx.lineTo(x - r, y)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  private drawMissileTTIPanel(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    const ttiEntries = this.collectMissileTTIInfo()
+    if (ttiEntries.length === 0) return
+
+    const panelW = 146
+    const panelH = 20 + MAX_HUD_TTI_LINES * 14
+
+    ctx.save()
+    ctx.strokeStyle = '#00ff44'
+    ctx.fillStyle = '#00ff44'
+    ctx.lineWidth = 1.2
+    ctx.font = '11px monospace'
+    ctx.strokeRect(x, y, panelW, panelH)
+    ctx.fillText('MSL TTI', x + 6, y + 12)
+
+    const visible = ttiEntries.slice(0, MAX_HUD_TTI_LINES)
+    for (let i = 0; i < visible.length; i++) {
+      const entry = visible[i]!
+      const sym = entry.pitbull ? 'A' : 'M'
+      const mode = entry.pitbull ? 'PB' : entry.missile.guidanceMode === 'COAST' ? 'MEM' : 'TRK'
+      const ttiTxt = entry.timeToImpactSec == null
+        ? '--.-'
+        : Math.max(0, Math.min(99.9, entry.timeToImpactSec)).toFixed(1)
+      ctx.fillStyle = entry.pitbull ? '#ffe66d' : '#00ff44'
+      ctx.fillText(`${sym}${i + 1} ${ttiTxt}s ${mode}`, x + 6, y + 26 + i * 14)
+    }
+
+    ctx.restore()
+  }
+
+  private collectMissileTTIInfo(): MissileTTIInfo[] {
+    const enemies = this.entityManager.getEnemies()
+    const ownMissiles = this.player.missiles.getMissiles().filter(m => m.active)
+    const entries = ownMissiles.map(missile => {
+      const target = enemies.find(e => e.entityId === missile.targetEntityId)
+      const targetPos = target?.state.positionNED ?? missile.lastKnownTargetPos
+      const targetVel = target?.state.velocityNED ?? missile.lastKnownTargetVel
+      return {
+        missile,
+        pitbull: missile.spec.category === 'ARH_MISSILE' && missile.guidanceMode === 'ACTIVE',
+        timeToImpactSec: this.estimateMissileTTI(missile, targetPos, targetVel),
+      }
+    })
+
+    entries.sort((a, b) => {
+      if (a.timeToImpactSec == null && b.timeToImpactSec == null) return 0
+      if (a.timeToImpactSec == null) return 1
+      if (b.timeToImpactSec == null) return -1
+      return a.timeToImpactSec - b.timeToImpactSec
+    })
+    return entries
+  }
+
+  private estimateMissileTTI(
+    missile: MissileState,
+    targetPos: readonly [number, number, number],
+    targetVel: readonly [number, number, number]
+  ): number | null {
+    const relPos: [number, number, number] = [
+      targetPos[0] - missile.positionNED[0],
+      targetPos[1] - missile.positionNED[1],
+      targetPos[2] - missile.positionNED[2],
+    ]
+    const relVel: [number, number, number] = [
+      targetVel[0] - missile.velocityNED[0],
+      targetVel[1] - missile.velocityNED[1],
+      targetVel[2] - missile.velocityNED[2],
+    ]
+    const rangeM = Math.hypot(relPos[0], relPos[1], relPos[2])
+    if (rangeM < 1) return 0
+
+    const rangeRate = (
+      relPos[0] * relVel[0] +
+      relPos[1] * relVel[1] +
+      relPos[2] * relVel[2]
+    ) / rangeM
+    const closingMS = -rangeRate
+    if (closingMS > 5) return rangeM / closingMS
+
+    const missileSpeed = Math.hypot(
+      missile.velocityNED[0],
+      missile.velocityNED[1],
+      missile.velocityNED[2]
+    )
+    if (missileSpeed > 10) return rangeM / missileSpeed
+    return null
   }
 
   private projectNEDToScreen(
@@ -420,6 +951,103 @@ export class HUD {
     }
     if (t == null) return null
     return THREE.MathUtils.clamp(t, MIN_INTERCEPT_TIME_S, MAX_INTERCEPT_TIME_S)
+  }
+
+  private computeMissileLeadSolution(
+    missileSpec: MissileSpec,
+    target: Aircraft
+  ): MissileLeadSolution | null {
+    const ownPos = this.player.state.positionNED
+    const ownVel = this.player.state.velocityNED
+    const tgtPos = target.state.positionNED
+    const tgtVel = target.state.velocityNED
+
+    const relPos: [number, number, number] = [
+      tgtPos[0] - ownPos[0],
+      tgtPos[1] - ownPos[1],
+      tgtPos[2] - ownPos[2],
+    ]
+    const rangeM = Math.hypot(relPos[0], relPos[1], relPos[2])
+    if (!Number.isFinite(rangeM) || rangeM < 25) return null
+
+    const ownSpeed = v3len(ownVel)
+    const altM = Math.max(0, -ownPos[2])
+    const speedOfSoundMS = computeAtmosphere(altM, ownSpeed).speedOfSoundMS
+    const maxSpeedMS = Math.max(300, missileSpec.maxSpeedMach * speedOfSoundMS)
+    const accelMS2 = missileSpec.maxThrustN / Math.max(1, missileSpec.massKg)
+
+    // Iterate a short time-of-flight solve using boost + coast speed profile.
+    let t = THREE.MathUtils.clamp(rangeM / Math.max(1, ownSpeed + 350), 0.2, 25)
+    for (let i = 0; i < 6; i++) {
+      const predPos: [number, number, number] = [
+        tgtPos[0] + tgtVel[0] * t,
+        tgtPos[1] + tgtVel[1] * t,
+        tgtPos[2] + tgtVel[2] * t,
+      ]
+      const dx = predPos[0] - ownPos[0]
+      const dy = predPos[1] - ownPos[1]
+      const dz = predPos[2] - ownPos[2]
+      const dist = Math.hypot(dx, dy, dz)
+
+      const boostTime = Math.min(t, missileSpec.burnTimeSec)
+      const coastTime = Math.max(0, t - boostTime)
+      const boostEndSpeed = Math.min(maxSpeedMS, ownSpeed + accelMS2 * boostTime * 0.7)
+      const avgBoostSpeed = 0.5 * (ownSpeed + boostEndSpeed)
+      const avgCoastSpeed = Math.max(ownSpeed + 120, boostEndSpeed * 0.72)
+      const coveredDist = avgBoostSpeed * boostTime + avgCoastSpeed * coastTime
+      if (coveredDist < 1) break
+      t *= dist / coveredDist
+      t = THREE.MathUtils.clamp(t, 0.2, 25)
+    }
+
+    const interceptTimeSec = t
+    const aimPointNED: [number, number, number] = [
+      tgtPos[0] + tgtVel[0] * interceptTimeSec,
+      tgtPos[1] + tgtVel[1] * interceptTimeSec,
+      tgtPos[2] + tgtVel[2] * interceptTimeSec,
+    ]
+
+    const boresightNED = quatRotateVec(this.player.state.attitudeQuat, [1, 0, 0] as [number, number, number])
+    const losVec: [number, number, number] = [
+      aimPointNED[0] - ownPos[0],
+      aimPointNED[1] - ownPos[1],
+      aimPointNED[2] - ownPos[2],
+    ]
+    const losLen = Math.hypot(losVec[0], losVec[1], losVec[2])
+    if (losLen < 1e-3) return null
+    const losUnit: [number, number, number] = [losVec[0] / losLen, losVec[1] / losLen, losVec[2] / losLen]
+    const boreLen = Math.max(1e-6, v3len(boresightNED))
+    const boreUnit: [number, number, number] = [boresightNED[0] / boreLen, boresightNED[1] / boreLen, boresightNED[2] / boreLen]
+    const dot = THREE.MathUtils.clamp(
+      boreUnit[0] * losUnit[0] + boreUnit[1] * losUnit[1] + boreUnit[2] * losUnit[2],
+      -1,
+      1
+    )
+    const offBoresightDeg = THREE.MathUtils.radToDeg(Math.acos(dot))
+
+    return {
+      interceptTimeSec,
+      aimPointNED,
+      offBoresightDeg,
+      targetRangeM: rangeM,
+    }
+  }
+
+  private getMissileSeekerLimitDeg(spec: MissileSpec): number {
+    if (spec.category === 'IR_MISSILE') {
+      return spec.irSeeker?.gimbalLimitDeg ?? 30
+    }
+    return 30
+  }
+
+  private computeMissileOptimalLaunchAngleDeg(spec: MissileSpec, rangeM: number): number {
+    const rangeNorm = THREE.MathUtils.clamp(rangeM / Math.max(1000, spec.maxRangeM), 0, 1)
+    // Far targets prefer tighter lead cones; close targets allow wider off-boresight launches.
+    const closeInFraction = 0.62
+    const longRangeFraction = 0.24
+    const baseLimit = this.getMissileSeekerLimitDeg(spec)
+    const optimalFraction = THREE.MathUtils.lerp(closeInFraction, longRangeFraction, rangeNorm)
+    return THREE.MathUtils.clamp(baseLimit * optimalFraction, 4, Math.max(8, baseLimit * 0.85))
   }
 
   resize(w: number, h: number): void {
