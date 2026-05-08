@@ -97,6 +97,9 @@ export class PlayerAircraft extends Aircraft {
 
     // Flap cycle: UP → TAKEOFF → LANDING → UP
     if (controls.cycleFlaps) this.state.flaps = ((this.state.flaps + 1) % 3) as 0 | 1 | 2
+
+    // Speed brakes toggle
+    if (controls.speedBrakeToggle) this.state.speedBrake = !this.state.speedBrake
     // Auto-retract flaps above limit speed (250 kts for pos 1, 200 kts for pos 2)
     if (this.state.flaps === 2 && this.state.iasKts > 200) this.state.flaps = 1
     if (this.state.flaps === 1 && this.state.iasKts > 250) this.state.flaps = 0

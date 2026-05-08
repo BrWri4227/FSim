@@ -28,7 +28,7 @@ export function turnConstantly(self: AIAircraft, _dt: number): ControlInputs {
   return {
     pitch, roll, yaw: 0, throttle,
     fireMissile: false, fireGun: false, cycleMissile: false,
-    dispenseFlare: false, dispenseChaff: false, toggleGear: false, cycleFlaps: false,
+    dispenseFlare: false, dispenseChaff: false, toggleGear: false, cycleFlaps: false, brakeHeld: false, speedBrakeToggle: false,
     radarModeNext: false, radarSelectNext: false, radarLockTarget: false, radarUnlock: false
   }
 }

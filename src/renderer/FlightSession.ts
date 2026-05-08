@@ -183,7 +183,7 @@ export class FlightSession {
   }
 
   private tick(dt: number): void {
-    const controls = this.inputManager.getControls()
+    const controls = this.inputManager.getControls(dt)
     this.syncMultiplayer()
     this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined)
     this.entityManager.update(dt, this.player)

@@ -6,7 +6,7 @@ import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
-import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint, setGearVisible, setFlapsVisible } from '../scene/PlaceholderMeshes'
+import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint, setGearVisible, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
 import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
@@ -46,7 +46,7 @@ export class Aircraft {
       throttle: 0.3, fuelKg: spec.mass.fuelCapacityKg,
       loadedStores: [...stores],
       totalMassKg: spec.mass.emptyMassKg + spec.mass.fuelCapacityKg,
-      onGround: false, ejected: false, invincible: false, gearDown: false, flaps: 0,
+      onGround: false, ejected: false, invincible: false, gearDown: false, flaps: 0, speedBrake: false,
       sv,
     }
 
@@ -65,12 +65,14 @@ export class Aircraft {
     const massKg    = computeTotalMass(this.spec, this.state.fuelKg, this.state.loadedStores)
 
     const gearDrag = this.state.gearDown ? 0.05 : 0
+    const speedBrakeDrag = this.state.speedBrake ? 0.12 : 0
     const FLAP_CL = [0, 0.5, 1.0] as const
     const FLAP_CD = [0, 0.02, 0.08] as const
     const flapCL = FLAP_CL[this.state.flaps]
     const flapCD = FLAP_CD[this.state.flaps]
     const fcsControls = applyFCSLimits(controls, this.state, this.spec)
-    const newSV = stepRK4(this.state.sv, this.spec, fcsControls, massKg, penalties, storeDrag + gearDrag, dt, flapCL, flapCD)
+    const groundClearM = getGroundClearance(this.spec.id, this.state.gearDown)
+    const newSV = stepRK4(this.state.sv, this.spec, fcsControls, massKg, penalties, storeDrag + gearDrag + speedBrakeDrag, dt, flapCL, flapCD, groundClearM)
 
     // Update state from SV
     this.state.sv = newSV
@@ -96,7 +98,23 @@ export class Aircraft {
     this.state.totalMassKg = massKg
 
     // Ground clamp
-    this.state.onGround = this.state.altitudeM <= 0.5
+    this.state.onGround = this.state.altitudeM <= groundClearM + 0.1
+
+    // Wheel brakes: friction deceleration ~4 m/s² when on ground with gear down
+    if (controls.brakeHeld && this.state.onGround && this.state.gearDown) {
+      const vN = this.state.velocityNED[0], vE = this.state.velocityNED[1]
+      const gs = Math.sqrt(vN * vN + vE * vE)
+      if (gs > 0.1) {
+        const scale = Math.max(0, gs - 4.0 * dt) / gs
+        this.state.velocityNED[0] = vN * scale
+        this.state.velocityNED[1] = vE * scale
+      } else {
+        this.state.velocityNED[0] = 0
+        this.state.velocityNED[1] = 0
+      }
+      this.state.sv[3] = this.state.velocityNED[0]
+      this.state.sv[4] = this.state.velocityNED[1]
+    }
 
     // Fuel burn
     const isAB = controls.throttle >= this.spec.engine.afterburnerThrottleMin

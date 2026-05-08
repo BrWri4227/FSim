@@ -152,7 +152,8 @@ export function stepRK4(
   storeDragCD: number,
   dt: number,
   flapCL = 0,
-  flapCD = 0
+  flapCD = 0,
+  minAltM = 0
 ): StateVec {
   const k1 = computeDerivative(sv, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
   const sv2 = addSV(sv, scaleSV(k1, dt * 0.5))
@@ -170,9 +171,9 @@ export function stepRK4(
     result[6] /= qLen; result[7] /= qLen; result[8] /= qLen; result[9] /= qLen
   }
 
-  // Ground clamp
-  if (-result[2] < 0) {
-    result[2] = 0
+  // Ground clamp: keep aircraft center at least minAltM above terrain
+  if (-result[2] < minAltM) {
+    result[2] = -minAltM
     if (result[5] > 0) result[5] = 0  // stop downward velocity
   }
 

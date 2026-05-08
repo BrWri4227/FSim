@@ -14,6 +14,7 @@ export class InputManager {
   private radarSelectPrev = false
   private radarLockPrev = false
   private radarUnlockPrev = false
+  private speedBrakeTogglePending = false
 
   constructor() {
     window.addEventListener('keydown', this.onKeyDown)
@@ -22,12 +23,10 @@ export class InputManager {
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
+    if (e.ctrlKey && e.code === 'KeyW') e.preventDefault()
     this.keys.add(e.code)
-    // Throttle
-    if (e.code === DEFAULT_BINDINGS.throttleUp)
-      this.throttle = clamp(this.throttle + 0.05, 0, 1)
-    if (e.code === DEFAULT_BINDINGS.throttleDown)
-      this.throttle = clamp(this.throttle - 0.05, 0, 1)
+    if (e.code === DEFAULT_BINDINGS.throttleDown && this.throttle === 0)
+      this.speedBrakeTogglePending = true
   }
 
   private onKeyUp = (e: KeyboardEvent) => { this.keys.delete(e.code) }
@@ -38,7 +37,7 @@ export class InputManager {
     return pos - neg
   }
 
-  getControls(): ControlInputs {
+  getControls(dt: number): ControlInputs {
     // Gamepad support
     const gp = navigator.getGamepads()[0]
     let pitch = 0, roll = 0, yaw = 0
@@ -55,6 +54,10 @@ export class InputManager {
       pitch = this.axis(DEFAULT_BINDINGS.pitchUp, DEFAULT_BINDINGS.pitchDown)
       roll  = this.axis(DEFAULT_BINDINGS.rollRight, DEFAULT_BINDINGS.rollLeft)
       yaw   = this.axis(DEFAULT_BINDINGS.yawRight, DEFAULT_BINDINGS.yawLeft)
+      if (this.keys.has(DEFAULT_BINDINGS.throttleUp))
+        this.throttle = clamp(this.throttle + 0.25 * dt, 0, 1)
+      if (this.keys.has(DEFAULT_BINDINGS.throttleDown) && this.throttle > 0)
+        this.throttle = clamp(this.throttle - 0.25 * dt, 0, 1)
     }
 
     const fireMissile = this.keys.has(DEFAULT_BINDINGS.fireMissile)
@@ -87,6 +90,9 @@ export class InputManager {
 
     ;(window as unknown as Record<string, unknown>)['_fsimEjectPressed'] = this.keys.has(DEFAULT_BINDINGS.eject)
 
+    const speedBrakeToggle = this.speedBrakeTogglePending
+    this.speedBrakeTogglePending = false
+
     return {
       pitch,
       roll,
@@ -99,6 +105,8 @@ export class InputManager {
       dispenseChaff: this.keys.has(DEFAULT_BINDINGS.chaff),
       toggleGear: gearEdge,
       cycleFlaps: flapsEdge,
+      brakeHeld: this.keys.has(DEFAULT_BINDINGS.brake),
+      speedBrakeToggle,
       radarModeNext: radarModeEdge,
       radarSelectNext: radarSelectEdge,
       radarLockTarget: radarLockEdge,

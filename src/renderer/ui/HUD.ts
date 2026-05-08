@@ -131,6 +131,20 @@ export class HUD {
       flapX += segW + 2
     }
 
+    // Speed brake indicator
+    const sbW = 28, sbX = flapX + 4
+    if (state.speedBrake) {
+      ctx.fillStyle = '#00ff44'
+      ctx.fillRect(sbX, stripY - gearH + 2, sbW, gearH)
+      ctx.fillStyle = '#000'
+      ctx.fillText('SB', sbX + 5, stripY - 1)
+    } else {
+      ctx.strokeStyle = '#226644'
+      ctx.strokeRect(sbX, stripY - gearH + 2, sbW, gearH)
+      ctx.fillStyle = '#226644'
+      ctx.fillText('SB', sbX + 5, stripY - 1)
+    }
+
     // ── CMDS counters (lower left, above weapons panel) ───────────────────────
     ctx.font = '11px monospace'
     const cmdsX = 16
