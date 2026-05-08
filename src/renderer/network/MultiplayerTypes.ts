@@ -25,6 +25,24 @@ export interface NetMissileState {
   active: boolean
 }
 
+export interface NetFlareState {
+  positionNED: [number, number, number]
+  heatSignatureKW: number
+  ageSec: number
+}
+
+export interface NetChaffState {
+  positionNED: [number, number, number]
+  velocityNED: [number, number, number]
+  rcsM2: number
+  ageSec: number
+}
+
+export interface NetCountermeasureState {
+  flares: NetFlareState[]
+  chaffClouds: NetChaffState[]
+}
+
 export interface NetPlayerState {
   positionNED: [number, number, number]
   velocityNED: [number, number, number]
@@ -34,6 +52,7 @@ export interface NetPlayerState {
   structuralFailure: boolean
   radar: NetRadarState
   missiles: NetMissileState[]
+  countermeasures: NetCountermeasureState
 }
 
 export interface HitEvent {

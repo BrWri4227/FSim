@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { networkInterfaces } from 'os'
 import { WebSocketServer, WebSocket } from 'ws'
+import { pathToFileURL } from 'url'
 
 type DamageZone = 'ENGINE' | 'WING_LEFT' | 'WING_RIGHT' | 'FUSELAGE' | 'TAIL' | 'COCKPIT'
 
@@ -23,6 +24,24 @@ interface NetMissileState {
   active: boolean
 }
 
+interface NetFlareState {
+  positionNED: [number, number, number]
+  heatSignatureKW: number
+  ageSec: number
+}
+
+interface NetChaffState {
+  positionNED: [number, number, number]
+  velocityNED: [number, number, number]
+  rcsM2: number
+  ageSec: number
+}
+
+interface NetCountermeasureState {
+  flares: NetFlareState[]
+  chaffClouds: NetChaffState[]
+}
+
 interface NetPlayerState {
   positionNED: [number, number, number]
   velocityNED: [number, number, number]
@@ -32,6 +51,7 @@ interface NetPlayerState {
   structuralFailure: boolean
   radar: NetRadarState
   missiles: NetMissileState[]
+  countermeasures: NetCountermeasureState
 }
 
 interface HitEvent {
@@ -261,6 +281,29 @@ function createWindow(): void {
   }
 }
 
+function toDirectoryFileUrl(pathValue: string): string {
+  const normalized = pathValue.endsWith('\\') || pathValue.endsWith('/')
+    ? pathValue
+    : `${pathValue}/`
+  return pathToFileURL(normalized).href
+}
+
+function getAudioBaseUrls(): string[] {
+  const out = new Set<string>()
+  const devRendererUrl = process.env['ELECTRON_RENDERER_URL']
+  if (devRendererUrl) {
+    out.add(`${devRendererUrl.replace(/\/+$/, '')}/sounds/`)
+  }
+
+  // Dist renderer path next to main bundle (works for unpacked dev/prod layouts).
+  out.add(toDirectoryFileUrl(join(__dirname, '../renderer/sounds')))
+
+  // Packaged Windows/Linux/macOS with asarUnpack places assets here.
+  out.add(toDirectoryFileUrl(join(process.resourcesPath, 'app.asar.unpacked', 'dist-electron', 'renderer', 'sounds')))
+
+  return [...out]
+}
+
 app.whenReady().then(() => {
   ipcMain.handle('mp:start-host', async (_e, port: number) => {
     return startLanHost(port)
@@ -270,6 +313,7 @@ app.whenReady().then(() => {
     return { ok: true }
   })
   ipcMain.handle('mp:get-lan-ip', () => ({ ip: getPrimaryLanIp() }))
+  ipcMain.handle('assets:get-audio-base-urls', () => ({ urls: getAudioBaseUrls() }))
 
   createWindow()
   app.on('activate', () => {

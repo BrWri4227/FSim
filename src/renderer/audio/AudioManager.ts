@@ -150,25 +150,30 @@ export class AudioManager {
   async loadSounds(basePath?: string): Promise<void> {
     if (basePath) this.soundsBasePath = basePath
 
-    // Build an absolute base URL that works under both http:// (dev) and file:// (prod).
-    // Relative paths are resolved against the current page URL.
-    let base = this.soundsBasePath
-    if (!base.startsWith('http') && !base.startsWith('file://')) {
-      const pageDir = window.location.href.replace(/\/[^/]*$/, '/')
-      base = pageDir + base
-    }
-    if (!base.endsWith('/')) base += '/'
-
+    const baseCandidates = await this.getSoundBaseCandidates()
     const loads = Object.entries(SOUND_FILES).map(async ([key, file]) => {
-      const url = base + file
-      try {
-        const arrayBuf = await this.fetchArrayBuffer(url)
-        if (!arrayBuf) return
-        const audioBuf = await this.ctx.decodeAudioData(arrayBuf)
-        this.buffers.set(key, audioBuf)
-        console.log(`[Audio] Loaded ${file}`)
-      } catch (err) {
-        console.warn(`[Audio] Failed to decode ${file}:`, err)
+      let loaded = false
+      let lastDecodeError: unknown = null
+      for (const base of baseCandidates) {
+        const url = base + file
+        try {
+          const arrayBuf = await this.fetchArrayBuffer(url)
+          if (!arrayBuf) continue
+          const audioBuf = await this.ctx.decodeAudioData(arrayBuf)
+          this.buffers.set(key, audioBuf)
+          console.log(`[Audio] Loaded ${file} from ${base}`)
+          loaded = true
+          break
+        } catch (err) {
+          lastDecodeError = err
+        }
+      }
+      if (!loaded) {
+        if (lastDecodeError) {
+          console.warn(`[Audio] Failed to decode ${file}; synthesis fallback active.`, lastDecodeError)
+        } else {
+          console.warn(`[Audio] Missing sound file ${file}; synthesis fallback active.`)
+        }
       }
     })
     await Promise.allSettled(loads)
@@ -178,6 +183,40 @@ export class AudioManager {
     if (this.buffers.has('engine_idle')) {
       this.startFileEngine()
     }
+  }
+
+  private normalizeSoundBase(base: string): string {
+    // Build an absolute base URL that works under both http:// (dev) and file:// (prod).
+    // Relative paths are resolved against the current page URL.
+    let out = base
+    if (!out.startsWith('http://') && !out.startsWith('https://') && !out.startsWith('file://')) {
+      const pageDir = window.location.href.replace(/\/[^/]*$/, '/')
+      out = pageDir + out
+    }
+    if (!out.endsWith('/')) out += '/'
+    return out
+  }
+
+  private async getSoundBaseCandidates(): Promise<string[]> {
+    const out = new Set<string>()
+    out.add(this.normalizeSoundBase(this.soundsBasePath))
+
+    try {
+      const getAudioBaseUrls = (window as unknown as {
+        fsim?: { assets?: { getAudioBaseUrls?: () => Promise<{ urls: string[] }> } }
+      }).fsim?.assets?.getAudioBaseUrls
+
+      if (typeof getAudioBaseUrls === 'function') {
+        const payload = await getAudioBaseUrls()
+        for (const raw of payload.urls ?? []) {
+          if (typeof raw === 'string' && raw.length > 0) out.add(this.normalizeSoundBase(raw))
+        }
+      }
+    } catch {
+      // Ignore bridge failures and continue with local relative path fallback.
+    }
+
+    return [...out]
   }
 
   /** Fetch raw bytes — uses fetch first, falls back to XHR for file:// Electron environments. */
@@ -260,36 +299,47 @@ export class AudioManager {
     this.prevChaffCount = cc
 
     // IR seeker growl
-    const irStore = player.state.loadedStores.find(
-      s => s.category === 'IR_MISSILE' && s.remainingRounds > 0
+    const selectedWeaponId = player.getSelectedWeaponName().toLowerCase()
+    const irStore = player.state.loadedStores.find(s =>
+      s.category === 'IR_MISSILE' &&
+      s.remainingRounds > 0 &&
+      s.weaponId === selectedWeaponId
     )
     const enemies: import('../entities/Aircraft').Aircraft[] = (window as any)._fsimEnemies ?? []
-    if (irStore && enemies.length > 0) {
-      const playerVel = player.state.velocityNED
-      const playerPos = player.state.positionNED
-      const fwdSpd = Math.sqrt(playerVel[0]**2 + playerVel[1]**2 + playerVel[2]**2) || 1
+    if (irStore) {
+      // Baseline "searching" growl as soon as an IR missile is selected.
+      let acquired = true
+      let locked = false
+      let strength = 0.14
 
-      let bestD = Infinity, bestInFront = false
-      let bestDot = -1
-      for (const e of enemies) {
-        const d = dist3(e.state.positionNED as [number,number,number], playerPos as [number,number,number])
-        if (d < bestD) {
-          bestD = d
-          const dx = e.state.positionNED[0] - playerPos[0]
-          const dy = e.state.positionNED[1] - playerPos[1]
-          const dz = e.state.positionNED[2] - playerPos[2]
-          const dot = (dx * playerVel[0] + dy * playerVel[1] + dz * playerVel[2]) / Math.max(d * fwdSpd, 1)
-          bestDot = dot
-          bestInFront = dot > 0.64
+      if (enemies.length > 0) {
+        const playerVel = player.state.velocityNED
+        const playerPos = player.state.positionNED
+        const fwdSpd = Math.sqrt(playerVel[0]**2 + playerVel[1]**2 + playerVel[2]**2) || 1
+
+        let bestD = Infinity, bestInFront = false
+        let bestDot = -1
+        for (const e of enemies) {
+          const d = dist3(e.state.positionNED as [number,number,number], playerPos as [number,number,number])
+          if (d < bestD) {
+            bestD = d
+            const dx = e.state.positionNED[0] - playerPos[0]
+            const dy = e.state.positionNED[1] - playerPos[1]
+            const dz = e.state.positionNED[2] - playerPos[2]
+            const dot = (dx * playerVel[0] + dy * playerVel[1] + dz * playerVel[2]) / Math.max(d * fwdSpd, 1)
+            bestDot = dot
+            bestInFront = dot > 0.64
+          }
         }
+        locked   = bestD < 5000  && bestInFront
+        acquired = bestD < 15000 && bestDot > 0.35
+        const rangeStrength = clamp01((15000 - bestD) / 12000) // 0 at ~15 km, 1 by ~3 km
+        const aspectStrength = clamp01((bestDot - 0.35) / 0.65)
+        const strengthRaw = 0.6 * rangeStrength + 0.4 * aspectStrength
+        const lockStrength = locked ? Math.max(strengthRaw, 0.8) : strengthRaw
+        strength = acquired ? clamp01(lockStrength) : strength
       }
-      const locked   = bestD < 5000  && bestInFront
-      const acquired = bestD < 15000 && bestDot > 0.35
-      const rangeStrength = clamp01((15000 - bestD) / 12000) // 0 at ~15 km, 1 by ~3 km
-      const aspectStrength = clamp01((bestDot - 0.35) / 0.65)
-      const strengthRaw = 0.6 * rangeStrength + 0.4 * aspectStrength
-      const lockStrength = locked ? Math.max(strengthRaw, 0.8) : strengthRaw
-      const strength = acquired ? clamp01(lockStrength) : 0
+
       this.setIRSeekerState(acquired, locked, strength)
     } else {
       this.setIRSeekerState(false, false, 0)

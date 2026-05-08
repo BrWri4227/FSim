@@ -249,6 +249,19 @@ export class FlightSession {
           targetEntityId: m.targetEntityId,
           active: m.active,
         })),
+      countermeasures: {
+        flares: this.player.cmds.getActiveFlares().map(f => ({
+          positionNED: [...f.positionNED] as [number, number, number],
+          heatSignatureKW: f.heatSignatureKW,
+          ageSec: f.ageSec,
+        })),
+        chaffClouds: this.player.cmds.getActiveChaffClouds().map(c => ({
+          positionNED: [...c.positionNED] as [number, number, number],
+          velocityNED: [...c.velocityNED] as [number, number, number],
+          rcsM2: c.rcsM2,
+          ageSec: c.ageSec,
+        })),
+      },
     })
 
     const snapshots = this.multiplayer.getRemoteSnapshots()
