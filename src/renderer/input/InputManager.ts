@@ -39,6 +39,13 @@ export class InputManager {
     return pos - neg
   }
 
+  private applyAxisDeadzone(v: number, deadzone: number): number {
+    const av = Math.abs(v)
+    if (av <= deadzone) return 0
+    const scaled = (av - deadzone) / (1 - deadzone)
+    return Math.sign(v) * scaled
+  }
+
   getControls(dt: number): ControlInputs {
     // Gamepad support
     const gp = navigator.getGamepads()[0]
@@ -49,6 +56,10 @@ export class InputManager {
       roll  = gp.axes[0] ?? 0
       pitch = -(gp.axes[1] ?? 0)
       yaw   = gp.axes[2] ?? 0
+      // Prevent tiny stick drift from exciting lateral oscillation.
+      roll = this.applyAxisDeadzone(roll, 0.08)
+      pitch = this.applyAxisDeadzone(pitch, 0.08)
+      yaw = this.applyAxisDeadzone(yaw, 0.10)
       const rtrigger = ((gp.buttons[7]?.value ?? 0))
       const ltrigger = ((gp.buttons[6]?.value ?? 0))
       this.throttle = clamp(this.throttle + (rtrigger - ltrigger) * 0.02, 0, 1)

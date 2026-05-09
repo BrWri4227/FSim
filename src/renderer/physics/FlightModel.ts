@@ -77,18 +77,33 @@ function computeDerivativeInto(
   const alphaDeg = Math.atan2(w, Math.max(u, 0.1)) * RAD2DEG
   const betaDeg  = Math.asin(clamp(v_b / vt, -1, 1)) * RAD2DEG
 
-  // Control surface deflections
-  const maxPitchRad = 25 * DEG2RAD
-  const maxRollRad  = 25 * DEG2RAD
-  const maxYawRad   = 20 * DEG2RAD
+  // Control surface deflections (radians) with FCS limits applied
+  const maxPitchRad = 28 * DEG2RAD
+  const maxRollRad  = 32 * DEG2RAD
+  const maxYawRad   = 24 * DEG2RAD
   const pitchRadCmd = -controls.pitch * maxPitchRad * penalties.pitchAuthorityMultiplier
   const rollRadCmd  =  controls.roll  * maxRollRad  * penalties.rollAuthorityMultiplier
   const yawRadCmd   =  controls.yaw   * maxYawRad
 
-  const betaRad    = betaDeg * DEG2RAD
-  const pitchDamped = clamp(pitchRadCmd - 0.06 * qr, -maxPitchRad, maxPitchRad)
-  const rollDamped  = clamp(rollRadCmd  - 0.05 * p - 0.10 * betaRad, -maxRollRad, maxRollRad)
-  const yawDamped   = clamp(yawRadCmd   - 0.04 * r - 0.18 * betaRad, -maxYawRad,  maxYawRad)
+  // SAS-like damping:
+  // - Always damp body rates.
+  // - Add stronger beta stabilization when pilot lateral inputs are low
+  //   to suppress straight-flight dutch-roll oscillation.
+  const betaRad = betaDeg * DEG2RAD
+  const lateralInput = Math.max(Math.abs(controls.roll), Math.abs(controls.yaw))
+  const stabilityAssist = 1 - clamp(lateralInput / 0.55, 0, 1)
+
+  const pitchDamped = clamp(pitchRadCmd - 0.05 * qr, -maxPitchRad, maxPitchRad)
+  const rollDamped = clamp(
+    rollRadCmd - (0.10 * p) - (0.05 * betaRad * stabilityAssist),
+    -maxRollRad,
+    maxRollRad
+  )
+  const yawDamped = clamp(
+    yawRadCmd - (0.10 * r) - (0.26 * betaRad * stabilityAssist),
+    -maxYawRad,
+    maxYawRad
+  )
 
   // Aerodynamic coefficients and control increments
   const aeroCoeffs = computeAeroCoeffs(
