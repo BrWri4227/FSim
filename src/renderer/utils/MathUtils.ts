@@ -144,13 +144,24 @@ export function nedVelToThreeDir(vel: Vec3): THREE.Vector3 {
 //
 // Sanity check: identity NED attitude → identity Three.js quaternion
 // (camera default forward −Z already equals Three.js North).
+
+// Pre-allocated constants — never mutated, safe to share across all callers.
+const _nedToThree_qM    = new THREE.Quaternion( 0.5,  0.5, -0.5, 0.5)
+const _nedToThree_qMInv = new THREE.Quaternion(-0.5, -0.5,  0.5, 0.5)
+
 export function nedQuatToThree(q: Quat): THREE.Quaternion {
-  // q_M in Three.js (x,y,z,w) order
-  const qM    = new THREE.Quaternion( 0.5,  0.5, -0.5, 0.5)
-  const qMInv = new THREE.Quaternion(-0.5, -0.5,  0.5, 0.5)   // conjugate of unit quat
-  const qN    = new THREE.Quaternion(q[1], q[2],  q[3], q[0]) // wxyz → xyzw
-  return qM.clone().multiply(qN).multiply(qMInv)
+  // Convert NED wxyz → Three.js xyzw, then apply the basis-change similarity.
+  // premultiply(_qM) computes _qM * result in-place; the constants are never modified.
+  const result = new THREE.Quaternion(q[1], q[2], q[3], q[0])
+  result.premultiply(_nedToThree_qM).multiply(_nedToThree_qMInv)
+  return result
 }
+
+/** Module-level mesh orientation bias (90° Y-rotation to align NED +X body axis with Three.js -Z).
+ *  Exported so Aircraft.updateMesh can reuse it without allocating every frame. */
+export const MESH_BIAS_QUAT = new THREE.Quaternion().setFromAxisAngle(
+  new THREE.Vector3(0, 1, 0), Math.PI / 2
+)
 
 export function stateVecToArrays(sv: StateVec): { pos: Vec3; vel: Vec3; q: Quat; omega: Vec3 } {
   return {

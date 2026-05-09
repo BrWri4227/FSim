@@ -190,7 +190,7 @@ export class DebugOverlay {
       const chk = document.createElement('input')
       chk.type = 'checkbox'
       Object.assign(chk.style, { cursor: 'pointer' })
-      chk.onchange = () => { ;(window as any)[key] = chk.checked }
+      chk.onchange = () => { (window as unknown as Record<string, unknown>)[key] = chk.checked }
       const lbl = document.createElement('label')
       Object.assign(lbl.style, { cursor: 'pointer' })
       lbl.textContent = ' ' + label
@@ -232,7 +232,7 @@ export class DebugOverlay {
   }
 
   dispose(): void {
-    document.body.removeChild(this.panel)
+    this.panel.remove()
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

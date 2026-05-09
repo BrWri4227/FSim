@@ -3,6 +3,8 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { networkInterfaces } from 'os'
 import { WebSocketServer, WebSocket } from 'ws'
+import type { WebSocket as WS, RawData } from 'ws'
+import type { IncomingMessage } from 'http'
 import { pathToFileURL } from 'url'
 
 type DamageZone = 'ENGINE' | 'WING_LEFT' | 'WING_RIGHT' | 'FUSELAGE' | 'TAIL' | 'COCKPIT'
@@ -62,12 +64,6 @@ interface HitEvent {
   weapon: 'GUN' | 'MISSILE'
 }
 
-type ClientMessage =
-  | { type: 'join'; profile: NetPlayerProfile }
-  | { type: 'profile-update'; profile: NetPlayerProfile }
-  | { type: 'state'; state: NetPlayerState }
-  | { type: 'hit'; hit: HitEvent }
-
 type ServerMessage =
   | {
       type: 'welcome'
@@ -106,10 +102,67 @@ interface PeerRecord {
   state: NetPlayerState | null
 }
 
+const MAX_MESSAGE_BYTES = 64 * 1024  // 64 KB hard cap per frame
+const MAX_INBOUND_DAMAGE_SEVERITY = 1.0
+const VALID_DAMAGE_ZONES = new Set<string>(['ENGINE', 'WING_LEFT', 'WING_RIGHT', 'FUSELAGE', 'TAIL', 'COCKPIT'])
+const VALID_RADAR_MODES = new Set<string>(['OFF', 'RWS', 'TWS', 'STT'])
+
 let lanServer: WebSocketServer | null = null
+let lanServerListening = false
 const peers = new Map<string, PeerRecord>()
 let peerCounter = 0
 let lanServerPort = 0
+
+function isVec3(v: unknown): v is [number, number, number] {
+  return Array.isArray(v) && v.length === 3 && v.every(x => typeof x === 'number' && isFinite(x))
+}
+
+function isVec4(v: unknown): v is [number, number, number, number] {
+  return Array.isArray(v) && v.length === 4 && v.every(x => typeof x === 'number' && isFinite(x))
+}
+
+function isValidProfile(p: unknown): p is NetPlayerProfile {
+  if (typeof p !== 'object' || p === null) return false
+  const o = p as Record<string, unknown>
+  return typeof o['aircraftId'] === 'string' && o['aircraftId'].length > 0 && o['aircraftId'].length <= 64
+}
+
+function isValidHitEvent(h: unknown, senderId: string): h is HitEvent {
+  if (typeof h !== 'object' || h === null) return false
+  const o = h as Record<string, unknown>
+  return (
+    o['sourceId'] === senderId &&
+    typeof o['targetId'] === 'string' && o['targetId'].length > 0 &&
+    VALID_DAMAGE_ZONES.has(String(o['zone'])) &&
+    typeof o['severity'] === 'number' && o['severity'] >= 0 && o['severity'] <= MAX_INBOUND_DAMAGE_SEVERITY &&
+    (o['weapon'] === 'GUN' || o['weapon'] === 'MISSILE')
+  )
+}
+
+function isValidRadarState(r: unknown): r is NetRadarState {
+  if (typeof r !== 'object' || r === null) return false
+  const o = r as Record<string, unknown>
+  return (
+    VALID_RADAR_MODES.has(String(o['mode'])) &&
+    (o['sttTargetId'] === null || typeof o['sttTargetId'] === 'string')
+  )
+}
+
+function isValidPlayerState(s: unknown): s is NetPlayerState {
+  if (typeof s !== 'object' || s === null) return false
+  const o = s as Record<string, unknown>
+  return (
+    isVec3(o['positionNED']) &&
+    isVec3(o['velocityNED']) &&
+    isVec4(o['attitudeQuat']) &&
+    typeof o['throttle'] === 'number' && o['throttle'] >= 0 && o['throttle'] <= 1 &&
+    typeof o['ejected'] === 'boolean' &&
+    typeof o['structuralFailure'] === 'boolean' &&
+    isValidRadarState(o['radar']) &&
+    Array.isArray(o['missiles']) &&
+    typeof o['countermeasures'] === 'object' && o['countermeasures'] !== null
+  )
+}
 
 function emitLobbyEvent(message: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -153,36 +206,42 @@ async function stopLanHost(): Promise<void> {
   })
   lanServer = null
   lanServerPort = 0
+  lanServerListening = false
 }
 
 async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; port: number }> {
-  if (lanServer && lanServerPort === port) {
+  if (lanServer && lanServerListening && lanServerPort === port) {
     return { ok: true, hostIp: getPrimaryLanIp(), port }
   }
   await stopLanHost()
-  lanServer = new WebSocketServer({ host: '0.0.0.0', port })
-  lanServerPort = port
-  emitLobbyEvent(`LAN host started on ${getPrimaryLanIp()}:${port}`)
+  const srv = new WebSocketServer({ host: '0.0.0.0', port })
+  lanServer = srv
+  emitLobbyEvent(`LAN host starting on ${getPrimaryLanIp()}:${port}`)
 
-  lanServer.on('connection', (socket, request) => {
+  lanServer.on('connection', (socket: WS, request: IncomingMessage) => {
     const remote = request.socket.remoteAddress ?? 'unknown-client'
     emitLobbyEvent(`Socket connection attempt from ${remote}`)
     const peerId = `peer_${++peerCounter}`
     const peer: PeerRecord = { id: peerId, socket, profile: null, state: null }
     peers.set(peerId, peer)
 
-    socket.on('message', raw => {
-      let msg: ClientMessage | null = null
+    socket.on('message', (raw: RawData) => {
+      const str = raw.toString()
+      if (str.length > MAX_MESSAGE_BYTES) return
+
+      let parsed: unknown
       try {
-        msg = JSON.parse(raw.toString()) as ClientMessage
+        parsed = JSON.parse(str)
       } catch {
         return
       }
-      if (!msg) return
+      if (typeof parsed !== 'object' || parsed === null) return
+      const msg = parsed as Record<string, unknown>
 
-      if (msg.type === 'join') {
-        peer.profile = msg.profile
-        emitLobbyEvent(`Player ${peerId} joined (${msg.profile.aircraftId.toUpperCase()})`)
+      if (msg['type'] === 'join') {
+        if (!isValidProfile(msg['profile'])) return
+        peer.profile = msg['profile']
+        emitLobbyEvent(`Player ${peerId} joined (${msg['profile'].aircraftId.toUpperCase()})`)
         send(socket, {
           type: 'welcome',
           playerId: peerId,
@@ -197,32 +256,33 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
         broadcast({
           type: 'peer-join',
           playerId: peerId,
-          profile: msg.profile,
+          profile: msg['profile'],
         }, peerId)
         return
       }
 
-      if (msg.type === 'profile-update') {
-        if (!peer.profile) return
-        peer.profile = msg.profile
-        broadcast({ type: 'peer-profile-update', playerId: peerId, profile: msg.profile }, peerId)
+      if (msg['type'] === 'profile-update') {
+        if (!peer.profile || !isValidProfile(msg['profile'])) return
+        peer.profile = msg['profile']
+        broadcast({ type: 'peer-profile-update', playerId: peerId, profile: msg['profile'] }, peerId)
         return
       }
 
-      if (msg.type === 'state') {
-        if (!peer.profile) return
-        peer.state = msg.state
+      if (msg['type'] === 'state') {
+        if (!peer.profile || !isValidPlayerState(msg['state'])) return
+        peer.state = msg['state']
         broadcast({
           type: 'state',
           playerId: peerId,
           profile: peer.profile,
-          state: msg.state,
+          state: msg['state'],
         }, peerId)
         return
       }
 
-      if (msg.type === 'hit') {
-        broadcast({ type: 'hit', hit: msg.hit }, peerId)
+      if (msg['type'] === 'hit') {
+        if (!isValidHitEvent(msg['hit'], peerId)) return
+        broadcast({ type: 'hit', hit: msg['hit'] }, peerId)
       }
     })
 
@@ -239,8 +299,18 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
   })
 
   await new Promise<void>((resolve, reject) => {
-    lanServer?.once('listening', () => resolve())
-    lanServer?.once('error', err => reject(err))
+    srv.once('listening', () => {
+      lanServerPort = port
+      lanServerListening = true
+      emitLobbyEvent(`LAN host ready on ${getPrimaryLanIp()}:${port}`)
+      resolve()
+    })
+    srv.once('error', (err: Error) => {
+      lanServer = null
+      lanServerPort = 0
+      lanServerListening = false
+      reject(err)
+    })
   })
   return { ok: true, hostIp: getPrimaryLanIp(), port }
 }
@@ -269,7 +339,14 @@ function createWindow(): void {
   win.setMenuBarVisibility(false)
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        void shell.openExternal(url)
+      }
+    } catch {
+      // malformed URL — ignore
+    }
     return { action: 'deny' }
   })
 
@@ -305,8 +382,12 @@ function getAudioBaseUrls(): string[] {
 }
 
 app.whenReady().then(() => {
-  ipcMain.handle('mp:start-host', async (_e, port: number) => {
-    return startLanHost(port)
+  ipcMain.handle('mp:start-host', async (_e, port: unknown) => {
+    const p = Number(port)
+    if (!Number.isInteger(p) || p < 1024 || p > 65535) {
+      throw new Error(`Invalid port: ${String(port)}`)
+    }
+    return startLanHost(p)
   })
   ipcMain.handle('mp:stop-host', async () => {
     await stopLanHost()
@@ -322,6 +403,9 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  void stopLanHost()
-  if (process.platform !== 'darwin') app.quit()
+  if (process.platform !== 'darwin') {
+    stopLanHost().finally(() => app.quit())
+  } else {
+    void stopLanHost()
+  }
 })

@@ -14,6 +14,10 @@ import { ExplosionManager } from '../scene/ExplosionEffect'
 import { ThrusterEffect, RocketTrail } from '../scene/ThrusterEffect'
 import { computeAtmosphere } from '../physics/Atmosphere'
 
+// Reusable temporaries for mesh orientation — avoids per-frame Vector3 allocations
+const _missileDir    = new THREE.Vector3()
+const _missileLookAt = new THREE.Vector3()
+
 const G0 = 9.80665
 
 interface CountermeasureProvider {
@@ -170,6 +174,11 @@ export class MissileSystem {
   ): void {
     this.explosions.update(dt)
 
+    // Build a single O(1) lookup map for this update call — avoids an O(enemies) linear
+    // scan inside every missile's loop iteration.
+    const enemyById = new Map<string, Aircraft>()
+    for (const e of enemies) enemyById.set(e.entityId, e)
+
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const m = this.missiles[i]!
       m.ageSec += dt
@@ -178,9 +187,9 @@ export class MissileSystem {
       if (m.burnActive && m.ageSec > m.spec.burnTimeSec) m.burnActive = false
       const thrustAccel = m.burnActive ? m.spec.maxThrustN / m.spec.massKg : 0
 
-      // Resolve target aircraft
+      // Resolve target aircraft using the pre-built map
       const target: Aircraft | undefined =
-        enemies.find(e => e.entityId === m.targetEntityId) ??
+        enemyById.get(m.targetEntityId) ??
         (m.targetEntityId === 'player' ? playerAircraft : undefined)
       const targetWithCMDS = target as (Aircraft & CountermeasureProvider) | undefined
       let guidanceTargetPos: [number,number,number] | undefined
@@ -201,10 +210,16 @@ export class MissileSystem {
           const seeker = m.spec.irSeeker
           const flares = targetWithCMDS?.cmds?.getActiveFlares?.() ?? []
           if (seeker && flares.length > 0) {
-            const nearestFlare = flares.reduce((best, flare) => {
-              if (!best) return flare
-              return v3dist(m.positionNED, flare.positionNED) < v3dist(m.positionNED, best.positionNED) ? flare : best
-            }, null as (typeof flares[number] | null))
+            // Use squared distance to find nearest flare — avoids sqrt per comparison
+            let nearestFlare: (typeof flares[number]) | null = null
+            let nearestFlareDist2 = Infinity
+            for (const flare of flares) {
+              const dx = m.positionNED[0] - flare.positionNED[0]
+              const dy = m.positionNED[1] - flare.positionNED[1]
+              const dz = m.positionNED[2] - flare.positionNED[2]
+              const d2 = dx*dx + dy*dy + dz*dz
+              if (d2 < nearestFlareDist2) { nearestFlareDist2 = d2; nearestFlare = flare }
+            }
             if (
               nearestFlare &&
               Math.random() < Math.min(1, dt * 4) &&
@@ -275,10 +290,16 @@ export class MissileSystem {
           if (m.guidanceMode === 'ACTIVE') {
             const chaffClouds = targetWithCMDS?.cmds?.getActiveChaffClouds?.() ?? []
             if (chaffClouds.length > 0) {
-              const nearestChaff = chaffClouds.reduce((best, chaff) => {
-                if (!best) return chaff
-                return v3dist(m.positionNED, chaff.positionNED) < v3dist(m.positionNED, best.positionNED) ? chaff : best
-              }, null as (typeof chaffClouds[number] | null))
+              // Use squared distance to find nearest chaff cloud — avoids sqrt per comparison
+              let nearestChaff: (typeof chaffClouds[number]) | null = null
+              let nearestChaffDist2 = Infinity
+              for (const chaff of chaffClouds) {
+                const dx = m.positionNED[0] - chaff.positionNED[0]
+                const dy = m.positionNED[1] - chaff.positionNED[1]
+                const dz = m.positionNED[2] - chaff.positionNED[2]
+                const d2 = dx*dx + dy*dy + dz*dz
+                if (d2 < nearestChaffDist2) { nearestChaffDist2 = d2; nearestChaff = chaff }
+              }
               if (nearestChaff && nearestChaff.rcsM2 > 2.0 && Math.random() < Math.min(1, dt * 3.2)) {
                 guidanceTargetPos = [...nearestChaff.positionNED] as [number,number,number]
                 guidanceTargetVel = [...nearestChaff.velocityNED] as [number,number,number]
@@ -351,8 +372,10 @@ export class MissileSystem {
       const worldPos = nedToThree(m.positionNED)
       mesh.position.copy(worldPos)
       if (speed > 1) {
-        const dir = nedToThree(m.velocityNED).normalize()
-        mesh.lookAt(mesh.position.clone().add(dir))
+        // Reuse module-level vectors — avoids two Vector3 allocations per active missile per frame
+        _missileDir.set(m.velocityNED[1], -m.velocityNED[2], -m.velocityNED[0]).normalize()
+        _missileLookAt.addVectors(mesh.position, _missileDir)
+        mesh.lookAt(_missileLookAt)
       }
 
       // Thruster glow fades out after burnout; trail only during burn

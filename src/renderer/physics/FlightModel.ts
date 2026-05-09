@@ -1,47 +1,78 @@
 import type { AircraftSpec, ControlInputs } from '../types/aircraft'
 import type { StateVec } from '../types/common'
 import type { FlightPenalties } from '../types/damage'
-import type { LoadedStore } from '../types/weapons'
 import { computeAtmosphere, thrustLapseFactor } from './Atmosphere'
-import { computeAeroCoeffs } from './AeroCoefficients'
+import { computeAeroCoeffs, computeCL } from './AeroCoefficients'
 import { computeControlDeltas } from './ControlEffectiveness'
-import { computeTotalMass, computeInertia, computeStoreDrag } from './MassProperties'
-import { quatRotateVec, quatConjugate, quatNorm, makeStateVec, DEG2RAD, RAD2DEG, clamp } from '../utils/MathUtils'
-import type { Vec3, Quat } from '../types/common'
+import { computeTotalMass, computeInertia } from './MassProperties'
+import type { InertiaMatrix } from './MassProperties'
+import { DEG2RAD, RAD2DEG, clamp } from '../utils/MathUtils'
 
 const G0 = 9.80665
 
-function extractFromSV(sv: StateVec) {
-  const pos: Vec3 = [sv[0], sv[1], sv[2]]
-  const vel: Vec3 = [sv[3], sv[4], sv[5]]
-  const q: Quat = [sv[6], sv[7], sv[8], sv[9]]
-  const omega: Vec3 = [sv[10], sv[11], sv[12]]
-  return { pos, vel, q, omega }
+// ─── Module-level RK4 scratch buffers ────────────────────────────────────────
+// Safe to use at module scope: JS is single-threaded and stepRK4 is not reentrant.
+// Using plain arrays (not Float64Array) so the JIT keeps the same type inference
+// as the rest of the physics code.
+const _k1:  number[] = new Array(13).fill(0)
+const _k2:  number[] = new Array(13).fill(0)
+const _k3:  number[] = new Array(13).fill(0)
+const _k4:  number[] = new Array(13).fill(0)
+const _svT: number[] = new Array(13).fill(0)  // intermediate sv (sv2 / sv3 / sv4)
+
+// ─── Inline helpers ───────────────────────────────────────────────────────────
+
+
+/** Write a + b*s into out (no allocation). */
+function addScaledSVInto(a: ArrayLike<number>, b: ArrayLike<number>, s: number, out: number[]): void {
+  for (let i = 0; i < 13; i++) out[i] = a[i]! + b[i]! * s
 }
 
-function computeDerivative(
-  sv: StateVec,
+/** Write sv + (k1 + 2*k2 + 2*k3 + k4)*s into out (no allocation). */
+function weightedRK4SumInto(
+  sv: ArrayLike<number>,
+  k1: ArrayLike<number>, k2: ArrayLike<number>,
+  k3: ArrayLike<number>, k4: ArrayLike<number>,
+  s: number, out: number[]
+): void {
+  for (let i = 0; i < 13; i++) {
+    out[i] = sv[i]! + (k1[i]! + 2 * k2[i]! + 2 * k3[i]! + k4[i]!) * s
+  }
+}
+
+// ─── Core derivative (writes into pre-allocated out buffer) ──────────────────
+
+function computeDerivativeInto(
+  sv: ArrayLike<number>,
   spec: AircraftSpec,
   controls: ControlInputs,
   massKg: number,
   penalties: FlightPenalties,
   storeDragCD: number,
   flapCL: number,
-  flapCD: number
-): StateVec {
-  const { pos, vel, q, omega } = extractFromSV(sv)
-  const [p, qr, r] = omega
+  flapCD: number,
+  inertia: InertiaMatrix,
+  out: number[]
+): void {
+  // Read state vector by index — avoids allocating pos/vel/q/omega sub-arrays
+  const vx = sv[3]!, vy = sv[4]!, vz = sv[5]!           // velocity NED
+  const qw = sv[6]!, qx = sv[7]!, qy = sv[8]!, qz = sv[9]!  // attitude quaternion
+  const p  = sv[10]!, qr = sv[11]!, r = sv[12]!          // body angular rates
+  const altM = -sv[2]!                                   // NED: altitude = -z
 
-  // Speed and altitude
-  const speedMS = Math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
-  const altM = -pos[2]  // NED: Down is positive, altitude = -z
-  const atm = computeAtmosphere(altM, speedMS)
+  // Speed and atmosphere
+  const speedMS = Math.sqrt(vx*vx + vy*vy + vz*vz)
+  const atm  = computeAtmosphere(altM, speedMS)
   const mach = speedMS / Math.max(atm.speedOfSoundMS, 1)
 
-  // Velocity in body frame
-  const velBody = quatRotateVec(quatConjugate(q), vel)
-  const u = velBody[0], v_b = velBody[1], w = velBody[2]
-  const vt = Math.max(Math.sqrt(u*u + v_b*v_b + w*w), 0.1)
+  // Velocity in body frame — inline conjugate rotation (no Quat allocation)
+  const velTx = 2 * (-qy * vz + qz * vy)
+  const velTy = 2 * (-qz * vx + qx * vz)
+  const velTz = 2 * (-qx * vy + qy * vx)
+  const u   = vx + qw * velTx - qy * velTz + qz * velTy
+  const v_b = vy + qw * velTy - qz * velTx + qx * velTz
+  const w   = vz + qw * velTz - qx * velTy + qy * velTx
+  const vt  = Math.max(Math.sqrt(u*u + v_b*v_b + w*w), 0.1)
 
   const alphaDeg = Math.atan2(w, Math.max(u, 0.1)) * RAD2DEG
   const betaDeg  = Math.asin(clamp(v_b / vt, -1, 1)) * RAD2DEG
@@ -51,8 +82,8 @@ function computeDerivative(
   const maxRollRad  = 32 * DEG2RAD
   const maxYawRad   = 24 * DEG2RAD
   const pitchRadCmd = -controls.pitch * maxPitchRad * penalties.pitchAuthorityMultiplier
-  const rollRadCmd  = controls.roll  * maxRollRad  * penalties.rollAuthorityMultiplier
-  const yawRadCmd   = controls.yaw   * maxYawRad
+  const rollRadCmd  =  controls.roll  * maxRollRad  * penalties.rollAuthorityMultiplier
+  const yawRadCmd   =  controls.yaw   * maxYawRad
 
   // SAS-like damping:
   // - Always damp body rates.
@@ -74,7 +105,7 @@ function computeDerivative(
     maxYawRad
   )
 
-  // Aerodynamic coefficients
+  // Aerodynamic coefficients and control increments
   const aeroCoeffs = computeAeroCoeffs(
     spec.aero, alphaDeg, betaDeg, mach,
     p, qr, r, spec.mass.wingspanM, spec.mass.macM, vt
@@ -88,81 +119,73 @@ function computeDerivative(
   const Cl = aeroCoeffs.Cl + ctrlDeltas.dCl
   const Cn = aeroCoeffs.Cn + ctrlDeltas.dCn
 
-  const S  = spec.mass.wingAreaM2
-  const b  = spec.mass.wingspanM
-  const c  = spec.mass.macM
+  const S    = spec.mass.wingAreaM2
+  const b    = spec.mass.wingspanM
+  const c    = spec.mass.macM
   const qBar = atm.dynamicPressurePa
 
-  // Aero forces in wind frame → body frame
-  // Wind frame: drag along -velocity, lift perpendicular up, side along y
-  // Approximate transform: in body frame at small beta: Fa_x ≈ -CD*qBar*S, Fa_z ≈ -CL*qBar*S
-  const Fx_aero = (-CD * Math.cos(alphaDeg*DEG2RAD) + CL * Math.sin(alphaDeg*DEG2RAD)) * qBar * S
+  // Aero forces in body frame
+  const alphaRad = alphaDeg * DEG2RAD
+  const cosA = Math.cos(alphaRad), sinA = Math.sin(alphaRad)
+  const Fx_aero = (-CD * cosA + CL * sinA) * qBar * S
   const Fy_aero = CY * qBar * S
-  const Fz_aero = (-CD * Math.sin(alphaDeg*DEG2RAD) - CL * Math.cos(alphaDeg*DEG2RAD)) * qBar * S
+  const Fz_aero = (-CD * sinA - CL * cosA) * qBar * S
 
-  // Thrust in body x-direction
-  const throttle = clamp(controls.throttle, 0, 1)
-  const isAB = throttle >= spec.engine.afterburnerThrottleMin
+  // Thrust
+  const throttle  = clamp(controls.throttle, 0, 1)
+  const isAB      = throttle >= spec.engine.afterburnerThrottleMin
   const maxThrust = isAB ? spec.engine.maxThrustWetN : spec.engine.maxThrustDryN
   const idleThrust = spec.engine.idleThrustN
-  const thrustN = (idleThrust + (maxThrust - idleThrust) * throttle) *
+  const thrustN   = (idleThrust + (maxThrust - idleThrust) * throttle) *
     thrustLapseFactor(altM) * penalties.thrustMultiplier
+
   const Fx_total = Fx_aero + thrustN
-  const Fy_total = Fy_aero
-  const Fz_total = Fz_aero
 
-  // Gravity in body frame
-  const gNED: Vec3 = [0, 0, G0]  // NED: gravity points down (+z)
-  const gBody = quatRotateVec(quatConjugate(q), gNED)
-  const Fx_grav = massKg * gBody[0]
-  const Fy_grav = massKg * gBody[1]
-  const Fz_grav = massKg * gBody[2]
+  // Gravity in body frame — specialized conjugate-rotate for gNED=[0,0,G0] (no allocations)
+  const gBody_x = 2 * G0 * (qz * qx - qw * qy)
+  const gBody_y = 2 * G0 * (qw * qx + qz * qy)
+  const gBody_z =     G0 * (1 - 2 * (qx * qx + qy * qy))
 
-  // Total body forces
-  const Fx = Fx_total + Fx_grav
-  const Fy = Fy_total + Fy_grav
-  const Fz = Fz_total + Fz_grav
+  // Total body forces → body accelerations
+  const ax_b = (Fx_total + massKg * gBody_x) / massKg
+  const ay_b = (Fy_aero  + massKg * gBody_y) / massKg
+  const az_b = (Fz_aero  + massKg * gBody_z) / massKg
 
-  // Accelerations in body frame
-  const ax_b = Fx / massKg
-  const ay_b = Fy / massKg
-  const az_b = Fz / massKg
-
-  // Rotate body acceleration to NED for velocity derivative
-  const accelBody: Vec3 = [ax_b, ay_b, az_b]
-  const accelNED = quatRotateVec(q, accelBody)
-  // Subtract centripetal terms from body: a_NED = R * a_body (no Coriolis for inertial sim)
-  const dvdt: Vec3 = [accelNED[0], accelNED[1], accelNED[2]]
+  // Rotate body acceleration to NED — inline quatRotateVec (no Vec3 allocation)
+  const acTx = 2 * (qy * az_b - qz * ay_b)
+  const acTy = 2 * (qz * ax_b - qx * az_b)
+  const acTz = 2 * (qx * ay_b - qy * ax_b)
+  const dvdt_x = ax_b + qw * acTx + qy * acTz - qz * acTy
+  const dvdt_y = ay_b + qw * acTy + qz * acTx - qx * acTz
+  const dvdt_z = az_b + qw * acTz + qx * acTy - qy * acTx
 
   // Moments in body frame
-  const L = (Cl * qBar * S * b)
-  const M = (Cm * qBar * S * c)
-  const N = (Cn * qBar * S * b)
+  const L = Cl * qBar * S * b
+  const M = Cm * qBar * S * c
+  const N = Cn * qBar * S * b
 
-  // Angular acceleration from Euler equations
-  const inertia = computeInertia(spec, 0) // approximation
+  // Angular acceleration from Euler equations (uses pre-computed inertia)
   const { Ixx, Iyy, Izz, Ixz } = inertia
-  const det = Ixx * Izz - Ixz * Ixz
+  const det  = Ixx * Izz - Ixz * Ixz
   const pdot = (Izz * (L + Ixz * p * qr - (Izz - Iyy) * qr * r) + Ixz * (N + (Ixx - Iyy) * p * qr - Ixz * qr * r)) / det
   const qdot = (M - (Ixx - Izz) * p * r - Ixz * (p * p - r * r)) / Iyy
   const rdot = (Ixx * (N + (Ixx - Iyy) * p * qr - Ixz * qr * r) + Ixz * (L + Ixz * p * qr - (Izz - Iyy) * qr * r)) / det
 
-  // Quaternion derivative: dq/dt = 0.5 * q ⊗ [0, p, q, r]
-  const [qw, qx, qy, qz] = q
-  const dqw = 0.5 * (-qx*p - qy*qr - qz*r)
-  const dqx = 0.5 * ( qw*p + qy*r  - qz*qr)
-  const dqy = 0.5 * ( qw*qr - qx*r  + qz*p)
-  const dqz = 0.5 * ( qw*r  + qx*qr - qy*p)
+  // Quaternion derivative: dq/dt = 0.5 * q ⊗ [0, p, qr, r]
+  const dqw = 0.5 * (-qx * p  - qy * qr - qz * r )
+  const dqx = 0.5 * ( qw * p  + qy * r  - qz * qr)
+  const dqy = 0.5 * ( qw * qr - qx * r  + qz * p )
+  const dqz = 0.5 * ( qw * r  + qx * qr - qy * p )
 
-  return makeStateVec(
-    vel,                           // dpos/dt = vel
-    dvdt,                          // dvel/dt = accel
-    [dqw, dqx, dqy, dqz],          // dq/dt
-    [pdot, qdot, rdot]             // domega/dt
-  )
+  // Write into output buffer (no makeStateVec allocation)
+  out[0] = vx;    out[1] = vy;    out[2] = vz     // dpos/dt = vel
+  out[3] = dvdt_x; out[4] = dvdt_y; out[5] = dvdt_z  // dvel/dt
+  out[6] = dqw;  out[7] = dqx;  out[8] = dqy;  out[9] = dqz  // dq/dt
+  out[10] = pdot; out[11] = qdot; out[12] = rdot              // domega/dt
 }
 
-// RK4 integration
+// ─── RK4 integration ─────────────────────────────────────────────────────────
+
 export function stepRK4(
   sv: StateVec,
   spec: AircraftSpec,
@@ -175,15 +198,23 @@ export function stepRK4(
   flapCD = 0,
   minAltM = 0
 ): StateVec {
-  const k1 = computeDerivative(sv, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
-  const sv2 = addSV(sv, scaleSV(k1, dt * 0.5))
-  const k2 = computeDerivative(sv2, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
-  const sv3 = addSV(sv, scaleSV(k2, dt * 0.5))
-  const k3 = computeDerivative(sv3, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
-  const sv4 = addSV(sv, scaleSV(k3, dt))
-  const k4 = computeDerivative(sv4, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD)
+  // Hoist inertia: it only depends on spec and fuelKg=0, so it is constant for all four stages.
+  const inertia = computeInertia(spec, 0)
 
-  const result = addSV(sv, scaleSV(addSV4(k1, k2, k3, k4), dt / 6)) as StateVec
+  computeDerivativeInto(sv, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, inertia, _k1)
+  addScaledSVInto(sv, _k1, dt * 0.5, _svT)
+
+  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, inertia, _k2)
+  addScaledSVInto(sv, _k2, dt * 0.5, _svT)
+
+  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, inertia, _k3)
+  addScaledSVInto(sv, _k3, dt, _svT)
+
+  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, inertia, _k4)
+
+  // Allocate exactly one new array for the result that callers store in state.sv
+  const result = new Array(13) as StateVec
+  weightedRK4SumInto(sv, _k1, _k2, _k3, _k4, dt / 6, result)
 
   // Renormalize quaternion
   const qLen = Math.sqrt(result[6]**2 + result[7]**2 + result[8]**2 + result[9]**2)
@@ -191,45 +222,52 @@ export function stepRK4(
     result[6] /= qLen; result[7] /= qLen; result[8] /= qLen; result[9] /= qLen
   }
 
-  // Ground clamp: keep aircraft center at least minAltM above terrain
+  // Ground clamp
   if (-result[2] < minAltM) {
     result[2] = -minAltM
-    if (result[5] > 0) result[5] = 0  // stop downward velocity
+    if (result[5] > 0) result[5] = 0
   }
 
   return result
 }
 
+// ─── Derived flight state (HUD / instruments) ────────────────────────────────
+
 export function computeDerivedState(sv: StateVec, spec: AircraftSpec) {
-  const { pos, vel, q, omega } = extractFromSV(sv)
-  const speedMS = Math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
-  const altM = -pos[2]
-  const atm = computeAtmosphere(altM, speedMS)
+  // Read from sv by index to avoid extractFromSV sub-array allocations
+  const vx = sv[3]!, vy = sv[4]!, vz = sv[5]!
+  const qw = sv[6]!, qx = sv[7]!, qy = sv[8]!, qz = sv[9]!
+  const altM    = -sv[2]!
+  const speedMS = Math.sqrt(vx*vx + vy*vy + vz*vz)
+
+  const atm  = computeAtmosphere(altM, speedMS)
   const mach = speedMS / atm.speedOfSoundMS
 
-  const velBody = quatRotateVec(quatConjugate(q), vel)
-  const u = velBody[0], v_b = velBody[1], w = velBody[2]
-  const vt = Math.max(Math.sqrt(u*u + v_b*v_b + w*w), 0.1)
+  // Velocity in body frame — inline conjugate rotation (no Quat allocation)
+  const velTx = 2 * (-qy * vz + qz * vy)
+  const velTy = 2 * (-qz * vx + qx * vz)
+  const velTz = 2 * (-qx * vy + qy * vx)
+  const u   = vx + qw * velTx - qy * velTz + qz * velTy
+  const v_b = vy + qw * velTy - qz * velTx + qx * velTz
+  const w   = vz + qw * velTz - qx * velTy + qy * velTx
+  const vt  = Math.max(Math.sqrt(u*u + v_b*v_b + w*w), 0.1)
+
   const alphaDeg = Math.atan2(w, Math.max(u, 0.1)) * RAD2DEG
   const betaDeg  = Math.asin(clamp(v_b / vt, -1, 1)) * RAD2DEG
 
-  // IAS (indicated airspeed) approximation
+  // IAS approximation
   const iasMS = speedMS * Math.sqrt(atm.densityKgM3 / 1.225)
   const iasKts = iasMS * 1.94384
 
-  // Load factor (Gz): specific force in body z divided by g
-  const gNED: Vec3 = [0, 0, G0]
-  const gBody = quatRotateVec(quatConjugate(q), gNED)
-  const qBar = atm.dynamicPressurePa
-  const S = spec.mass.wingAreaM2
-  const CL = computeAeroCoeffs(spec.aero, alphaDeg, betaDeg, mach, omega[0], omega[1], omega[2],
-    spec.mass.wingspanM, spec.mass.macM, vt).CL
+  // Load factor: CL-only aero lookup (avoids the CD/Cm table lookups and object build)
+  const qBar  = atm.dynamicPressurePa
+  const S     = spec.mass.wingAreaM2
+  const CL    = computeCL(spec.aero, alphaDeg, mach)
   const liftN = CL * qBar * S
-  const massKg = computeTotalMass(spec, 0, [])
-  const gCurrent = liftN / (massKg * G0)
+  const massKg    = computeTotalMass(spec, 0, [])
+  const gCurrent  = liftN / (massKg * G0)
 
   // Euler angles from quaternion
-  const [qw, qx, qy, qz] = q
   const yaw   = Math.atan2(2*(qw*qz + qx*qy), 1 - 2*(qy*qy + qz*qz)) * RAD2DEG
   const pitch = Math.asin(clamp(2*(qw*qy - qz*qx), -1, 1)) * RAD2DEG
   const roll  = Math.atan2(2*(qw*qx + qy*qz), 1 - 2*(qx*qx + qy*qy)) * RAD2DEG
@@ -237,19 +275,8 @@ export function computeDerivedState(sv: StateVec, spec: AircraftSpec) {
   return {
     alphaDeg, betaDeg, mach, iasKts, altitudeM: altM,
     gCurrent, yaw, pitch, roll, speedMS,
-    vviMps: -vel[2],  // NED: negative z = upward
-    headingDeg: (yaw + 360) % 360
+    vviMps: -vz,  // NED: negative z = upward
+    headingDeg: (yaw + 360) % 360,
   }
 }
 
-function addSV(a: StateVec, b: StateVec): StateVec {
-  return a.map((v, i) => v + b[i]!) as StateVec
-}
-
-function scaleSV(a: StateVec, s: number): StateVec {
-  return a.map(v => v * s) as StateVec
-}
-
-function addSV4(k1: StateVec, k2: StateVec, k3: StateVec, k4: StateVec): StateVec {
-  return k1.map((_, i) => k1[i]! + 2*k2[i]! + 2*k3[i]! + k4[i]!) as StateVec
-}

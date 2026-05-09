@@ -6,6 +6,10 @@ import { nedToThree } from '../utils/MathUtils'
 import type { ChaffCloud } from '../avionics/CMDS'
 import type { FlareContact } from '../types/ir'
 
+// Reusable temporaries for mesh orientation — avoids per-frame Vector3 allocations
+const _netMissileDir    = new THREE.Vector3()
+const _netMissileLookAt = new THREE.Vector3()
+
 // Shared missile geometry: cylinder with long axis along +Z so lookAt() aligns with velocity.
 const REMOTE_MISSILE_GEO = (() => {
   const g = new THREE.CylinderGeometry(0.07, 0.09, 1.8, 6)
@@ -72,8 +76,10 @@ export class NetworkAircraft extends Aircraft {
       mesh.position.copy(worldPos)
       const speed = Math.sqrt(m.velocityNED[0] ** 2 + m.velocityNED[1] ** 2 + m.velocityNED[2] ** 2)
       if (speed > 1) {
-        const dir = nedToThree(m.velocityNED).normalize()
-        mesh.lookAt(mesh.position.clone().add(dir))
+        // Reuse module-level vectors — avoids two Vector3 allocations per active missile per frame
+        _netMissileDir.set(m.velocityNED[1], -m.velocityNED[2], -m.velocityNED[0]).normalize()
+        _netMissileLookAt.addVectors(mesh.position, _netMissileDir)
+        mesh.lookAt(_netMissileLookAt)
       }
     }
     for (const [id, mesh] of this._missileMeshes) {

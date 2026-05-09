@@ -7,7 +7,7 @@ import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
 import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint, setGearVisible, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
-import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp } from '../utils/MathUtils'
+import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp, MESH_BIAS_QUAT } from '../utils/MathUtils'
 import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
 import { ThrusterEffect } from '../scene/ThrusterEffect'
@@ -164,13 +164,10 @@ export class Aircraft {
     const quat = nedQuatToThree(this.state.attitudeQuat)
     // PlaceholderMesh fuselage runs along local +X; we need it to face Three.js -Z (NED North).
     // nedQuatToThree(identity) = identity, so add a +90° Y-bias to rotate +X → -Z.
-    // This mirrors the group.rotation.y = π/2 in PlaceholderMeshes but is applied
-    // AFTER the attitude quaternion so it isn't silently overwritten.
-    const meshBias = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(0, 1, 0), Math.PI / 2
-    )
+    // MESH_BIAS_QUAT is a module-level constant — quat.multiply() modifies quat in-place,
+    // so MESH_BIAS_QUAT itself is never mutated.
     this.mesh.position.copy(pos)
-    this.mesh.quaternion.copy(quat.multiply(meshBias))
+    this.mesh.quaternion.copy(quat.multiply(MESH_BIAS_QUAT))
 
     // Engine glow: extinguished when engine is failed
     const thrThrottle = this.damage.engineFailed ? 0 : this.state.throttle
@@ -197,6 +194,7 @@ export class Aircraft {
   }
 
   dispose(): void {
+    this.thrusterEffect.dispose()
     this.scene.remove(this.mesh)
   }
 }
