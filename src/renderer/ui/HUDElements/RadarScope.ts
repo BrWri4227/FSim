@@ -1,9 +1,9 @@
 import type { RadarState } from '../../types/radar'
-import type { Vec3 } from '../../types/common'
+import type { Vec3, Quat } from '../../types/common'
 import { mToNm } from '../../utils/Units'
-import { v3dist } from '../../utils/MathUtils'
+import { v3dist, quatRotateVec, quatConjugate } from '../../utils/MathUtils'
 
-export function drawRadarScope(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radar: RadarState, ownPos: Vec3): void {
+export function drawRadarScope(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radar: RadarState, ownPos: Vec3, ownAttitudeQuat?: Quat): void {
   ctx.strokeStyle = '#00ff44'
   ctx.lineWidth = 1
   ctx.strokeRect(x, y, w, h)
@@ -38,16 +38,34 @@ export function drawRadarScope(ctx: CanvasRenderingContext2D, x: number, y: numb
   // Tracks
   for (const t of radar.tracks) {
     const rangeM = v3dist(t.positionNED, ownPos)
-    const dx = t.positionNED[1] - ownPos[1]
-    const dy = t.positionNED[0] - ownPos[0]
-    const azDeg = Math.atan2(dx, dy) * (180 / Math.PI)
+    let azDeg: number
+    if (ownAttitudeQuat) {
+      // Body-relative azimuth — world delta rotated into body frame.
+      const wd: Vec3 = [
+        t.positionNED[0] - ownPos[0],
+        t.positionNED[1] - ownPos[1],
+        t.positionNED[2] - ownPos[2],
+      ]
+      const bd = quatRotateVec(quatConjugate(ownAttitudeQuat), wd)
+      azDeg = Math.atan2(bd[1], bd[0]) * (180 / Math.PI)
+    } else {
+      // Fallback: bearing from north (matches legacy behaviour when only facing north).
+      const dx = t.positionNED[1] - ownPos[1]
+      const dy = t.positionNED[0] - ownPos[0]
+      azDeg = Math.atan2(dx, dy) * (180 / Math.PI)
+    }
+
+    // Skip targets outside the ±60° scope cone — they're behind the wing or off the side.
+    if (azDeg < -60 || azDeg > 60) continue
+    if (rangeM > radar.rangeModeM) continue
 
     const tx = x + ((azDeg + 60) / 120) * w
     const ty = y + h - (rangeM / radar.rangeModeM) * h
-    const isSTT = radar.mode === 'STT' && t.entityId === radar.sttTargetId
-    const isSelected = !isSTT && t.entityId === radar.selectedTrackId
+    // STT for aircraft, or GMTI lock for ground — both render as the hard-lock symbol.
+    const isLocked = (radar.mode === 'STT' || radar.mode === 'GMTI') && t.entityId === radar.sttTargetId
+    const isSelected = !isLocked && t.entityId === radar.selectedTrackId
 
-    if (isSTT) {
+    if (isLocked) {
       // White square — hard lock
       ctx.strokeStyle = '#ffffff'
       ctx.lineWidth = 1.5
@@ -80,7 +98,7 @@ export function drawRadarScope(ctx: CanvasRenderingContext2D, x: number, y: numb
     }
 
     // Range label
-    ctx.fillStyle = isSTT ? '#ffffff' : isSelected ? '#ffee00' : '#00ff44'
+    ctx.fillStyle = isLocked ? '#ffffff' : isSelected ? '#ffee00' : '#00ff44'
     ctx.font = '9px monospace'
     ctx.fillText(`${Math.round(mToNm(rangeM))}`, tx + 5, ty - 2)
   }

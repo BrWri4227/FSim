@@ -29,7 +29,7 @@ export interface ActiveRadarSeekerSpec {
 export interface MissileSpec {
   id: string
   displayName: string
-  category: 'IR_MISSILE' | 'ARH_MISSILE'
+  category: 'IR_MISSILE' | 'ARH_MISSILE' | 'AGM_MISSILE'
   nation: 'USA' | 'RUS'
   massKg: number
   dragCd: number

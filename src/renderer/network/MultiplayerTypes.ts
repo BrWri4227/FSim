@@ -13,7 +13,7 @@ export interface NetPlayerProfile {
 }
 
 export interface NetRadarState {
-  mode: 'OFF' | 'RWS' | 'TWS' | 'STT'
+  mode: 'OFF' | 'RWS' | 'TWS' | 'STT' | 'GMTI'
   sttTargetId: string | null
 }
 

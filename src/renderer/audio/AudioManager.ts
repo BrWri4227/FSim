@@ -28,7 +28,6 @@ export type AudioEvent =
 //
 //   engine_idle.wav        — jet engine at idle thrust
 //   engine_mil.wav         — military (dry) power
-//   engine_ab.wav          — full afterburner
 //   engine_flameout.wav    — engine wind-down / compressor stall
 //   gun_20mm.wav           — M61A1 burst (looped)
 //   gun_30mm.wav           — GSh-30 burst (looped)
@@ -46,14 +45,21 @@ export type AudioEvent =
 
 const SOUND_FILES: Record<string, string> = {
   engine_idle:       'engine_idle.wav',
-  engine_ab:         'engine_ab.wav',
   engine_flameout:   'engine_flameout.wav',
+  engine_fire_left:  'engine_fire_left.wav',
+  engine_fire_right: 'engine_fire_right.wav',
   gun_20mm:          'gun_20mm.wav',
   gun_30mm:          'gun_30mm.wav',
   ir_growl_cold:     'ir_growl_cold.wav',
   ir_growl_hot:      'ir_growl_hot.wav',
   chaff:             'chaff.wav',
   flare:             'flare.wav',
+  bingo_fuel:        'bingo_fuel.wav',
+  fuel_low:          'fuel_low.wav',
+  flight_controls:   'flight_controls.wav',
+  altitude:          'altitude.wav',
+  roll_left:         'roll_left.wav',
+  roll_right:        'roll_right.wav',
   rwr_search:        'rwr_search.wav',
   rwr_track:         'rwr_track.wav',
   rwr_lock:          'rwr_lock.wav',
@@ -64,6 +70,11 @@ const SOUND_FILES: Record<string, string> = {
   pull_up:           'pull_up.wav',
   pull_up_urgent:    'pull_up_urgent.wav',
 }
+
+const OPTIONAL_SOUND_FILES = new Set(['pitbull', 'shoot'])
+const BINGO_FUEL_FRACTION = 0.20
+const LOW_FUEL_FRACTION = 0.10
+const CALLOUT_COOLDOWN_SEC = 10
 
 export class AudioManager {
   private ctx: AudioContext
@@ -81,6 +92,12 @@ export class AudioManager {
   private engineSrc:  AudioBufferSourceNode | null = null
   private engineSrcGain: GainNode | null = null
   private useFileEngine = false
+  private prevEngineFailed = false
+  private bingoFuelCalled = false
+  private fuelLowCalled = false
+  private engineFireCalled = false
+  private lastFlightControlsCalloutSec = -Infinity
+  private lastAltitudeCalloutSec = -Infinity
 
   // ── RWR / radar tones ───────────────────────────────────────────────────
   private radarToneOsc:      OscillatorNode | null = null
@@ -172,10 +189,12 @@ export class AudioManager {
         }
       }
       if (!loaded) {
-        if (lastDecodeError) {
-          console.warn(`[Audio] Failed to decode ${file}; synthesis fallback active.`, lastDecodeError)
-        } else {
-          console.warn(`[Audio] Missing sound file ${file}; synthesis fallback active.`)
+        if (!OPTIONAL_SOUND_FILES.has(key)) {
+          if (lastDecodeError) {
+            console.warn(`[Audio] Failed to decode ${file}; synthesis fallback active.`, lastDecodeError)
+          } else {
+            console.warn(`[Audio] Missing sound file ${file}; synthesis fallback active.`)
+          }
         }
       }
     })
@@ -289,6 +308,7 @@ export class AudioManager {
   ): void {
     this.resume()
     this.updateEngine(player.state.throttle, player.state.mach, player.damage.engineFailed)
+    this.updateSystemCallouts(player)
 
     // Gun
     if (controls) {
@@ -421,10 +441,7 @@ export class AudioManager {
         break
       case 'ENGINE_FLAMEOUT':
         if (!this.playOnce('engine_flameout', 0.8)) this.speak('Engine flameout')
-        // Fade out synthesized engine
-        if (!this.useFileEngine) {
-          this.engineGain.gain.setTargetAtTime(0.005, this.ctx.currentTime, 0.5)
-        }
+        this.fadeEngineOut(0.5)
         break
     }
   }
@@ -444,11 +461,7 @@ export class AudioManager {
 
   private updateEngine(throttle: number, _mach: number, engineFailed: boolean): void {
     if (engineFailed) {
-      if (this.useFileEngine && this.engineSrcGain) {
-        this.engineSrcGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.8)
-      } else {
-        this.engineGain.gain.setTargetAtTime(0.002, this.ctx.currentTime, 0.8)
-      }
+      this.fadeEngineOut(0.8)
       return
     }
 
@@ -459,14 +472,73 @@ export class AudioManager {
       this.engineSrcGain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.2)
     } else {
       const freq = 80 + throttle * 200
-      const vol  = 0.02 + throttle * 0.07
+      const abMix = clamp01((throttle - 0.76) / 0.24)
+      const vol  = 0.02 + throttle * 0.07 + abMix * 0.055
       this.engineOsc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.3)
+      this.engineLP.frequency.setTargetAtTime(600 + abMix * 900, this.ctx.currentTime, 0.2)
       this.engineGain.gain.setTargetAtTime(vol,  this.ctx.currentTime, 0.2)
     }
   }
 
-  // ── Cannon ────────────────────────────────────────────────────────────────
+  // Engine shutdown and caution callouts
 
+  private fadeEngineOut(timeConstantSec: number): void {
+    if (this.useFileEngine) {
+      this.engineSrcGain?.gain.setTargetAtTime(0, this.ctx.currentTime, timeConstantSec)
+    } else {
+      this.engineGain.gain.setTargetAtTime(0.002, this.ctx.currentTime, timeConstantSec)
+    }
+  }
+
+  private updateSystemCallouts(player: import('../entities/PlayerAircraft').PlayerAircraft): void {
+    const state = player.state
+    const damage = player.damage
+    const nowSec = this.ctx.currentTime
+
+    if (damage.engineFailed && !this.prevEngineFailed) {
+      this.play('ENGINE_FLAMEOUT')
+    }
+    this.prevEngineFailed = damage.engineFailed
+
+    if (damage.onFire && !this.engineFireCalled) {
+      if (!this.playOnce('engine_fire_left', 0.9) && !this.playOnce('engine_fire_right', 0.9)) {
+        this.speak('Engine fire')
+      }
+      this.engineFireCalled = true
+    } else if (!damage.onFire) {
+      this.engineFireCalled = false
+    }
+
+    const fuelFraction = state.fuelKg / Math.max(1, player.spec.mass.fuelCapacityKg)
+    if (fuelFraction > BINGO_FUEL_FRACTION + 0.05) {
+      this.bingoFuelCalled = false
+      this.fuelLowCalled = false
+    }
+    if (fuelFraction <= BINGO_FUEL_FRACTION && !this.bingoFuelCalled) {
+      if (!this.playOnce('bingo_fuel', 0.9)) this.speak('Bingo fuel')
+      this.bingoFuelCalled = true
+    }
+    if (fuelFraction <= LOW_FUEL_FRACTION && !this.fuelLowCalled) {
+      if (!this.playOnce('fuel_low', 0.9)) this.speak('Fuel low')
+      this.fuelLowCalled = true
+    }
+
+    const alphaLimit = Math.max(1, player.spec.maxAoADeg)
+    const alphaStress = Math.abs(state.alphaDeg) > alphaLimit * 0.92
+    const gStress = Math.abs(state.gCurrent) > player.spec.maxGPositive * 0.88
+    if ((alphaStress || gStress) && nowSec - this.lastFlightControlsCalloutSec > CALLOUT_COOLDOWN_SEC) {
+      if (!this.playOnce('flight_controls', 0.65)) this.speak('Flight controls')
+      this.lastFlightControlsCalloutSec = nowSec
+    }
+
+    const lowAltitude = state.altitudeM < 150 && state.vviMps < -8 && !state.onGround
+    if (lowAltitude && nowSec - this.lastAltitudeCalloutSec > CALLOUT_COOLDOWN_SEC) {
+      if (!this.playOnce('altitude', 0.75)) this.speak('Altitude')
+      this.lastAltitudeCalloutSec = nowSec
+    }
+  }
+
+  // Cannon
   private startGun(caliber: '20mm' | '30mm'): void {
     if (this.gunFiring) return
     this.gunFiring = true
@@ -764,6 +836,14 @@ export class AudioManager {
     const utt  = new SpeechSynthesisUtterance(text)
     utt.rate   = 1.2
     utt.pitch  = 0.9
+    speechSynthesis.speak(utt)
+  }
+
+  /** Public AWACS-style callout — slightly slower / lower pitch than the in-cockpit speak(). */
+  speakUtterance(text: string, opts: { rate?: number; pitch?: number } = {}): void {
+    const utt  = new SpeechSynthesisUtterance(text)
+    utt.rate   = opts.rate ?? 1.05
+    utt.pitch  = opts.pitch ?? 1.05
     speechSynthesis.speak(utt)
   }
 }

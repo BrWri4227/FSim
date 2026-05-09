@@ -10,9 +10,11 @@ import type * as THREE from 'three'
 import { R73 } from '../data/weapons/r73'
 import { getStoreDragPenalty } from '../data/weapons/catalog'
 import { v3sub, RAD2DEG, quatRotateVec, quatConjugate } from '../utils/MathUtils'
+import { getWeather, setWeather, resetWeather, type TurbulenceLevel } from '../physics/WeatherState'
+import { GROUND_TARGET_SPECS } from '../data/groundTargets/catalog'
 
 const ENEMY_SPECS = { 'F-16C': F16C, 'MiG-29': MIG29 } as const
-const BEHAVIORS   = ['FOLLOW_BEHIND', 'FOLLOW_IN_FRONT', 'FLY_STRAIGHT', 'TURN_CONSTANTLY'] as const
+const BEHAVIORS   = ['FOLLOW_BEHIND', 'FOLLOW_IN_FRONT', 'FLY_STRAIGHT', 'TURN_CONSTANTLY', 'BVR_ENGAGE'] as const
 
 export class DebugOverlay {
   private panel: HTMLDivElement
@@ -134,6 +136,51 @@ export class DebugOverlay {
       this.entityManager.launchMissileAtPlayer()
     })
     spawnSection.appendChild(missileBtn)
+
+    const wingmanBtn = this.makeButton('★ Spawn Wingman (off left wing)', () => {
+      const ps = this.player.state.positionNED
+      const vel = this.player.state.velocityNED
+      const spd = Math.hypot(vel[0], vel[1]) || 250
+      const fwdN = vel[0] / spd, fwdE = vel[1] / spd
+      // Left wing is rotated 90° CCW from forward in horizontal plane
+      const leftN = -fwdE
+      const leftE = fwdN
+      const spawnPos: [number, number, number] = [
+        ps[0] + leftN * 200 - fwdN * 80,
+        ps[1] + leftE * 200 - fwdE * 80,
+        ps[2],
+      ]
+      const spawnVel: [number, number, number] = [vel[0], vel[1], 0]
+      // Match the player's own aircraft type so the wingman has matching capabilities.
+      this.entityManager.spawnWingman(this.player.spec, [], spawnPos, spawnVel)
+    })
+    spawnSection.appendChild(wingmanBtn)
+
+    // Ground target spawner
+    const gtSel = document.createElement('select')
+    Object.assign(gtSel.style, this.selectStyle())
+    Object.values(GROUND_TARGET_SPECS).forEach(spec => {
+      const opt = document.createElement('option')
+      opt.value = spec.id
+      opt.textContent = spec.displayName
+      gtSel.appendChild(opt)
+    })
+    spawnSection.appendChild(gtSel)
+    spawnSection.appendChild(this.makeButton('▼ Spawn Ground Target (3 km below)', () => {
+      const ps = this.player.state.positionNED
+      const vel = this.player.state.velocityNED
+      const spd = Math.hypot(vel[0], vel[1]) || 250
+      const uN = vel[0] / spd, uE = vel[1] / spd
+      const dropDistM = 3000
+      const spec = GROUND_TARGET_SPECS[gtSel.value]!
+      const pos: [number, number, number] = [
+        ps[0] + uN * dropDistM,
+        ps[1] + uE * dropDistM,
+        0,  // ground
+      ]
+      this.entityManager.spawnGroundTarget(spec, pos, Math.atan2(uE, uN) * RAD2DEG)
+    }))
+
     p.appendChild(spawnSection)
 
     // ── PLAYER CONTROLS ──────────────────────────────────────────────────────
@@ -174,6 +221,21 @@ export class DebugOverlay {
       this.player.reloadWeapons()
       this.updateWeaponLabel()
     }))
+    playerSection.appendChild(this.makeButton('+ Load A/G stores (AGM-65 ×2, Mk-82 ×4)', () => {
+      this.player.loadAirToGroundStores()
+      this.updateWeaponLabel()
+    }))
+    playerSection.appendChild(this.makeButton('◎ Toggle TGP / FLIR', () => {
+      this.player.targetingPod.toggle()
+    }))
+    playerSection.appendChild(this.makeButton('◉ TGP: Auto-lock closest ground target', () => {
+      this.player.targetingPod.lockClosest(
+        this.player.state.positionNED,
+        this.player.state.attitudeQuat,
+        this.entityManager.getGroundTargets(),
+        90,  // wide cone for debug ease — pod doesn't need to be precisely pointed
+      )
+    }))
     playerSection.appendChild(this.makeButton('⊕ Reset Position', () => this.player.resetPosition()))
     p.appendChild(playerSection)
 
@@ -204,6 +266,79 @@ export class DebugOverlay {
       visSection.appendChild(document.createElement('br'))
     }
     p.appendChild(visSection)
+
+    // ── WEATHER ───────────────────────────────────────────────────────────────
+    const wxSection = this.makeSection('WEATHER')
+
+    const wxRow = (label: string, child: HTMLElement) => {
+      const row = document.createElement('div')
+      Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '6px', margin: '4px 0' })
+      const lbl = document.createElement('span')
+      lbl.textContent = label
+      Object.assign(lbl.style, { color: '#9c9', fontSize: '11px', minWidth: '70px' })
+      row.appendChild(lbl)
+      row.appendChild(child)
+      return row
+    }
+
+    const wx = getWeather()
+
+    // Surface wind direction (FROM degrees)
+    const dirSlider = document.createElement('input')
+    dirSlider.type = 'range'; dirSlider.min = '0'; dirSlider.max = '359'; dirSlider.step = '5'
+    dirSlider.value = String(wx.surfaceWindFromDeg)
+    Object.assign(dirSlider.style, { flex: '1', cursor: 'pointer', accentColor: '#0f0' })
+    const dirLabel = document.createElement('span')
+    Object.assign(dirLabel.style, { color: '#0ff', fontSize: '11px', minWidth: '36px' })
+    dirLabel.textContent = `${wx.surfaceWindFromDeg}°`
+    dirSlider.oninput = () => {
+      const v = parseInt(dirSlider.value, 10)
+      dirLabel.textContent = `${v}°`
+      setWeather({ surfaceWindFromDeg: v, upperWindFromDeg: v })
+    }
+    const dirRow = document.createElement('div')
+    Object.assign(dirRow.style, { display: 'flex', gap: '4px' })
+    dirRow.appendChild(dirSlider); dirRow.appendChild(dirLabel)
+    wxSection.appendChild(wxRow('Wind FROM', dirRow))
+
+    // Wind speed (m/s — surface; upper auto-set to 1.5×)
+    const spdSlider = document.createElement('input')
+    spdSlider.type = 'range'; spdSlider.min = '0'; spdSlider.max = '40'; spdSlider.step = '1'
+    spdSlider.value = String(wx.surfaceWindMS)
+    Object.assign(spdSlider.style, { flex: '1', cursor: 'pointer', accentColor: '#0f0' })
+    const spdLabel = document.createElement('span')
+    Object.assign(spdLabel.style, { color: '#0ff', fontSize: '11px', minWidth: '52px' })
+    spdLabel.textContent = `${wx.surfaceWindMS} m/s`
+    spdSlider.oninput = () => {
+      const v = parseInt(spdSlider.value, 10)
+      spdLabel.textContent = `${v} m/s`
+      setWeather({ surfaceWindMS: v, upperWindMS: v * 1.5 })
+    }
+    const spdRow = document.createElement('div')
+    Object.assign(spdRow.style, { display: 'flex', gap: '4px' })
+    spdRow.appendChild(spdSlider); spdRow.appendChild(spdLabel)
+    wxSection.appendChild(wxRow('Wind speed', spdRow))
+
+    // Turbulence
+    const turbSel = document.createElement('select')
+    Object.assign(turbSel.style, this.selectStyle())
+    ;(['CALM', 'LIGHT', 'MODERATE', 'SEVERE'] as TurbulenceLevel[]).forEach(t => {
+      const opt = document.createElement('option')
+      opt.value = opt.textContent = t
+      if (t === wx.turbulence) opt.selected = true
+      turbSel.appendChild(opt)
+    })
+    turbSel.onchange = () => setWeather({ turbulence: turbSel.value as TurbulenceLevel })
+    wxSection.appendChild(wxRow('Turbulence', turbSel))
+
+    wxSection.appendChild(this.makeButton('↺ Reset weather', () => {
+      resetWeather()
+      const w = getWeather()
+      dirSlider.value = String(w.surfaceWindFromDeg); dirLabel.textContent = `${w.surfaceWindFromDeg}°`
+      spdSlider.value = String(w.surfaceWindMS); spdLabel.textContent = `${w.surfaceWindMS} m/s`
+      turbSel.value = w.turbulence
+    }))
+    p.appendChild(wxSection)
 
     const radarSim = this.makeSection('ENEMY RADAR / RWR SIM')
     Object.assign(this.enemyRwrStatus.style, {
@@ -251,6 +386,9 @@ export class DebugOverlay {
     let trLine = `TrnRt: ${trSign}${state.headingRateDegPerSec.toFixed(1)}°/s`
     const refTurn = sustainedTurnRateRefDegS(this.player.spec.id)
     if (refTurn) trLine += ` (ref ${refTurn.min}–${refTurn.max})`
+    const sinkLine = state.lastTouchdownSinkMS != null
+      ? `\nTD sink: ${state.lastTouchdownSinkMS.toFixed(1)} m/s${state.gearCollapsed ? ' [GEAR FAIL]' : ''}`
+      : ''
     this.telemetry.textContent =
       `IAS:   ${kts} kt\n` +
       `AoA:   ${state.alphaDeg.toFixed(1)}°\n` +
@@ -260,7 +398,8 @@ export class DebugOverlay {
       `${trLine}\n` +
       `Hdg:   ${Math.round(state.headingDeg).toString().padStart(3,'0')}°\n` +
       `Pitch: ${state.pitchDeg.toFixed(1)}°\n` +
-      `Roll:  ${state.rollDeg.toFixed(1)}°`
+      `Roll:  ${state.rollDeg.toFixed(1)}°` +
+      sinkLine
     this.updateWeaponLabel()
     this.updateEnemyRwrSimStatus()
   }

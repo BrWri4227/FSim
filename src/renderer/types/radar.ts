@@ -1,6 +1,6 @@
 import type { Vec3 } from './common'
 
-export type RadarMode = 'OFF' | 'RWS' | 'TWS' | 'STT'
+export type RadarMode = 'OFF' | 'RWS' | 'TWS' | 'STT' | 'GMTI'
 
 export interface RadarTrack {
   entityId: string

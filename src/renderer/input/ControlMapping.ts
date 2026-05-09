@@ -20,6 +20,13 @@ export interface KeyBindings {
   radarLockTarget: string
   radarUnlock: string
   eject:      string
+  tgpToggle:  string
+  tgpLock:    string
+  tgpUnlock:  string
+  wingmanEngage: string
+  wingmanCover:  string
+  wingmanRTB:    string
+  wingmanRejoin: string
 }
 
 export const DEFAULT_BINDINGS: KeyBindings = {
@@ -44,4 +51,11 @@ export const DEFAULT_BINDINGS: KeyBindings = {
   radarLockTarget: 'KeyL',
   radarUnlock:  'KeyU',
   eject:        'Backquote',
+  tgpToggle:    'KeyP',
+  tgpLock:      'KeyO',
+  tgpUnlock:    'KeyK',
+  wingmanEngage: 'Digit1',
+  wingmanCover:  'Digit2',
+  wingmanRTB:    'Digit3',
+  wingmanRejoin: 'Digit4',
 }

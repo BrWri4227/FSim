@@ -1,6 +1,7 @@
 import type { AircraftSpec, AircraftState } from '../types/aircraft'
 import type { RadarState, RadarTrack } from '../types/radar'
 import type { Aircraft } from '../entities/Aircraft'
+import type { GroundTarget } from '../entities/GroundTarget'
 import { computeDetectionRange, isInScanBeam } from './RadarDetection'
 import { v3dist } from '../utils/MathUtils'
 
@@ -32,12 +33,18 @@ export class Radar {
    * @param skipBeamCheck — When true (AI prosecuting a priority bandit), any target in kinematic range
    *   can be tracked without lying in the instantaneous scan beam. Player radar keeps default false.
    */
-  update(dt: number, ownState: AircraftState, enemies: Aircraft[], cycleMode: boolean, skipBeamCheck = false): void {
+  update(dt: number, ownState: AircraftState, enemies: Aircraft[], cycleMode: boolean, skipBeamCheck = false, groundTargets: GroundTarget[] = []): void {
     this.time += dt
 
     if (cycleMode) this.cycleMode()
 
     if (this.state.mode === 'OFF') return
+
+    // GMTI mode: scan ground targets only. Aircraft tracks are dropped while in GMTI.
+    if (this.state.mode === 'GMTI') {
+      this.updateGMTI(dt, ownState, groundTargets, skipBeamCheck)
+      return
+    }
 
     // Build live-trackable map in a single pass (avoids filter + separate map calls)
     const liveTrackable = new Map<string, Aircraft>()
@@ -124,7 +131,16 @@ export class Radar {
   }
 
   lockSelectedTarget(): void {
-    if (this.state.selectedTrackId) this.lockSTT(this.state.selectedTrackId)
+    if (!this.state.selectedTrackId) return
+    // GMTI lock-on stays in GMTI — STT is the aircraft-tracking mode and would
+    // immediately drop a ground entity (it isn't in the aircraft live-track set).
+    if (this.state.mode === 'GMTI') {
+      const t = this.trackById.get(this.state.selectedTrackId)
+      if (t) t.isSTT = true
+      this.state.sttTargetId = this.state.selectedTrackId
+      return
+    }
+    this.lockSTT(this.state.selectedTrackId)
   }
 
   unlockSTT(): void {
@@ -166,9 +182,104 @@ export class Radar {
   }
 
   cycleMode(): void {
-    const modes = ['OFF', 'RWS', 'TWS', 'STT'] as const
+    const modes = ['OFF', 'RWS', 'TWS', 'STT', 'GMTI'] as const
     const idx = modes.indexOf(this.state.mode)
     this.state.mode = modes[(idx + 1) % modes.length]!
+    // Switching modes drops the previous track set so air/ground tracks don't mix on screen.
+    if (this.state.mode === 'GMTI' || this.state.mode === 'OFF') {
+      this.state.tracks = []
+      this.trackById.clear()
+      this.state.selectedTrackId = null
+      this.state.sttTargetId = null
+    }
+  }
+
+  /** GMTI scan: detects ground targets within range (uses ground RCS, ignores aspect). */
+  private updateGMTI(dt: number, ownState: AircraftState, groundTargets: GroundTarget[], skipBeamCheck: boolean): void {
+    // Advance the scan bar like RWS but with a wider effective beam.
+    this.state.azimuthDeg += this.state.scanRateDegs * dt
+    if (this.state.azimuthDeg > 60) this.state.azimuthDeg = -60
+
+    const live = new Map<string, GroundTarget>()
+    for (const g of groundTargets) {
+      if (g.state.destroyed) continue
+      live.set(g.entityId, g)
+    }
+
+    for (const [, gt] of live) {
+      const dist = v3dist(ownState.positionNED, gt.state.positionNED)
+      if (dist > this.state.rangeModeM * 1.5) continue
+      const maxRange = computeDetectionRange(this.spec, gt.spec.rcsM2)
+      if (dist > maxRange) continue
+      // GMTI uses an azimuth-only scan check — real GMTI radars sweep a wide elevation
+      // cone aimed at the ground, so the standard ±4° elevation bar from `isInScanBeam`
+      // would never catch targets directly below the aircraft.
+      if (skipBeamCheck || this.isInGMTIBeam(ownState, gt.state.positionNED)) {
+        this.upsertGroundTrack(gt)
+      }
+    }
+
+    // Decay / prune
+    this.state.tracks = this.state.tracks.filter(t => {
+      if (!live.has(t.entityId)) {
+        this.trackById.delete(t.entityId)
+        return false
+      }
+      t.confidence = Math.max(0, t.confidence - dt * 0.1)
+      if (t.confidence <= 0.05) {
+        this.trackById.delete(t.entityId)
+        return false
+      }
+      return true
+    })
+
+    if (this.state.selectedTrackId && !this.trackById.has(this.state.selectedTrackId)) {
+      this.state.selectedTrackId = this.state.tracks[0]?.entityId ?? null
+    }
+    if (!this.state.selectedTrackId && this.state.tracks.length > 0) {
+      this.state.selectedTrackId = this.state.tracks[0]!.entityId
+    }
+  }
+
+  /** Azimuth-only scan check for GMTI — accepts any depression angle. */
+  private isInGMTIBeam(ownState: AircraftState, targetPosNED: [number, number, number]): boolean {
+    const dx = targetPosNED[0] - ownState.positionNED[0]
+    const dy = targetPosNED[1] - ownState.positionNED[1]
+    const dz = targetPosNED[2] - ownState.positionNED[2]
+    // Rotate to body frame (inline conjugate-rotation)
+    const q = ownState.attitudeQuat
+    const conj: [number, number, number, number] = [q[0], -q[1], -q[2], -q[3]]
+    // 2 * cross(conj.xyz, v)
+    const tx = 2 * (conj[2] * dz - conj[3] * dy)
+    const ty = 2 * (conj[3] * dx - conj[1] * dz)
+    const tz = 2 * (conj[1] * dy - conj[2] * dx)
+    const bx = dx + conj[0] * tx + (conj[2] * tz - conj[3] * ty)
+    const by = dy + conj[0] * ty + (conj[3] * tx - conj[1] * tz)
+    if (bx <= 0) return false   // behind us
+    const azDeg = Math.atan2(by, bx) * (180 / Math.PI)
+    return Math.abs(azDeg - this.state.azimuthDeg) < 4   // 4° beam width — wider than standard
+  }
+
+  private upsertGroundTrack(gt: GroundTarget): void {
+    const existing = this.trackById.get(gt.entityId)
+    if (existing) {
+      existing.positionNED = gt.state.positionNED
+      existing.velocityNED = gt.state.velocityNED
+      existing.lastUpdateSec = this.time
+      existing.confidence = 1.0
+    } else if (this.state.tracks.length < 8) {
+      const track: RadarTrack = {
+        entityId: gt.entityId,
+        positionNED: gt.state.positionNED,
+        velocityNED: gt.state.velocityNED,
+        rcsM2: gt.spec.rcsM2,
+        lastUpdateSec: this.time,
+        confidence: 1.0,
+        isSTT: false,
+      }
+      this.state.tracks.push(track)
+      this.trackById.set(gt.entityId, track)
+    }
   }
 
   /** O(1) track lookup — preferred over iterating state.tracks when only one track is needed. */

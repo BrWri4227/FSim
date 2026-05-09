@@ -47,7 +47,15 @@ export interface MassSpec {
   IxzKgM2: number         // cross-product inertia
 }
 
-export type WeaponCategory = 'IR_MISSILE' | 'ARH_MISSILE' | 'GUN_POD' | 'FUEL_TANK' | 'EMPTY'
+export type WeaponCategory =
+  | 'IR_MISSILE'
+  | 'ARH_MISSILE'
+  | 'AGM_MISSILE'   // air-to-ground IR/optically guided (e.g. AGM-65)
+  | 'LGB'           // laser-guided bomb (e.g. GBU-12)
+  | 'BOMB'          // unguided bomb (e.g. Mk-82)
+  | 'GUN_POD'
+  | 'FUEL_TANK'
+  | 'EMPTY'
 
 export interface HardpointDef {
   id: string
@@ -105,6 +113,17 @@ export interface ControlInputs {
   radarLockTarget: boolean
   radarUnlock: boolean
   ejectRequested: boolean
+  /** TGP / FLIR pod power toggle (one-shot edge). */
+  tgpToggle: boolean
+  /** TGP auto-lock closest ground target (one-shot edge). */
+  tgpLock: boolean
+  /** TGP release lock (one-shot edge). */
+  tgpUnlock: boolean
+  /** Wingman radio commands (one-shot edges). */
+  wingmanEngage: boolean
+  wingmanCover: boolean
+  wingmanRTB: boolean
+  wingmanRejoin: boolean
 }
 
 export interface AircraftState {
@@ -136,6 +155,10 @@ export interface AircraftState {
   totalMassKg: number
   onGround: boolean
   gearDown: boolean
+  /** True if the gear collapsed from a hard touchdown — disables takeoff and applies belly-friction. */
+  gearCollapsed: boolean
+  /** Sink rate (m/s, +down) recorded at the most recent airborne→ground transition. Null until first touchdown. */
+  lastTouchdownSinkMS: number | null
   flaps: 0 | 1 | 2   // 0=up, 1=takeoff (~20°), 2=landing (~40°)
   speedBrake: boolean
   brakeHeld: boolean
