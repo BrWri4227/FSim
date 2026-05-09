@@ -7,7 +7,7 @@ import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
 import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint, setGearVisible, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
-import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp, MESH_BIAS_QUAT } from '../utils/MathUtils'
+import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp, MESH_BIAS_QUAT, RAD2DEG } from '../utils/MathUtils'
 import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
 import { ThrusterEffect } from '../scene/ThrusterEffect'
@@ -43,7 +43,7 @@ export class Aircraft {
       angularRateBody: [0,0,0],
       alphaDeg: 2, betaDeg: 0, mach: 0.75,
       iasKts: 485, altitudeM: 5000, gCurrent: 1, gMax: 1,
-      headingDeg: 0, pitchDeg: 2, rollDeg: 0, vviMps: 0,
+      headingDeg: 0, headingRateDegPerSec: 0, pitchDeg: 2, rollDeg: 0, vviMps: 0,
       throttle: 0.3, fuelKg: spec.mass.fuelCapacityKg,
       loadedStores: [...stores],
       totalMassKg: spec.mass.emptyMassKg + spec.mass.fuelCapacityKg,
@@ -65,6 +65,9 @@ export class Aircraft {
     const storeDrag = computeStoreDrag(this.state.loadedStores)
     const massKg    = computeTotalMass(this.spec, this.state.fuelKg, this.state.loadedStores)
 
+    const prevVN = this.state.velocityNED[0]
+    const prevVE = this.state.velocityNED[1]
+
     const gearDrag = this.state.gearDown ? 0.05 : 0
     const speedBrakeDrag = this.state.speedBrake ? 0.12 : 0
     const FLAP_CL = [0, 0.5, 1.0] as const
@@ -84,7 +87,7 @@ export class Aircraft {
     this.state.angularRateBody = [newSV[10], newSV[11], newSV[12]]
 
     // Derived
-    const d = computeDerivedState(newSV, this.spec)
+    const d = computeDerivedState(newSV, this.spec, massKg)
     this.state.alphaDeg   = d.alphaDeg
     this.state.betaDeg    = d.betaDeg
     this.state.mach       = d.mach
@@ -98,6 +101,20 @@ export class Aircraft {
     this.state.vviMps     = d.vviMps
     this.state.throttle   = controls.throttle
     this.state.totalMassKg = massKg
+
+    const vN = newSV[3]!, vE = newSV[4]!
+    const vH = Math.hypot(vN, vE)
+    const prevH = Math.hypot(prevVN, prevVE)
+    if (vH > 8 && prevH > 8 && dt > 1e-6) {
+      const psi0 = Math.atan2(prevVE, prevVN)
+      const psi1 = Math.atan2(vE, vN)
+      let dPsi = psi1 - psi0
+      if (dPsi > Math.PI) dPsi -= 2 * Math.PI
+      if (dPsi < -Math.PI) dPsi += 2 * Math.PI
+      this.state.headingRateDegPerSec = (dPsi / dt) * RAD2DEG
+    } else {
+      this.state.headingRateDegPerSec = 0
+    }
 
     // Ground clamp
     this.state.onGround = this.state.altitudeM <= groundClearM + 0.1

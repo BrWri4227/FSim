@@ -6,6 +6,8 @@ import { SU27 } from './su27'
 import { SU35 } from './su35'
 import type { AircraftSpec } from '../../types/aircraft'
 
+export { sustainedTurnRateRefDegS } from './turnPerformance'
+
 export const AIRCRAFT_ROSTER: AircraftSpec[] = [F16C, F15C, FA18C, MIG29, SU27, SU35]
 
 export function getAircraftById(id: string): AircraftSpec | null {

@@ -81,6 +81,7 @@ export class EntityManager {
       }
       const controls = runAIBrain(ai, player as unknown as Aircraft, dt)
       ai.update(controls, dt)
+      ai.updateRadarVsBandit(dt, player as unknown as Aircraft)
     }
 
   }

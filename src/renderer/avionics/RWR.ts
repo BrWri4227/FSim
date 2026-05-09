@@ -6,6 +6,10 @@ import { v3sub, v3len, RAD2DEG, quatRotateVec, quatConjugate } from '../utils/Ma
 export class RWR {
   state: RWRState = { threats: [], hasMissileLaunch: false }
   private seenMissileIds = new Set<string>()
+  /** Persistent synthetic emitters for debug — merged after real threats each frame. */
+  private debugInjectedThreats: RWRThreat[] = []
+  /** Arms `hasMissileLaunch` when synthetic missile symbols are injected (debug overlay). */
+  private pendingSyntheticMissileVoice = false
 
   update(enemies: Aircraft[], ownState: AircraftState, ownId = 'player'): void {
     this.state.threats = []
@@ -26,6 +30,10 @@ export class RWR {
         type: isSTT || isTracked ? 'TRACK' : 'SEARCH',
         priority: isSTT ? 4 : isTracked ? 3 : 1,
       })
+    }
+
+    for (const t of this.debugInjectedThreats) {
+      this.state.threats.push({ ...t })
     }
   }
 
@@ -57,5 +65,60 @@ export class RWR {
 
     // Expire IDs for missiles that are no longer active
     this.seenMissileIds = currentIds
+
+    if (this.pendingSyntheticMissileVoice) {
+      this.state.hasMissileLaunch = true
+      this.pendingSyntheticMissileVoice = false
+    }
+  }
+
+  clearDebugInjectedThreats(): void {
+    this.debugInjectedThreats.length = 0
+  }
+
+  getDebugInjectedThreatCount(): number {
+    return this.debugInjectedThreats.length
+  }
+
+  /** Hostile search radar — new emitter id each call so search ping audio can fire. */
+  injectDebugEnemySearch(azimuthDeg: number): void {
+    this.debugInjectedThreats.push({
+      entityId: `debug_search_${performance.now().toFixed(3)}_${Math.random().toString(36).slice(2, 7)}`,
+      azimuthDeg,
+      type: 'SEARCH',
+      priority: 1,
+    })
+  }
+
+  /** Hostile track (not STT) — drives RWR track tone. */
+  injectDebugEnemyTrack(azimuthDeg: number): void {
+    this.debugInjectedThreats.push({
+      entityId: `debug_trk_${performance.now().toFixed(3)}`,
+      azimuthDeg,
+      type: 'TRACK',
+      priority: 3,
+    })
+  }
+
+  /** Hostile STT / launch-lock cue — drives RWR lock tone (priority ≥ 4). */
+  injectDebugEnemyRadarLock(azimuthDeg: number): void {
+    this.debugInjectedThreats.push({
+      entityId: `debug_lock_${performance.now().toFixed(3)}`,
+      azimuthDeg,
+      type: 'TRACK',
+      priority: 4,
+    })
+  }
+
+  /** EW missile symbol + missile-launch voice cue; no in-world missile. */
+  injectDebugEnemyMissileIndication(azimuthDeg: number, distanceM = 14000): void {
+    this.pendingSyntheticMissileVoice = true
+    this.debugInjectedThreats.push({
+      entityId: `debug_msl_${performance.now().toFixed(3)}_${Math.random().toString(36).slice(2, 7)}`,
+      azimuthDeg,
+      type: 'MISSILE',
+      priority: 5,
+      distanceM,
+    })
   }
 }

@@ -37,7 +37,10 @@ export function computeAtmosphere(altitudeM: number, speedMS: number): Atmospher
   return { densityKgM3, temperatureK: tempK, pressurePa, speedOfSoundMS, dynamicPressurePa }
 }
 
-// Thrust lapse with altitude (simplified)
+// Thrust lapse with altitude: ~σ^k matches turbofan static thrust vs density (ISA) better than a linear altitude ramp.
+// Reference density ratio σ = ρ/ρ₀ at the flight level; k≈0.78 is a common ballpark for military fans.
 export function thrustLapseFactor(altitudeM: number): number {
-  return Math.max(0.05, 1.0 - altitudeM / 55000)
+  const { densityKgM3 } = computeAtmosphere(altitudeM, 0)
+  const sigma = densityKgM3 / SEA_LEVEL_DENSITY
+  return Math.max(0.06, Math.pow(sigma, 0.78))
 }

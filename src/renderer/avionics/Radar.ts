@@ -28,7 +28,11 @@ export class Radar {
     }
   }
 
-  update(dt: number, ownState: AircraftState, enemies: Aircraft[], cycleMode: boolean): void {
+  /**
+   * @param skipBeamCheck — When true (AI prosecuting a priority bandit), any target in kinematic range
+   *   can be tracked without lying in the instantaneous scan beam. Player radar keeps default false.
+   */
+  update(dt: number, ownState: AircraftState, enemies: Aircraft[], cycleMode: boolean, skipBeamCheck = false): void {
     this.time += dt
 
     if (cycleMode) this.cycleMode()
@@ -75,7 +79,7 @@ export class Radar {
       const maxRange = computeDetectionRange(this.spec, rcs)
       if (dist > maxRange) continue
 
-      if (isInScanBeam(this.state, ownState, enemy.state)) {
+      if (skipBeamCheck || isInScanBeam(this.state, ownState, enemy.state)) {
         this.updateTrack(enemy, ownState)
       }
     }

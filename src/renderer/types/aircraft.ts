@@ -123,6 +123,8 @@ export interface AircraftState {
   gCurrent: number
   gMax: number
   headingDeg: number
+  /** Horizontal flight-path turn rate (deg/s), + = clockwise from above (NED). */
+  headingRateDegPerSec: number
   pitchDeg: number
   rollDeg: number
   vviMps: number         // vertical velocity m/s (+up)

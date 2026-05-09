@@ -4,7 +4,7 @@ import type { FlightPenalties } from '../types/damage'
 import { computeAtmosphere, thrustLapseFactor } from './Atmosphere'
 import { computeAeroCoeffs, computeCL } from './AeroCoefficients'
 import { computeControlDeltas } from './ControlEffectiveness'
-import { computeTotalMass, computeInertia } from './MassProperties'
+import { computeInertia } from './MassProperties'
 import type { InertiaMatrix } from './MassProperties'
 import { DEG2RAD, RAD2DEG, clamp } from '../utils/MathUtils'
 
@@ -79,7 +79,8 @@ function computeDerivativeInto(
 
   // Control surface deflections (radians) with FCS limits applied
   const maxPitchRad = 28 * DEG2RAD
-  const maxRollRad  = 32 * DEG2RAD
+  // ~25–28° aileron travel typical for fighters; caps peak roll rate closer to published limits
+  const maxRollRad  = 27 * DEG2RAD
   const maxYawRad   = 24 * DEG2RAD
   const pitchRadCmd = -controls.pitch * maxPitchRad * penalties.pitchAuthorityMultiplier
   const rollRadCmd  =  controls.roll  * maxRollRad  * penalties.rollAuthorityMultiplier
@@ -233,7 +234,7 @@ export function stepRK4(
 
 // ─── Derived flight state (HUD / instruments) ────────────────────────────────
 
-export function computeDerivedState(sv: StateVec, spec: AircraftSpec) {
+export function computeDerivedState(sv: StateVec, spec: AircraftSpec, massKg: number) {
   // Read from sv by index to avoid extractFromSV sub-array allocations
   const vx = sv[3]!, vy = sv[4]!, vz = sv[5]!
   const qw = sv[6]!, qx = sv[7]!, qy = sv[8]!, qz = sv[9]!
@@ -264,7 +265,6 @@ export function computeDerivedState(sv: StateVec, spec: AircraftSpec) {
   const S     = spec.mass.wingAreaM2
   const CL    = computeCL(spec.aero, alphaDeg, mach)
   const liftN = CL * qBar * S
-  const massKg    = computeTotalMass(spec, 0, [])
   const gCurrent  = liftN / (massKg * G0)
 
   // Euler angles from quaternion

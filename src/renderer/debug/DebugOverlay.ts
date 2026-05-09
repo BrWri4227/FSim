@@ -1,12 +1,15 @@
 import type { AircraftState } from '../types/aircraft'
 import type { EntityManager } from '../entities/EntityManager'
 import type { PlayerAircraft } from '../entities/PlayerAircraft'
+import type { Aircraft } from '../entities/Aircraft'
 import { mToFt } from '../utils/Units'
+import { sustainedTurnRateRefDegS } from '../data/aircraft/turnPerformance'
 import { F16C } from '../data/aircraft/f16c'
 import { MIG29 } from '../data/aircraft/mig29'
 import type * as THREE from 'three'
 import { R73 } from '../data/weapons/r73'
 import { getStoreDragPenalty } from '../data/weapons/catalog'
+import { v3sub, RAD2DEG, quatRotateVec, quatConjugate } from '../utils/MathUtils'
 
 const ENEMY_SPECS = { 'F-16C': F16C, 'MiG-29': MIG29 } as const
 const BEHAVIORS   = ['FOLLOW_BEHIND', 'FOLLOW_IN_FRONT', 'FLY_STRAIGHT', 'TURN_CONSTANTLY'] as const
@@ -15,6 +18,7 @@ export class DebugOverlay {
   private panel: HTMLDivElement
   private telemetry: HTMLPreElement
   private weaponLabel: HTMLDivElement
+  private enemyRwrStatus: HTMLDivElement
   private visible = false
 
   constructor(
@@ -22,9 +26,10 @@ export class DebugOverlay {
     private entityManager: EntityManager,
     private scene: THREE.Scene
   ) {
-    this.panel       = document.createElement('div')
-    this.telemetry   = document.createElement('pre')
-    this.weaponLabel = document.createElement('div')
+    this.panel           = document.createElement('div')
+    this.telemetry       = document.createElement('pre')
+    this.weaponLabel     = document.createElement('div')
+    this.enemyRwrStatus  = document.createElement('div')
     this.buildPanel()
     document.body.appendChild(this.panel)
   }
@@ -200,6 +205,39 @@ export class DebugOverlay {
     }
     p.appendChild(visSection)
 
+    const radarSim = this.makeSection('ENEMY RADAR / RWR SIM')
+    Object.assign(this.enemyRwrStatus.style, {
+      fontSize: '10px',
+      lineHeight: '1.45',
+      color: '#ffaaaa',
+      marginBottom: '6px',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+    })
+    radarSim.appendChild(this.enemyRwrStatus)
+
+    radarSim.appendChild(this.makeButton('✕ Clear simulated threats', () => {
+      this.player.rwr.clearDebugInjectedThreats()
+    }))
+
+    radarSim.appendChild(this.makeButton('▸ Sim hostile SEARCH (new contact)', () => {
+      const az = this.bodyAzimuthTowardNearestBanditDeg()
+      this.player.rwr.injectDebugEnemySearch(az)
+    }))
+    radarSim.appendChild(this.makeButton('▸ Sim hostile TRACK', () => {
+      this.player.rwr.injectDebugEnemyTrack(this.bodyAzimuthTowardNearestBanditDeg())
+    }))
+    radarSim.appendChild(this.makeButton('▸ Sim hostile radar LOCK (STT)', () => {
+      this.player.rwr.injectDebugEnemyRadarLock(this.bodyAzimuthTowardNearestBanditDeg())
+    }))
+    radarSim.appendChild(this.makeButton('▸ Sim missile launch (EW + voice only)', () => {
+      this.player.rwr.injectDebugEnemyMissileIndication(this.bodyAzimuthTowardNearestBanditDeg())
+    }))
+    radarSim.appendChild(this.makeButton('▸ Spawn inbound missile (physics)', () => {
+      this.entityManager.launchMissileAtPlayer()
+    }))
+    p.appendChild(radarSim)
+
     void this.scene  // silence unused warning
   }
 
@@ -209,16 +247,22 @@ export class DebugOverlay {
     if (!this.visible) return
     const kts = Math.round(state.iasKts)
     const ft  = Math.round(mToFt(state.altitudeM))
+    const trSign = state.headingRateDegPerSec >= 0 ? '+' : ''
+    let trLine = `TrnRt: ${trSign}${state.headingRateDegPerSec.toFixed(1)}°/s`
+    const refTurn = sustainedTurnRateRefDegS(this.player.spec.id)
+    if (refTurn) trLine += ` (ref ${refTurn.min}–${refTurn.max})`
     this.telemetry.textContent =
       `IAS:   ${kts} kt\n` +
       `AoA:   ${state.alphaDeg.toFixed(1)}°\n` +
       `G:     ${state.gCurrent.toFixed(1)} (max ${state.gMax.toFixed(1)})\n` +
       `Mach:  ${state.mach.toFixed(2)}\n` +
       `Alt:   ${ft} ft\n` +
+      `${trLine}\n` +
       `Hdg:   ${Math.round(state.headingDeg).toString().padStart(3,'0')}°\n` +
       `Pitch: ${state.pitchDeg.toFixed(1)}°\n` +
       `Roll:  ${state.rollDeg.toFixed(1)}°`
     this.updateWeaponLabel()
+    this.updateEnemyRwrSimStatus()
   }
 
   toggle(): void {
@@ -228,6 +272,7 @@ export class DebugOverlay {
     if (this.visible) {
       document.exitPointerLock()
       this.updateWeaponLabel()
+      this.updateEnemyRwrSimStatus()
     }
   }
 
@@ -239,6 +284,45 @@ export class DebugOverlay {
 
   private updateWeaponLabel(): void {
     this.weaponLabel.textContent = this.player.getSelectedWeaponName()
+  }
+
+  private nearestEnemy(): Aircraft | null {
+    const enemies = this.entityManager.getEnemies()
+    if (enemies.length === 0) return null
+    const p = this.player.state.positionNED
+    let best: Aircraft = enemies[0]!
+    let bestD = Infinity
+    for (const e of enemies) {
+      const d = Math.hypot(
+        e.state.positionNED[0] - p[0],
+        e.state.positionNED[1] - p[1],
+        e.state.positionNED[2] - p[2]
+      )
+      if (d < bestD) {
+        bestD = d
+        best = e
+      }
+    }
+    return best
+  }
+
+  private bodyAzimuthTowardNearestBanditDeg(): number {
+    const e = this.nearestEnemy()
+    const own = this.player.state
+    if (!e) {
+      return Math.round((Math.random() * 260 - 130) * 10) / 10
+    }
+    const toEnemy = v3sub(e.state.positionNED, own.positionNED)
+    const bodyVec = quatRotateVec(quatConjugate(own.attitudeQuat), toEnemy)
+    return Math.atan2(bodyVec[1], bodyVec[0]) * RAD2DEG
+  }
+
+  private updateEnemyRwrSimStatus(): void {
+    const rwr = this.player.rwr.state
+    const inj = this.player.rwr.getDebugInjectedThreatCount()
+    this.enemyRwrStatus.textContent =
+      `Simulated symbols stored: ${inj}\n` +
+      `RWR symbols this frame: ${rwr.threats.length}`
   }
 
   private makeSection(title: string): HTMLDivElement {
