@@ -11,11 +11,23 @@ export function applyFCSLimits(
   let roll = controls.roll
   let yaw = controls.yaw
 
-  // Symmetric AoA limiter: protect both upright and inverted maneuvering.
+  // AoA limiter: constrain only inputs that increase |AoA|.
+  // This keeps recovery authority at high alpha and allows reaching the
+  // intended F-16 regime (~25-28 deg) instead of clamping too early.
   const alphaAbs = Math.abs(state.alphaDeg)
+  const alphaSign = state.alphaDeg >= 0 ? 1 : -1
+  const alphaIncreasing = alphaAbs < 0.5
+    ? Math.abs(controls.pitch) > 0
+    : controls.pitch * alphaSign > 0
   const aoaMargin = spec.maxAoADeg - alphaAbs
-  if (aoaMargin < 8 && Math.abs(controls.pitch) > 0) {
-    pitch *= clamp(aoaMargin / 8, 0, 1)
+  const softBandDeg = 3.0
+  const hardOvershootDeg = 2.0
+  if (alphaIncreasing) {
+    if (alphaAbs >= spec.maxAoADeg + hardOvershootDeg) {
+      pitch = 0
+    } else if (aoaMargin < softBandDeg) {
+      pitch *= clamp(aoaMargin / softBandDeg, 0.1, 1)
+    }
   }
 
   // G limiter: smooth ramp over 2G margin (avoids jarring cutoff)
@@ -30,7 +42,7 @@ export function applyFCSLimits(
 
   // Soften lateral authority near the AoA edge to reduce departure-like wobble.
   const aoaFrac = clamp(alphaAbs / Math.max(spec.maxAoADeg, 1), 0, 1)
-  const lateralScale = 1 - 0.35 * clamp((aoaFrac - 0.65) / 0.35, 0, 1)
+  const lateralScale = 1 - 0.18 * clamp((aoaFrac - 0.80) / 0.20, 0, 1)
   roll *= lateralScale
   yaw *= lateralScale
 

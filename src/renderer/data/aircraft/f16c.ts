@@ -89,7 +89,7 @@ export const F16C: AircraftSpec = {
     IxzKgM2: 982,
   },
   hardpoints: F16C_HARDPOINTS,
-  maxAoADeg: 26,
+  maxAoADeg: 27,
   maxGPositive: 9.0,
   maxGNegative: -3.0,
   gunSpec: M61A1,

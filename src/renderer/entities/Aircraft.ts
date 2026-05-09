@@ -130,11 +130,12 @@ export class Aircraft {
   private shapeFlightControls(controls: ControlInputs, dt: number): ControlInputs {
     const dtSafe = Math.max(dt, 1 / 240)
     const aoaFrac = clamp(Math.abs(this.state.alphaDeg) / Math.max(this.spec.maxAoADeg, 1), 0, 1)
-    const dampingBoost = 1 + 0.4 * aoaFrac
+    const dampingBoost = 1 + 0.15 * aoaFrac
 
-    this.shapedAxes.pitch = this.rateLimitedAxis(this.shapedAxes.pitch, controls.pitch, dtSafe, 0.14 * dampingBoost, 3.2)
-    this.shapedAxes.roll = this.rateLimitedAxis(this.shapedAxes.roll, controls.roll, dtSafe, 0.10 * dampingBoost, 4.2)
-    this.shapedAxes.yaw = this.rateLimitedAxis(this.shapedAxes.yaw, controls.yaw, dtSafe, 0.12 * dampingBoost, 3.8)
+    // Keep just enough shaping to prevent jitter, but preserve crisp turn response.
+    this.shapedAxes.pitch = this.rateLimitedAxis(this.shapedAxes.pitch, controls.pitch, dtSafe, 0.05 * dampingBoost, 9.0)
+    this.shapedAxes.roll = this.rateLimitedAxis(this.shapedAxes.roll, controls.roll, dtSafe, 0.035 * dampingBoost, 12.0)
+    this.shapedAxes.yaw = this.rateLimitedAxis(this.shapedAxes.yaw, controls.yaw, dtSafe, 0.04 * dampingBoost, 10.0)
 
     return {
       ...controls,
