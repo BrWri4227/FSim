@@ -10,6 +10,8 @@ import { drawGMeter }            from './HUDElements/GMeter'
 import { drawHeadingTape }       from './HUDElements/HeadingTape'
 import { drawRadarScope }        from './HUDElements/RadarScope'
 import { drawWeaponsStatus }     from './HUDElements/WeaponsStatus'
+import { drawThrottleBar }       from './HUDElements/ThrottleBar'
+import { drawFuelGauge }         from './HUDElements/FuelGauge'
 import { drawThreatDisplay }     from './HUDElements/ThreatDisplay'
 import { AIM120B } from '../data/weapons/aim120b'
 import { R77 } from '../data/weapons/r77'
@@ -148,6 +150,26 @@ export class HUD {
 
     // G-meter — lower left
     drawGMeter(ctx, gMeterX, cy + 80 * uiScale, state.gCurrent, state.gMax)
+
+    // Throttle bar — lower left, right of G-meter
+    drawThrottleBar(
+      ctx,
+      gMeterX + 80,
+      cy + 50 * uiScale,
+      state.throttle,
+      player.spec.engine.afterburnerThrottleMin,
+      uiScale,
+    )
+
+    // Fuel gauge — lower left, right of throttle bar
+    drawFuelGauge(
+      ctx,
+      gMeterX + 106,
+      cy + 50 * uiScale,
+      state.fuelKg,
+      player.spec.mass.fuelCapacityKg,
+      uiScale,
+    )
 
     // Mach — lower right
     ctx.fillText(`M ${state.mach.toFixed(2)}`, altimeterX + 2, cy + 80 * uiScale)
