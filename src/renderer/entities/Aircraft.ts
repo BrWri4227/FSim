@@ -4,7 +4,7 @@ import type { LoadedStore, MissileState, GunRoundState } from '../types/weapons'
 import type { DamageState } from '../types/damage'
 import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
-import { stepRK4, computeDerivedState } from '../physics/FlightModel'
+import { stepRK4, computeDerivedState, computeActualThrustN } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
 import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint, setGearVisible, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp, MESH_BIAS_QUAT, RAD2DEG } from '../utils/MathUtils'
@@ -16,6 +16,7 @@ import { applyFCSLimits } from '../avionics/FCS'
 let _entityCounter = 0
 
 export class Aircraft {
+  readonly type = 'AIRCRAFT' as const
   readonly entityId: string
   readonly spec: AircraftSpec
   state: AircraftState
@@ -47,7 +48,9 @@ export class Aircraft {
       throttle: 0.3, fuelKg: spec.mass.fuelCapacityKg,
       loadedStores: [...stores],
       totalMassKg: spec.mass.emptyMassKg + spec.mass.fuelCapacityKg,
-      onGround: false, ejected: false, invincible: false, gearDown: false, flaps: 0, speedBrake: false, brakeHeld: false,
+      onGround: false, ejected: false, invincible: false,
+      gearDown: false, gearCollapsed: false, lastTouchdownSinkMS: null,
+      flaps: 0, speedBrake: false, brakeHeld: false,
       sv,
     }
 
@@ -67,6 +70,9 @@ export class Aircraft {
 
     const prevVN = this.state.velocityNED[0]
     const prevVE = this.state.velocityNED[1]
+    // Sink rate captured BEFORE the integrator's ground clamp zeros vz on contact.
+    // NED: +z = down, so positive vz means descending.
+    const preSinkMS = Math.max(0, this.state.velocityNED[2])
 
     const gearDrag = this.state.gearDown ? 0.05 : 0
     const speedBrakeDrag = this.state.speedBrake ? 0.12 : 0
@@ -77,7 +83,11 @@ export class Aircraft {
     const limitedControls = applyFCSLimits(controls, this.state, this.spec)
     const fcsControls = this.shapeFlightControls(limitedControls, dt)
     const groundClearM = getGroundClearance(this.spec.id, this.state.gearDown)
-    const newSV = stepRK4(this.state.sv, this.spec, fcsControls, massKg, penalties, storeDrag + gearDrag + speedBrakeDrag, dt, flapCL, flapCD, groundClearM)
+    const newSV = stepRK4(
+      this.state.sv, this.spec, fcsControls, massKg, penalties,
+      storeDrag + gearDrag + speedBrakeDrag, dt, flapCL, flapCD, groundClearM,
+      this.state.fuelKg,
+    )
 
     // Update state from SV
     this.state.sv = newSV
@@ -116,31 +126,78 @@ export class Aircraft {
       this.state.headingRateDegPerSec = 0
     }
 
-    // Ground clamp
+    // Ground state — detect transition for touchdown event
+    const wasOnGround = this.state.onGround
     this.state.onGround = this.state.altitudeM <= groundClearM + 0.1
-
-    // Wheel brakes: friction deceleration ~4 m/s² when on ground with gear down
     this.state.brakeHeld = controls.brakeHeld
-    if (controls.brakeHeld && this.state.onGround && this.state.gearDown) {
-      const vN = this.state.velocityNED[0], vE = this.state.velocityNED[1]
-      const gs = Math.sqrt(vN * vN + vE * vE)
-      if (gs > 0.1) {
-        const scale = Math.max(0, gs - 4.0 * dt) / gs
-        this.state.velocityNED[0] = vN * scale
-        this.state.velocityNED[1] = vE * scale
+
+    if (!wasOnGround && this.state.onGround) {
+      // Touchdown event — use pre-step sink rate; the integrator's ground clamp
+      // has already zeroed vviMps by the time we reach this point.
+      const sinkMS = preSinkMS
+      this.state.lastTouchdownSinkMS = sinkMS
+
+      // Gear collapse on hard landing (>5 m/s sink with gear down)
+      if (this.state.gearDown && sinkMS > 5) {
+        this.state.gearCollapsed = true
+        const wear = Math.min(0.6, (sinkMS - 5) * 0.15 + 0.2)
+        this.damage.zones.FUSELAGE = Math.min(1, this.damage.zones.FUSELAGE + wear)
+        if (sinkMS > 9) this.damage.structuralFailure = true
+      } else if (!this.state.gearDown && sinkMS > 3) {
+        // Belly landing — much less forgiving
+        this.damage.zones.FUSELAGE = Math.min(1, this.damage.zones.FUSELAGE + 0.5)
+        if (sinkMS > 6) this.damage.structuralFailure = true
+      }
+    }
+
+    // Ground roll: rolling + lateral tire friction whenever on ground.
+    // Decompose velocity into longitudinal (along nose) and lateral (perpendicular)
+    // and decay each separately — much higher coefficient laterally so tires grip.
+    if (this.state.onGround) {
+      const vN = this.state.velocityNED[0]
+      const vE = this.state.velocityNED[1]
+      const speedH = Math.hypot(vN, vE)
+      if (speedH > 1e-3) {
+        const hdgRad = this.state.headingDeg * (Math.PI / 180)
+        const fwdN = Math.cos(hdgRad)
+        const fwdE = Math.sin(hdgRad)
+        const vFwd = vN * fwdN + vE * fwdE
+        const vLat = -vN * fwdE + vE * fwdN
+
+        const gearOk = this.state.gearDown && !this.state.gearCollapsed
+        const muRoll  = gearOk ? 0.025 : 0.45      // belly slide
+        const muBrake = (controls.brakeHeld && gearOk) ? 0.35 : 0
+        const muLat   = gearOk ? 0.85 : 0.65        // tires resist sliding sideways
+        const G = 9.80665
+
+        const decelLong = (muRoll + muBrake) * G * dt
+        const decelLat  = muLat * G * dt
+        const newVFwd = Math.sign(vFwd) * Math.max(0, Math.abs(vFwd) - decelLong)
+        const newVLat = Math.sign(vLat) * Math.max(0, Math.abs(vLat) - decelLat)
+
+        const newVN = newVFwd * fwdN - newVLat * fwdE
+        const newVE = newVFwd * fwdE + newVLat * fwdN
+        this.state.velocityNED[0] = newVN
+        this.state.velocityNED[1] = newVE
+        this.state.sv[3] = newVN
+        this.state.sv[4] = newVE
       } else {
         this.state.velocityNED[0] = 0
         this.state.velocityNED[1] = 0
+        this.state.sv[3] = 0
+        this.state.sv[4] = 0
       }
-      this.state.sv[3] = this.state.velocityNED[0]
-      this.state.sv[4] = this.state.velocityNED[1]
     }
 
-    // Fuel burn
+    // Fuel burn — use the same thrust the integrator applied (throttle-modulated +
+    // altitude lapse + damage), not the spec maximum, so partial-throttle and
+    // high-altitude cruise burn realistically less.
     const isAB = controls.throttle >= this.spec.engine.afterburnerThrottleMin
     const sfc  = isAB ? this.spec.engine.sfcWet : this.spec.engine.sfcDry
-    const thrustEst = isAB ? this.spec.engine.maxThrustWetN : this.spec.engine.maxThrustDryN
-    const burn = sfc * thrustEst * dt * penalties.fuelLeakMultiplier
+    const actualThrustN = computeActualThrustN(
+      this.spec, controls.throttle, this.state.altitudeM, penalties.thrustMultiplier,
+    )
+    const burn = sfc * actualThrustN * dt * penalties.fuelLeakMultiplier
     this.state.fuelKg = Math.max(0, this.state.fuelKg - burn)
   }
 

@@ -9,6 +9,7 @@ import { DebugOverlay } from './debug/DebugOverlay'
 import { DebugVisuals } from './debug/DebugVisuals'
 import { AudioManager } from './audio/AudioManager'
 import { PostFXManager } from './postfx/PostFXManager'
+import { AWACS } from './avionics/AWACS'
 import { MultiplayerClient } from './network/MultiplayerClient'
 import type { MultiplayerConfig } from './network/MultiplayerTypes'
 import type { AircraftSpec } from './types/aircraft'
@@ -32,6 +33,7 @@ export class FlightSession {
   private debugVisuals: DebugVisuals
   private audioManager: AudioManager
   private postFX: PostFXManager
+  private awacs: AWACS = new AWACS()
   private multiplayerConfig: MultiplayerConfig
   private multiplayer: MultiplayerClient | null = null
   private localNetworkId: string | null = null
@@ -109,6 +111,12 @@ export class FlightSession {
     this.hud = new HUD(hudCanvas, this.player, this.entityManager)
     this.debugOverlay = new DebugOverlay(this.player, this.entityManager, this.sceneManager.scene)
     this.debugVisuals = new DebugVisuals(this.sceneManager.scene)
+
+    // AWACS BRA callouts — synthesize "Bandit, BRA <bearing> for <range>, angels <alt>"
+    this.awacs.onBRACallout = (c) => {
+      const bearing = c.bearingDeg.toString().padStart(3, '0')
+      this.audioManager.speakUtterance(`Bandit, BRA ${bearing} for ${c.rangeNm}, angels ${c.angelsKft}`)
+    }
 
     // Size the HUD canvas to fill the window (it defaults to 300×150)
     this.hud.resize(window.innerWidth, window.innerHeight)
@@ -203,8 +211,14 @@ export class FlightSession {
   private tick(dt: number): void {
     const controls = this.inputManager.getControls(dt)
     this.syncMultiplayer()
-    this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined)
+    // Wingman radio commands — issued before update so the wingman responds this tick.
+    if (controls.wingmanEngage) this.entityManager.commandWingmen('ENGAGE')
+    if (controls.wingmanCover)  this.entityManager.commandWingmen('COVER')
+    if (controls.wingmanRTB)    this.entityManager.commandWingmen('RTB')
+    if (controls.wingmanRejoin) this.entityManager.commandWingmen('REJOIN')
+    this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined, this.entityManager.getGroundTargets())
     this.entityManager.update(dt, this.player)
+    this.awacs.update(dt, this.entityManager.getEnemies(), 'player', this.player.state.positionNED, this.player.spec.nation)
     const targetIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
     const inboundMissiles = this.entityManager.getInboundMissiles(targetIds)
     this.player.rwr.addMissileThreats(inboundMissiles, this.player.state)

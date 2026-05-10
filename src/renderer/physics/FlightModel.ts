@@ -6,6 +6,7 @@ import { computeAeroCoeffs, computeCL } from './AeroCoefficients'
 import { computeControlDeltas } from './ControlEffectiveness'
 import { computeInertia } from './MassProperties'
 import type { InertiaMatrix } from './MassProperties'
+import { getWeather, windNEDAt, turbulenceAmplitudeRadS } from './WeatherState'
 import { DEG2RAD, RAD2DEG, clamp } from '../utils/MathUtils'
 
 const G0 = 9.80665
@@ -55,23 +56,30 @@ function computeDerivativeInto(
   out: number[]
 ): void {
   // Read state vector by index — avoids allocating pos/vel/q/omega sub-arrays
-  const vx = sv[3]!, vy = sv[4]!, vz = sv[5]!           // velocity NED
+  const vx = sv[3]!, vy = sv[4]!, vz = sv[5]!           // velocity NED (ground frame)
   const qw = sv[6]!, qx = sv[7]!, qy = sv[8]!, qz = sv[9]!  // attitude quaternion
   const p  = sv[10]!, qr = sv[11]!, r = sv[12]!          // body angular rates
   const altM = -sv[2]!                                   // NED: altitude = -z
 
-  // Speed and atmosphere
-  const speedMS = Math.sqrt(vx*vx + vy*vy + vz*vz)
+  // Wind: aerodynamics see velocity relative to the air, not ground.
+  // Position derivative still uses ground velocity (unchanged below).
+  const wind = windNEDAt(altM)
+  const avx = vx - wind[0]
+  const avy = vy - wind[1]
+  const avz = vz - wind[2]
+
+  // Speed (true airspeed) and atmosphere
+  const speedMS = Math.sqrt(avx*avx + avy*avy + avz*avz)
   const atm  = computeAtmosphere(altM, speedMS)
   const mach = speedMS / Math.max(atm.speedOfSoundMS, 1)
 
   // Velocity in body frame — inline conjugate rotation (no Quat allocation)
-  const velTx = 2 * (-qy * vz + qz * vy)
-  const velTy = 2 * (-qz * vx + qx * vz)
-  const velTz = 2 * (-qx * vy + qy * vx)
-  const u   = vx + qw * velTx - qy * velTz + qz * velTy
-  const v_b = vy + qw * velTy - qz * velTx + qx * velTz
-  const w   = vz + qw * velTz - qx * velTy + qy * velTx
+  const velTx = 2 * (-qy * avz + qz * avy)
+  const velTy = 2 * (-qz * avx + qx * avz)
+  const velTz = 2 * (-qx * avy + qy * avx)
+  const u   = avx + qw * velTx - qy * velTz + qz * velTy
+  const v_b = avy + qw * velTy - qz * velTx + qx * velTz
+  const w   = avz + qw * velTz - qx * velTy + qy * velTx
   const vt  = Math.max(Math.sqrt(u*u + v_b*v_b + w*w), 0.1)
 
   const alphaDeg = Math.atan2(w, Math.max(u, 0.1)) * RAD2DEG
@@ -197,10 +205,11 @@ export function stepRK4(
   dt: number,
   flapCL = 0,
   flapCD = 0,
-  minAltM = 0
+  minAltM = 0,
+  fuelKg = 0
 ): StateVec {
-  // Hoist inertia: it only depends on spec and fuelKg=0, so it is constant for all four stages.
-  const inertia = computeInertia(spec, 0)
+  // Hoist inertia: fuel mass changes ~grams per tick, so a single computation per step is fine.
+  const inertia = computeInertia(spec, fuelKg)
 
   computeDerivativeInto(sv, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, inertia, _k1)
   addScaledSVInto(sv, _k1, dt * 0.5, _svT)
@@ -229,7 +238,40 @@ export function stepRK4(
     if (result[5] > 0) result[5] = 0
   }
 
+  // Turbulence — band-limited angular-rate perturbation, rolled-off at high IAS where
+  // the airframe inertia would naturally damp small gusts. Skipped on ground.
+  const altResultM = -result[2]
+  if (altResultM > minAltM + 0.5) {
+    const turbAmp = turbulenceAmplitudeRadS(getWeather().turbulence)
+    if (turbAmp > 0) {
+      result[10] += (Math.random() * 2 - 1) * turbAmp * dt * 4
+      result[11] += (Math.random() * 2 - 1) * turbAmp * dt * 4
+      result[12] += (Math.random() * 2 - 1) * turbAmp * dt * 4
+    }
+  }
+
   return result
+}
+
+// ─── Engine helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Net engine thrust (N) at the given throttle and altitude, accounting for AB
+ * step, idle floor, ISA thrust lapse, and damage penalty. Mirrors the thrust
+ * calculation inside `computeDerivativeInto` so external callers (fuel burn,
+ * audio cues, etc.) stay consistent with what the integrator actually applies.
+ */
+export function computeActualThrustN(
+  spec: AircraftSpec,
+  throttle: number,
+  altM: number,
+  thrustMultiplier = 1,
+): number {
+  const t = clamp(throttle, 0, 1)
+  const isAB = t >= spec.engine.afterburnerThrottleMin
+  const maxThrust = isAB ? spec.engine.maxThrustWetN : spec.engine.maxThrustDryN
+  const idle = spec.engine.idleThrustN
+  return (idle + (maxThrust - idle) * t) * thrustLapseFactor(altM) * thrustMultiplier
 }
 
 // ─── Derived flight state (HUD / instruments) ────────────────────────────────
@@ -239,18 +281,24 @@ export function computeDerivedState(sv: StateVec, spec: AircraftSpec, massKg: nu
   const vx = sv[3]!, vy = sv[4]!, vz = sv[5]!
   const qw = sv[6]!, qx = sv[7]!, qy = sv[8]!, qz = sv[9]!
   const altM    = -sv[2]!
-  const speedMS = Math.sqrt(vx*vx + vy*vy + vz*vz)
+
+  // Airspeed-relative velocity for IAS/Mach/alpha/beta (subtract wind).
+  const wind = windNEDAt(altM)
+  const avx = vx - wind[0]
+  const avy = vy - wind[1]
+  const avz = vz - wind[2]
+  const speedMS = Math.sqrt(avx*avx + avy*avy + avz*avz)
 
   const atm  = computeAtmosphere(altM, speedMS)
   const mach = speedMS / atm.speedOfSoundMS
 
   // Velocity in body frame — inline conjugate rotation (no Quat allocation)
-  const velTx = 2 * (-qy * vz + qz * vy)
-  const velTy = 2 * (-qz * vx + qx * vz)
-  const velTz = 2 * (-qx * vy + qy * vx)
-  const u   = vx + qw * velTx - qy * velTz + qz * velTy
-  const v_b = vy + qw * velTy - qz * velTx + qx * velTz
-  const w   = vz + qw * velTz - qx * velTy + qy * velTx
+  const velTx = 2 * (-qy * avz + qz * avy)
+  const velTy = 2 * (-qz * avx + qx * avz)
+  const velTz = 2 * (-qx * avy + qy * avx)
+  const u   = avx + qw * velTx - qy * velTz + qz * velTy
+  const v_b = avy + qw * velTy - qz * velTx + qx * velTz
+  const w   = avz + qw * velTz - qx * velTy + qy * velTx
   const vt  = Math.max(Math.sqrt(u*u + v_b*v_b + w*w), 0.1)
 
   const alphaDeg = Math.atan2(w, Math.max(u, 0.1)) * RAD2DEG

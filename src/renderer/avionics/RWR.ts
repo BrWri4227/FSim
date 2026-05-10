@@ -72,6 +72,28 @@ export class RWR {
     }
   }
 
+  /**
+   * Add SAM-site emitters as RWR threats. Called by EntityManager each tick for
+   * any SAM site whose radar is illuminating the player. Priority is TRACK-level
+   * (3) when scanning, LOCK-level (4) when an engagement is active.
+   */
+  addSAMEmitterThreats(
+    samSites: ReadonlyArray<{ entityId: string; positionNED: [number, number, number]; engaging: boolean }>,
+    ownState: AircraftState,
+  ): void {
+    for (const sam of samSites) {
+      const toSam = v3sub(sam.positionNED, ownState.positionNED)
+      const bodyVec = quatRotateVec(quatConjugate(ownState.attitudeQuat), toSam)
+      const azDeg = Math.atan2(bodyVec[1], bodyVec[0]) * RAD2DEG
+      this.state.threats.push({
+        entityId: sam.entityId,
+        azimuthDeg: azDeg,
+        type: 'SAM',
+        priority: sam.engaging ? 4 : 3,
+      })
+    }
+  }
+
   clearDebugInjectedThreats(): void {
     this.debugInjectedThreats.length = 0
   }

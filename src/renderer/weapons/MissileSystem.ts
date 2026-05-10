@@ -3,6 +3,7 @@ import type { MissileState } from '../types/weapons'
 import type { AircraftState } from '../types/aircraft'
 import type { DamageZone } from '../types/damage'
 import type { Aircraft } from '../entities/Aircraft'
+import type { GroundTarget } from '../entities/GroundTarget'
 import { guideMissile, guideMissileCoast, checkIRSeekerLock } from './MissileGuidance'
 import { evaluateFlareSeduction } from './IRSeeker'
 import { checkProximityFuse, computeLethality, hitZoneFromMissileApproach } from './Warhead'
@@ -170,7 +171,8 @@ export class MissileSystem {
     enemies: Aircraft[],
     playerAircraft?: Aircraft,
     radarTargetPos?: [number,number,number],
-    radarTargetVel?: [number,number,number]
+    radarTargetVel?: [number,number,number],
+    groundTargets: GroundTarget[] = [],
   ): void {
     this.explosions.update(dt)
 
@@ -178,6 +180,8 @@ export class MissileSystem {
     // scan inside every missile's loop iteration.
     const enemyById = new Map<string, Aircraft>()
     for (const e of enemies) enemyById.set(e.entityId, e)
+    const groundById = new Map<string, GroundTarget>()
+    for (const g of groundTargets) groundById.set(g.entityId, g)
 
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const m = this.missiles[i]!
@@ -197,7 +201,23 @@ export class MissileSystem {
 
       // ── Guidance mode state machine ────────────────────────────────────────
 
-      if (target !== undefined) {
+      if (m.spec.category === 'AGM_MISSILE') {
+        // Air-to-ground guidance — fixed-point pursuit against a GroundTarget.
+        const gt = groundById.get(m.targetEntityId)
+        if (gt && !gt.state.destroyed) {
+          const gtVel = gt.state.velocityNED as [number, number, number]
+          guidanceTargetPos = [...gt.state.positionNED] as [number,number,number]
+          guidanceTargetVel = [...gtVel] as [number,number,number]
+          m.lastKnownTargetPos = [...guidanceTargetPos] as [number,number,number]
+          m.lastKnownTargetVel = [...guidanceTargetVel] as [number,number,number]
+          m.locked = true
+          m.guidanceMode = 'IR_TRACK'
+        } else if (m.guidanceMode !== 'COAST') {
+          // Target destroyed or not found — coast onto last known point
+          m.guidanceMode = 'COAST'
+          m.locked = false
+        }
+      } else if (target !== undefined) {
         const tPos = target.state.positionNED
         const tVel = target.state.velocityNED
 
@@ -360,6 +380,53 @@ export class MissileSystem {
       const totalAccel = v3add(v3add(v3add(thrustVec, dragDir), gravity), guidanceAccel)
       m.velocityNED = v3add(m.velocityNED, v3scale(totalAccel, dt)) as [number,number,number]
       m.positionNED = v3add(m.positionNED, v3scale(m.velocityNED, dt)) as [number,number,number]
+
+      // Ground-target proximity hit — independent of guidance target so any missile
+      // that gets close enough to a ground entity (e.g. an AGM, or a stray AAM that
+      // overflies a SAM site) will detonate against it. Skipped during the first 0.6s
+      // of flight (arming delay) and against the missile's own shooter so a SAM doesn't
+      // self-destruct on its own launcher. Effective ground fuse = max(prox, lethal)
+      // because diving warheads have an impact-fused mode that's more permissive than
+      // the small air-to-air proximity fuse.
+      if (groundTargets.length > 0 && m.ageSec > 0.6) {
+        let hitGT: GroundTarget | null = null
+        const groundFuse = Math.max(m.spec.proxFuseRadiusM, m.spec.lethalRadiusM * 0.6)
+        const fuseSq = groundFuse * groundFuse
+        for (const gt of groundTargets) {
+          if (gt.state.destroyed) continue
+          if (gt.entityId === m.shooterEntityId) continue
+          const dx = m.positionNED[0] - gt.state.positionNED[0]
+          const dy = m.positionNED[1] - gt.state.positionNED[1]
+          const dz = m.positionNED[2] - gt.state.positionNED[2]
+          if (dx*dx + dy*dy + dz*dz < fuseSq) { hitGT = gt; break }
+        }
+        if (hitGT) {
+          const lethality = computeLethality(m.positionNED, hitGT.state.positionNED, m.spec.lethalRadiusM)
+          const damage = (m.spec.lethalRadiusM * 4) * Math.max(0.3, lethality)
+          hitGT.applyDamage(damage)
+          this.explode(i, m)
+          continue
+        }
+      }
+
+      // Ground-impact splash — when the missile hits ground (z >= 0), damage all
+      // ground targets within lethal radius horizontally and detonate. Catches
+      // near-misses where an AGM hits the ground a few meters short of the target.
+      if (m.positionNED[2] >= 0 && m.ageSec > 0.6) {
+        for (const gt of groundTargets) {
+          if (gt.state.destroyed) continue
+          if (gt.entityId === m.shooterEntityId) continue
+          const dx = m.positionNED[0] - gt.state.positionNED[0]
+          const dy = m.positionNED[1] - gt.state.positionNED[1]
+          const dHoriz = Math.hypot(dx, dy)
+          if (dHoriz < m.spec.lethalRadiusM) {
+            const falloff = 1 - dHoriz / m.spec.lethalRadiusM
+            gt.applyDamage(m.spec.lethalRadiusM * 4 * falloff)
+          }
+        }
+        this.explode(i, m)
+        continue
+      }
 
       // Expire when seeker battery is depleted or on ground impact.
       if (m.ageSec > m.spec.batteryLifeSec || m.positionNED[2] > 50) {

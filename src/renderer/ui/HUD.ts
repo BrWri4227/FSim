@@ -13,6 +13,7 @@ import { drawWeaponsStatus }     from './HUDElements/WeaponsStatus'
 import { drawThrottleBar }       from './HUDElements/ThrottleBar'
 import { drawFuelGauge }         from './HUDElements/FuelGauge'
 import { drawThreatDisplay }     from './HUDElements/ThreatDisplay'
+import { drawFLIRPage } from '../cockpit/MFDPages/FLIRPage'
 import { AIM120B } from '../data/weapons/aim120b'
 import { R77 } from '../data/weapons/r77'
 import type { LoadedStore, MissileSpec } from '../types/weapons'
@@ -171,6 +172,20 @@ export class HUD {
       uiScale,
     )
 
+    // Fuel state warning — flashes BINGO at 20% / EMERGENCY at 10%
+    const fuelFrac = state.fuelKg / Math.max(player.spec.mass.fuelCapacityKg, 1)
+    if (fuelFrac < 0.2) {
+      const flashOn = (Math.floor(performance.now() / 400) & 1) === 0
+      if (flashOn) {
+        const emergency = fuelFrac < 0.1
+        const label = emergency ? 'FUEL EMERG' : 'BINGO FUEL'
+        ctx.font = `bold ${Math.round(13 * uiScale)}px monospace`
+        ctx.fillStyle = emergency ? '#ff2020' : '#ffaa00'
+        ctx.textAlign = 'left'
+        ctx.fillText(label, gMeterX + 106, cy + 50 * uiScale - 8)
+      }
+    }
+
     // Mach — lower right
     ctx.fillText(`M ${state.mach.toFixed(2)}`, altimeterX + 2, cy + 80 * uiScale)
 
@@ -182,12 +197,31 @@ export class HUD {
     drawWeaponsStatus(ctx, edgePadX, weaponsY, stores, selectedWeapon, gunRounds)
 
     // Radar B-scope — bottom center
-    drawRadarScope(ctx, radarX, radarY, radarW, radarH, radar, state.positionNED)
+    drawRadarScope(ctx, radarX, radarY, radarW, radarH, radar, state.positionNED, state.attitudeQuat)
 
     // RWR threat ring — bottom right
     drawThreatDisplay(ctx, threatCx, threatCy, rwr, performance.now() / 1000)
     this.drawMissileTTIPanel(ctx, ttiPanelX, ttiPanelY)
     this.drawLAR(ctx, larX, larY)
+
+    // Targeting pod FLIR view — top-right corner overlay when active
+    if (player.targetingPod.state.active) {
+      const flirSize = Math.round(180 * uiScale)
+      const flirX = W - edgePadX - flirSize
+      const flirY = headingBandH + edgePadY + 4
+      // Draw into a temporary offscreen canvas to keep coordinate math local
+      ctx.save()
+      ctx.translate(flirX, flirY)
+      // Border
+      ctx.strokeStyle = '#00ff44'
+      ctx.lineWidth = 1
+      ctx.strokeRect(0, 0, flirSize, flirSize)
+      ctx.beginPath()
+      ctx.rect(0, 0, flirSize, flirSize)
+      ctx.clip()
+      drawFLIRPage(ctx, flirSize, flirSize, player.targetingPod.state, state.positionNED, this.entityManager.getGroundTargets())
+      ctx.restore()
+    }
 
     // Flight path marker
     const betaPx  = (state.betaDeg  / 60) * (W / 2)

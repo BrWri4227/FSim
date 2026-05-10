@@ -15,6 +15,13 @@ export class InputManager {
   private radarLockPrev = false
   private radarUnlockPrev = false
   private speedBrakeTogglePending = false
+  private tgpTogglePrev = false
+  private tgpLockPrev = false
+  private tgpUnlockPrev = false
+  private wmEngagePrev = false
+  private wmCoverPrev = false
+  private wmRtbPrev = false
+  private wmRejoinPrev = false
 
   private onContextMenu = (e: Event): void => { e.preventDefault() }
 
@@ -81,6 +88,13 @@ export class InputManager {
     const radarSelect = this.keys.has(DEFAULT_BINDINGS.radarSelectNext)
     const radarLock = this.keys.has(DEFAULT_BINDINGS.radarLockTarget)
     const radarUnlock = this.keys.has(DEFAULT_BINDINGS.radarUnlock)
+    const tgpToggle = this.keys.has(DEFAULT_BINDINGS.tgpToggle)
+    const tgpLock = this.keys.has(DEFAULT_BINDINGS.tgpLock)
+    const tgpUnlock = this.keys.has(DEFAULT_BINDINGS.tgpUnlock)
+    const wmEngage = this.keys.has(DEFAULT_BINDINGS.wingmanEngage)
+    const wmCover = this.keys.has(DEFAULT_BINDINGS.wingmanCover)
+    const wmRtb = this.keys.has(DEFAULT_BINDINGS.wingmanRTB)
+    const wmRejoin = this.keys.has(DEFAULT_BINDINGS.wingmanRejoin)
 
     // Edge detection for one-shot actions
     const fireMissileEdge = fireMissile && !this.fireMissilePrev
@@ -91,6 +105,13 @@ export class InputManager {
     const radarSelectEdge = radarSelect && !this.radarSelectPrev
     const radarLockEdge = radarLock && !this.radarLockPrev
     const radarUnlockEdge = radarUnlock && !this.radarUnlockPrev
+    const tgpToggleEdge = tgpToggle && !this.tgpTogglePrev
+    const tgpLockEdge = tgpLock && !this.tgpLockPrev
+    const tgpUnlockEdge = tgpUnlock && !this.tgpUnlockPrev
+    const wmEngageEdge = wmEngage && !this.wmEngagePrev
+    const wmCoverEdge = wmCover && !this.wmCoverPrev
+    const wmRtbEdge = wmRtb && !this.wmRtbPrev
+    const wmRejoinEdge = wmRejoin && !this.wmRejoinPrev
 
     this.fireMissilePrev = fireMissile
     this.cycleMissilePrev = cycleMissile
@@ -100,6 +121,13 @@ export class InputManager {
     this.radarSelectPrev = radarSelect
     this.radarLockPrev = radarLock
     this.radarUnlockPrev = radarUnlock
+    this.tgpTogglePrev = tgpToggle
+    this.tgpLockPrev = tgpLock
+    this.tgpUnlockPrev = tgpUnlock
+    this.wmEngagePrev = wmEngage
+    this.wmCoverPrev = wmCover
+    this.wmRtbPrev = wmRtb
+    this.wmRejoinPrev = wmRejoin
 
     const speedBrakeToggle = this.speedBrakeTogglePending
     this.speedBrakeTogglePending = false
@@ -123,6 +151,13 @@ export class InputManager {
       radarLockTarget: radarLockEdge,
       radarUnlock: radarUnlockEdge,
       ejectRequested: this.keys.has(DEFAULT_BINDINGS.eject),
+      tgpToggle: tgpToggleEdge,
+      tgpLock: tgpLockEdge,
+      tgpUnlock: tgpUnlockEdge,
+      wingmanEngage: wmEngageEdge,
+      wingmanCover: wmCoverEdge,
+      wingmanRTB: wmRtbEdge,
+      wingmanRejoin: wmRejoinEdge,
     }
   }
 
