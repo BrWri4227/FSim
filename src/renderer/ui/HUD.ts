@@ -60,6 +60,8 @@ export class HUD {
   /** Remaining display time (sec) for the decoy-success flash cue. */
   private decoyFlashRemainSec = 0
   private decoyFlashType: 'FLARE' | 'CHAFF' | null = null
+  private wmCmdFlashRemainSec = 0
+  private lastWmCmdSeen: string | null = null
   private lastRenderMs = 0
   private gunFunnelState: {
     x: number
@@ -104,6 +106,7 @@ export class HUD {
     const dtSec = Math.min((nowMs - this.lastRenderMs) / 1000, 0.1)
     this.lastRenderMs = nowMs
     if (this.decoyFlashRemainSec > 0) this.decoyFlashRemainSec = Math.max(0, this.decoyFlashRemainSec - dtSec)
+    if (this.wmCmdFlashRemainSec > 0) this.wmCmdFlashRemainSec = Math.max(0, this.wmCmdFlashRemainSec - dtSec)
 
     ctx.clearRect(0, 0, c.width, c.height)
     ctx.strokeStyle = '#00ff44'
@@ -346,6 +349,37 @@ export class HUD {
       ctx.fillStyle = '#ffcc00'
       ctx.fillText('DECOY', cmdsX, cmdsY + 30)
       ctx.restore()
+    }
+
+    // ── Wingman command indicator (upper-left, below heading tape) ───────────
+    if (this.entityManager.getWingmen().length > 0) {
+      const wmCmd = this.entityManager.getLastWingmanCommand()
+      const wmCmdKey = wmCmd ?? '----'
+      if (wmCmdKey !== this.lastWmCmdSeen) {
+        if (wmCmd !== null) this.wmCmdFlashRemainSec = 2.0
+        this.lastWmCmdSeen = wmCmdKey
+      }
+      const wmFlashing = this.wmCmdFlashRemainSec > 0
+      const wmX = edgePadX
+      const wmY = edgePadY + headingBandH + 18
+      const badgeW = 56, badgeH = 16
+      ctx.font = '11px monospace'
+      ctx.fillStyle = '#226644'
+      ctx.textAlign = 'left'
+      ctx.fillText('WM', wmX, wmY - 1)
+      const badgeX = wmX + 22
+      if (wmFlashing) {
+        ctx.fillStyle = '#00ff44'
+        ctx.fillRect(badgeX, wmY - badgeH + 2, badgeW, badgeH)
+        ctx.fillStyle = '#000'
+        ctx.fillText(wmCmdKey, badgeX + 4, wmY - 1)
+      } else {
+        ctx.strokeStyle = wmCmd !== null ? '#00ff44' : '#226644'
+        ctx.lineWidth = 1
+        ctx.strokeRect(badgeX, wmY - badgeH + 2, badgeW, badgeH)
+        ctx.fillStyle = wmCmd !== null ? '#00ff44' : '#226644'
+        ctx.fillText(wmCmdKey, badgeX + 4, wmY - 1)
+      }
     }
 
     ctx.strokeStyle = '#00ff44'

@@ -27,6 +27,7 @@ export class EntityManager {
   private samMissiles: MissileSystem
   killCount = 0
   groundKillCount = 0
+  lastWingmanCmd: 'ENGAGE' | 'COVER' | 'RTB' | 'REJOIN' | null = null
 
   /** Cached combined enemy list — rebuilt only when the entity set changes. */
   private _enemyCache: Aircraft[] | null = null
@@ -61,11 +62,16 @@ export class EntityManager {
    * the AI brain's defensive override still preempts when missiles are inbound.
    */
   commandWingmen(cmd: 'ENGAGE' | 'COVER' | 'RTB' | 'REJOIN'): void {
+    this.lastWingmanCmd = cmd
     const next: AIBehavior = cmd === 'ENGAGE' ? 'BVR_ENGAGE'
       : cmd === 'COVER' ? 'FOLLOW_BEHIND'
       : cmd === 'RTB' ? 'FLY_STRAIGHT'
       : 'FOLLOW_BEHIND'
     for (const wm of this.wingmen) wm.behavior = next
+  }
+
+  getLastWingmanCommand(): 'ENGAGE' | 'COVER' | 'RTB' | 'REJOIN' | null {
+    return this.lastWingmanCmd
   }
 
   spawnGroundTarget(spec: GroundTargetSpec, positionNED: Vec3, headingDeg = 0): GroundTarget {
