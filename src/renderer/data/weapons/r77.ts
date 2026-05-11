@@ -23,5 +23,6 @@ export const R77: MissileSpec = {
     frequencyGHz: 9.0,
     terminalActivationRangeM: 14000
   },
-  dataLinkUpdateHz: 2
+  dataLinkUpdateHz: 2,
+  eccmResistance: 0.40,
 }

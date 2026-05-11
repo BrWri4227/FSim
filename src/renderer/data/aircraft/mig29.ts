@@ -76,4 +76,6 @@ export const MIG29: AircraftSpec = {
   rcsTableM2: [5.0, 8.0, 14.0, 8.5, 3.5, 8.5, 14.0, 8.0],
   pilotEyePointM: [3.6, 0, -1.3],
   cockpitFovDeg: 75,
+  cmdsFlareCount: 60,
+  cmdsChaffCount: 60,
 }

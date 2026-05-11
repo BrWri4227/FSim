@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { ChaffCloud } from '../avionics/CMDS'
 import { nedToThree } from '../utils/MathUtils'
 
-const POOL_SIZE = 8
+const POOL_SIZE = 24
 const POINTS_PER_CLOUD = 80
 const SPREAD_M = 4
 

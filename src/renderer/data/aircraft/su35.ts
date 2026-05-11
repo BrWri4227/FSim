@@ -76,4 +76,6 @@ export const SU35: AircraftSpec = {
   rcsTableM2: [4.0, 7.0, 14.0, 8.0, 3.5, 8.0, 14.0, 7.0],
   pilotEyePointM: [4.2, 0, -1.5],
   cockpitFovDeg: 75,
+  cmdsFlareCount: 128,
+  cmdsChaffCount: 128,
 }

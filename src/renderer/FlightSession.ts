@@ -90,6 +90,9 @@ export class FlightSession {
       this.audioManager.play(event)
     })
     this.entityManager = new EntityManager(this.sceneManager.scene, this.player)
+    this.player.missiles.setOnDecoySuccess(type => {
+      this.hud.notifyDecoySuccess(type)
+    })
     this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
       if (!this.multiplayer || !this.localNetworkId) return
       if (!targetId.startsWith('peer_')) return

@@ -49,7 +49,7 @@ export class PlayerAircraft extends Aircraft {
     const radarSys = new Radar(spec)
     this.radar = radarSys
     this.rwr = new RWR()
-    this.cmds = new CMDS()
+    this.cmds = new CMDS(spec.cmdsFlareCount, spec.cmdsChaffCount)
     this.hms = new HMS()
     this.gpws = new GPWS()
     this.targetingPod = new TargetingPod()

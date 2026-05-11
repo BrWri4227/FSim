@@ -97,4 +97,6 @@ export const F16C: AircraftSpec = {
   rcsTableM2: [1.2, 2.0, 4.0, 2.5, 1.0, 2.5, 4.0, 2.0],
   pilotEyePointM: [3.5, 0, -1.2],
   cockpitFovDeg: 75,
+  cmdsFlareCount: 90,
+  cmdsChaffCount: 90,
 }

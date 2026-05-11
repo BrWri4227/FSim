@@ -42,7 +42,7 @@ export const DEFAULT_BINDINGS: KeyBindings = {
   fireMissile:  'KeyF',
   cycleMissile: 'KeyC',
   flare:        'KeyZ',
-  chaff:        'KeyX',
+  chaff:        'KeyZ',
   gear:         'KeyG',
   flaps:        'KeyV',
   brake:        'KeyB',

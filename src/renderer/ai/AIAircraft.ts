@@ -25,7 +25,7 @@ export class AIAircraft extends Aircraft {
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, behavior: AIBehavior, spawnPos: Vec3, spawnVel: Vec3) {
     super(spec, stores, scene)
     this.radar = new Radar(spec)
-    this.cmds = new CMDS()
+    this.cmds = new CMDS(spec.cmdsFlareCount, spec.cmdsChaffCount)
     this.missiles = new MissileSystem(scene)
     this.behavior = behavior
     this.initPositionNED   = [...spawnPos]
