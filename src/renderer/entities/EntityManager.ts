@@ -2,6 +2,8 @@ import * as THREE from 'three'
 import type { AircraftSpec } from '../types/aircraft'
 import type { LoadedStore } from '../types/weapons'
 import type { Vec3 } from '../types/common'
+import type { FlareContact } from '../types/ir'
+import type { ChaffCloud } from '../avionics/CMDS'
 import { AIAircraft, type AIBehavior } from '../ai/AIAircraft'
 import { runAIBrain } from '../ai/AIBrain'
 import { MissileSystem } from '../weapons/MissileSystem'
@@ -267,6 +269,20 @@ export class EntityManager {
       this._enemyCache = [...this.enemies, ...this.remotePlayers.values()]
     }
     return this._enemyCache
+  }
+
+  getAllAIFlares(): FlareContact[] {
+    const out: FlareContact[] = []
+    for (const e of this.enemies)  out.push(...e.cmds.getActiveFlares())
+    for (const w of this.wingmen)  out.push(...w.cmds.getActiveFlares())
+    return out
+  }
+
+  getAllAIChaff(): ChaffCloud[] {
+    const out: ChaffCloud[] = []
+    for (const e of this.enemies)  out.push(...e.cmds.getActiveChaffClouds())
+    for (const w of this.wingmen)  out.push(...w.cmds.getActiveChaffClouds())
+    return out
   }
 
   private isInboundToPlayer(

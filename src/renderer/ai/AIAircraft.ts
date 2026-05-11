@@ -9,7 +9,7 @@ import { getMissileSpec, getStoreDragPenalty } from '../data/weapons/catalog'
 import { makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
 import type * as THREE from 'three'
 
-export type AIBehavior = 'FOLLOW_BEHIND' | 'FOLLOW_IN_FRONT' | 'FLY_STRAIGHT' | 'TURN_CONSTANTLY' | 'BVR_ENGAGE'
+export type AIBehavior = 'FOLLOW_BEHIND' | 'FOLLOW_IN_FRONT' | 'FLY_STRAIGHT' | 'TURN_CONSTANTLY' | 'BVR_ENGAGE' | 'AVOIDANCE'
 export type AISide = 'HOSTILE' | 'WINGMAN'
 
 export class AIAircraft extends Aircraft {

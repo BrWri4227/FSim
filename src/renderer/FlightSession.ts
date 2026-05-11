@@ -331,9 +331,9 @@ export class FlightSession {
     this.player.updateMesh()
     this.entityManager.updateMeshes()
 
-    // Countermeasure visual effects
-    this.flareEffect.update(this.player.cmds.getActiveFlares())
-    this.chaffEffect.update(this.player.cmds.getActiveChaffClouds())
+    // Countermeasure visual effects — player + all AI aircraft
+    this.flareEffect.update([...this.player.cmds.getActiveFlares(), ...this.entityManager.getAllAIFlares()])
+    this.chaffEffect.update([...this.player.cmds.getActiveChaffClouds(), ...this.entityManager.getAllAIChaff()])
 
     // Keep sky centred on camera before rendering
     this.sceneManager.updateSky(this.sceneManager.camera)

@@ -7,6 +7,7 @@ import { flyStraight }    from './behaviors/FlyStraight'
 import { turnConstantly } from './behaviors/TurnConstantly'
 import { bvrEngage }      from './behaviors/BVREngage'
 import { evadeMissile, type MissileThreat } from './behaviors/EvadeMissile'
+import { avoidance }      from './behaviors/Avoidance'
 
 const DEFENSIVE_RANGE_M = 8000   // start defending when missile is closer than this
 const DEFENSIVE_TIME_MARGIN_S = 18
@@ -52,5 +53,6 @@ export function runAIBrain(self: AIAircraft, player: Aircraft, dt: number, inbou
     case 'FLY_STRAIGHT':   return flyStraight(self, dt)
     case 'TURN_CONSTANTLY': return turnConstantly(self, dt)
     case 'BVR_ENGAGE':     return bvrEngage(self, player, dt)
+    case 'AVOIDANCE':      return avoidance(self, dt)
   }
 }

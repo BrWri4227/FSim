@@ -14,7 +14,7 @@ import { getWeather, setWeather, resetWeather, type TurbulenceLevel } from '../p
 import { GROUND_TARGET_SPECS } from '../data/groundTargets/catalog'
 
 const ENEMY_SPECS = { 'F-16C': F16C, 'MiG-29': MIG29 } as const
-const BEHAVIORS   = ['FOLLOW_BEHIND', 'FOLLOW_IN_FRONT', 'FLY_STRAIGHT', 'TURN_CONSTANTLY', 'BVR_ENGAGE'] as const
+const BEHAVIORS   = ['FOLLOW_BEHIND', 'FOLLOW_IN_FRONT', 'FLY_STRAIGHT', 'TURN_CONSTANTLY', 'BVR_ENGAGE', 'AVOIDANCE'] as const
 
 export class DebugOverlay {
   private panel: HTMLDivElement
