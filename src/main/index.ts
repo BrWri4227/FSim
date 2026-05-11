@@ -88,7 +88,7 @@ type ServerMessage =
       type: 'state'
       playerId: string
       profile: NetPlayerProfile
-      state: NetPlayerState
+      state: NetPlayerState | null
     }
   | {
       type: 'hit'
@@ -265,6 +265,18 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
         if (!peer.profile || !isValidProfile(msg['profile'])) return
         peer.profile = msg['profile']
         broadcast({ type: 'peer-profile-update', playerId: peerId, profile: msg['profile'] }, peerId)
+        return
+      }
+
+      if (msg['type'] === 'return-to-lobby') {
+        if (!peer.profile) return
+        peer.state = null
+        broadcast({
+          type: 'state',
+          playerId: peerId,
+          profile: peer.profile,
+          state: null,
+        }, peerId)
         return
       }
 

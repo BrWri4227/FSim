@@ -1,5 +1,5 @@
 import { LoadoutScreen } from './ui/LoadoutScreen'
-import { FlightSession } from './FlightSession'
+import { FlightSession, type LobbyRestoreBundle } from './FlightSession'
 import { DebriefScreen } from './ui/DebriefScreen'
 import type { MultiplayerConfig } from './network/MultiplayerTypes'
 import type { MultiplayerClient } from './network/MultiplayerClient'
@@ -20,6 +20,8 @@ export class App {
   private loadoutScreen: LoadoutScreen | null = null
   private flightSession: FlightSession | null = null
   private debriefScreen: DebriefScreen | null = null
+  /** LAN bundle preserved when leaving flight so debrief → loadout keeps the lobby session. */
+  private lobbyRestore: LobbyRestoreBundle | null = null
   private uiOverlay: HTMLElement
 
   constructor() {
@@ -37,9 +39,16 @@ export class App {
     this.debriefScreen?.dispose()
     this.debriefScreen = null
 
-    this.loadoutScreen = new LoadoutScreen(this.uiOverlay, (spec, stores, multiplayer, client, glocEnabled) => {
-      this.enterFlight(spec, stores, multiplayer, client, glocEnabled)
-    })
+    const restore = this.lobbyRestore
+    this.lobbyRestore = null
+
+    this.loadoutScreen = new LoadoutScreen(
+      this.uiOverlay,
+      (spec, stores, multiplayer, client, glocEnabled) => {
+        this.enterFlight(spec, stores, multiplayer, client, glocEnabled)
+      },
+      restore ?? undefined
+    )
   }
 
   private enterFlight(
@@ -61,11 +70,15 @@ export class App {
 
   private enterDebrief(result: FlightResult): void {
     this.state = 'DEBRIEF'
-    this.flightSession?.dispose()
+    const bundle = this.flightSession?.dispose({ preserveMultiplayer: true })
     this.flightSession = null
+
+    this.lobbyRestore = bundle?.client.isConnected() ? bundle : null
 
     this.debriefScreen = new DebriefScreen(this.uiOverlay, result, () => {
       this.enterLoadout()
+    }, {
+      primaryButtonLabel: this.lobbyRestore ? 'RETURN TO LOBBY' : 'RETURN TO LOADOUT',
     })
   }
 }

@@ -22,6 +22,12 @@ import { ChaffEffect } from './scene/ChaffEffect'
 
 const FIXED_DT = 1 / 60
 
+/** LAN session client + connection settings for restoring the lobby after debrief. */
+export interface LobbyRestoreBundle {
+  client: MultiplayerClient
+  config: MultiplayerConfig
+}
+
 export class FlightSession {
   private sceneManager: SceneManager
   private cameraManager: CameraManager
@@ -350,7 +356,7 @@ export class FlightSession {
     )
   }
 
-  dispose(): void {
+  dispose(options?: { preserveMultiplayer?: boolean }): LobbyRestoreBundle | undefined {
     this.disposed = true
     cancelAnimationFrame(this.rafId)
     if (this.completionTimer !== null) {
@@ -371,7 +377,23 @@ export class FlightSession {
     this.postFX.dispose()
     this.sceneManager.dispose()
     this.audioManager.dispose()
-    this.multiplayer?.disconnect()
-    if (this.multiplayerConfig.mode === 'host') void window.fsim.multiplayer.stopHost()
+
+    const preserve =
+      Boolean(options?.preserveMultiplayer) &&
+      this.multiplayerConfig.mode !== 'single' &&
+      this.multiplayer !== null &&
+      this.multiplayer.isConnected()
+
+    let restored: LobbyRestoreBundle | undefined
+    if (preserve && this.multiplayer) {
+      restored = { client: this.multiplayer, config: this.multiplayerConfig }
+      this.multiplayer = null
+    } else {
+      this.multiplayer?.disconnect()
+      this.multiplayer = null
+      if (this.multiplayerConfig.mode === 'host') void window.fsim.multiplayer.stopHost()
+    }
+
+    return restored
   }
 }

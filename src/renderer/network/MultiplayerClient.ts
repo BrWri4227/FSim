@@ -100,15 +100,16 @@ export class MultiplayerClient {
       }
 
       if (msg.type === 'state') {
-        const wasInLobby = !this.remotePlayers.get(msg.playerId)?.state
+        const prev = this.remotePlayers.get(msg.playerId)
+        const wasInLobby = !prev?.state
+        const nowInLobby = !msg.state
         this.remotePlayers.set(msg.playerId, {
           playerId: msg.playerId,
           profile: msg.profile,
           state: msg.state,
         })
-        // Only notify on first state received (lobby → flight transition); subsequent
-        // updates are polled each frame by syncMultiplayer() via getRemoteSnapshots().
-        if (wasInLobby) this.notifyRosterChanged()
+        // Notify on lobby ↔ flight transitions; in-flight updates are polled each frame.
+        if (wasInLobby !== nowInLobby) this.notifyRosterChanged()
         return
       }
 
@@ -163,6 +164,12 @@ export class MultiplayerClient {
   sendState(state: NetPlayerState): void {
     if (!this.isConnected()) return
     this.send({ type: 'state', state })
+  }
+
+  /** Tell the session server we are back in the lobby (clears flight state for roster). */
+  returnToLobby(): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'return-to-lobby' })
   }
 
   sendHit(hit: HitEvent): void {

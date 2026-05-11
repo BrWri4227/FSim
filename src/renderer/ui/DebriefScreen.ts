@@ -3,7 +3,12 @@ import type { FlightResult } from '../App'
 export class DebriefScreen {
   private el: HTMLDivElement
 
-  constructor(_container: HTMLElement, stats: FlightResult, onRestart: () => void) {
+  constructor(
+    _container: HTMLElement,
+    stats: FlightResult,
+    onRestart: () => void,
+    options?: { primaryButtonLabel?: string }
+  ) {
     this.el = document.createElement('div')
     Object.assign(this.el.style, {
       position: 'fixed', inset: '0',
@@ -31,15 +36,17 @@ export class DebriefScreen {
     this.el.appendChild(statsEl)
 
     const btn = document.createElement('button')
-    btn.textContent = 'RETURN TO LOADOUT'
+    btn.textContent = options?.primaryButtonLabel ?? 'RETURN TO LOADOUT'
     btn.style.cssText = 'padding:12px 40px;font:bold 14px monospace;background:#0a2a0a;color:#00ff88;border:2px solid #00ff88;cursor:pointer;letter-spacing:2px'
-    btn.onclick = () => { this.dispose(); onRestart() }
+    btn.onclick = () => {
+      onRestart()
+    }
     this.el.appendChild(btn)
 
     document.body.appendChild(this.el)
   }
 
   dispose(): void {
-    document.body.removeChild(this.el)
+    this.el.remove()
   }
 }
