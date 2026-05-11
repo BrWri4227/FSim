@@ -7,6 +7,8 @@ import { getAircraftById } from '../data/aircraft/catalog'
 import { MISSILE_SPECS, getStoreDragPenalty } from '../data/weapons/catalog'
 import { msToKts } from '../utils/Units'
 
+import type { LobbyRestoreBundle } from '../FlightSession'
+
 const WEAPON_OPTIONS: Record<string, { label: string; count: number }> = {
   'aim9x':   { label: 'AIM-9X Sidewinder', count: 1 },
   'aim120b': { label: 'AIM-120B AMRAAM',   count: 1 },
@@ -50,7 +52,8 @@ export class LoadoutScreen {
       multiplayer: MultiplayerConfig,
       multiplayerClient: MultiplayerClient | null,
       glocEnabled: boolean
-    ) => void
+    ) => void,
+    lobbyRestore?: LobbyRestoreBundle | null
   ) {
     this.onLaunch = onLaunch
     this.el = document.createElement('div')
@@ -69,6 +72,24 @@ export class LoadoutScreen {
         if (this.hostEvents.length > 12) this.hostEvents.length = 12
         this.render()
       })
+    }
+    if (lobbyRestore?.client?.isConnected()) {
+      this.lobbyClient = lobbyRestore.client
+      this.lobbyConnected = true
+      this.multiplayerMode = lobbyRestore.config.mode === 'join' ? 'join' : 'host'
+      if (lobbyRestore.config.mode === 'join') {
+        this.joinHost = lobbyRestore.config.host
+      } else {
+        this.hostLanIp = lobbyRestore.config.host
+      }
+      this.lanPort = lobbyRestore.config.port
+      this.unsubscribeLobbyRoster = this.lobbyClient.onRosterChanged(() => this.render())
+      this.lobbyStatusTone = 'ok'
+      this.lobbyStatusMessage =
+        lobbyRestore.config.mode === 'host'
+          ? `Lobby created successfully at ${this.hostLanIp}:${this.lanPort}`
+          : `Joined lobby at ${this.joinHost}:${this.lanPort}`
+      this.lobbyClient.returnToLobby()
     }
     void this.initLanInfo()
     this.render()

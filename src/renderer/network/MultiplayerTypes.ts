@@ -67,6 +67,8 @@ export type ClientMessage =
   | { type: 'join'; profile: NetPlayerProfile }
   | { type: 'profile-update'; profile: NetPlayerProfile }
   | { type: 'state'; state: NetPlayerState }
+  /** Clears in-flight state on the server so roster shows IN LOBBY again. */
+  | { type: 'return-to-lobby' }
   | { type: 'hit'; hit: HitEvent }
 
 export type ServerMessage =
@@ -93,7 +95,7 @@ export type ServerMessage =
       type: 'state'
       playerId: string
       profile: NetPlayerProfile
-      state: NetPlayerState
+      state: NetPlayerState | null
     }
   | {
       type: 'hit'
