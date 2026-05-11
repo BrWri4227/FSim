@@ -9,16 +9,23 @@ export interface ChaffCloud {
 }
 
 export class CMDS {
-  private readonly MAX_FLARES = 120
-  private readonly MAX_CHAFF = 120
-  flareCount = 120
-  chaffCount = 120
+  private readonly MAX_FLARES: number
+  private readonly MAX_CHAFF: number
+  flareCount: number
+  chaffCount: number
   flares: FlareContact[] = []
   chaffClouds: ChaffCloud[] = []
   private flareTimer = 0
   private chaffTimer = 0
   private readonly FLARE_COOLDOWN = 0.5
   private readonly CHAFF_COOLDOWN = 0.25
+
+  constructor(maxFlares = 120, maxChaff = 120) {
+    this.MAX_FLARES = maxFlares
+    this.MAX_CHAFF  = maxChaff
+    this.flareCount = maxFlares
+    this.chaffCount = maxChaff
+  }
 
   private emitFlare(posNED: Vec3, velocityNED: Vec3): void {
     this.flares.push({

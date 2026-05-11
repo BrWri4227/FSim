@@ -23,5 +23,6 @@ export const AIM120B: MissileSpec = {
     frequencyGHz: 10.0,
     terminalActivationRangeM: 10000
   },
-  dataLinkUpdateHz: 2
+  dataLinkUpdateHz: 2,
+  eccmResistance: 0.55,
 }

@@ -57,6 +57,10 @@ export class HUD {
   private ctx: CanvasRenderingContext2D
   private player: PlayerAircraft
   private entityManager: EntityManager
+  /** Remaining display time (sec) for the decoy-success flash cue. */
+  private decoyFlashRemainSec = 0
+  private decoyFlashType: 'FLARE' | 'CHAFF' | null = null
+  private lastRenderMs = 0
   private gunFunnelState: {
     x: number
     y: number
@@ -80,6 +84,12 @@ export class HUD {
     this.entityManager = entityManager
   }
 
+  /** Called by the missile system when a decoy (flare or chaff) successfully seduces a missile. */
+  notifyDecoySuccess(type: 'FLARE' | 'CHAFF'): void {
+    this.decoyFlashRemainSec = 2.0
+    this.decoyFlashType = type
+  }
+
   render(camera?: THREE.PerspectiveCamera): void {
     const { canvas: c, ctx, player } = this
     const state = player.state
@@ -88,6 +98,12 @@ export class HUD {
     const stores = state.loadedStores
     const selectedWeapon = player.getSelectedWeaponName()
     const gunRounds = player.gun.getRoundsRemaining()
+
+    // Advance decoy flash timer using wall-clock delta
+    const nowMs = performance.now()
+    const dtSec = Math.min((nowMs - this.lastRenderMs) / 1000, 0.1)
+    this.lastRenderMs = nowMs
+    if (this.decoyFlashRemainSec > 0) this.decoyFlashRemainSec = Math.max(0, this.decoyFlashRemainSec - dtSec)
 
     ctx.clearRect(0, 0, c.width, c.height)
     ctx.strokeStyle = '#00ff44'
@@ -320,6 +336,17 @@ export class HUD {
     ctx.fillText('CHAFF', cmdsX, cmdsY + 14)
     ctx.fillStyle = chaffColor
     ctx.fillText(String(chaffCount).padStart(3, ' '), cmdsX + 40, cmdsY + 14)
+
+    // Decoy-success flash: "DECOY" in bright amber with fade-out
+    if (this.decoyFlashRemainSec > 0 && this.decoyFlashType) {
+      const alpha = Math.min(1, this.decoyFlashRemainSec * 2)
+      ctx.save()
+      ctx.globalAlpha = alpha
+      ctx.font = 'bold 13px monospace'
+      ctx.fillStyle = '#ffcc00'
+      ctx.fillText('DECOY', cmdsX, cmdsY + 30)
+      ctx.restore()
+    }
 
     ctx.strokeStyle = '#00ff44'
     ctx.fillStyle   = '#00ff44'

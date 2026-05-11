@@ -76,4 +76,6 @@ export const FA18C: AircraftSpec = {
   rcsTableM2: [1.0, 1.8, 3.5, 2.2, 0.9, 2.2, 3.5, 1.8],
   pilotEyePointM: [3.8, 0, -1.3],
   cockpitFovDeg: 78,
+  cmdsFlareCount: 60,
+  cmdsChaffCount: 120,
 }

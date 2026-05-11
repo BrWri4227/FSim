@@ -5,9 +5,9 @@ import type { DamageZone } from '../types/damage'
 import type { Aircraft } from '../entities/Aircraft'
 import type { GroundTarget } from '../entities/GroundTarget'
 import { guideMissile, guideMissileCoast, checkIRSeekerLock } from './MissileGuidance'
-import { evaluateFlareSeduction } from './IRSeeker'
+import { evaluateFlareSeduction, selectBestFlare, computeHeatSignatureKW } from './IRSeeker'
 import { checkProximityFuse, computeLethality, hitZoneFromMissileApproach } from './Warhead'
-import { v3add, v3scale, v3norm, v3sub, v3dist, nedToThree, v3len, quatRotateVec } from '../utils/MathUtils'
+import { v3add, v3scale, v3norm, v3sub, v3dist, v3dot, nedToThree, v3len, quatRotateVec } from '../utils/MathUtils'
 import type { MissileSpec } from '../types/weapons'
 import { MISSILE_SPECS } from '../data/weapons/catalog'
 import { applyHit } from '../systems/DamageModel'
@@ -76,6 +76,7 @@ export class MissileSystem {
   private scene: THREE.Scene
   private explosions: ExplosionManager
   private onTargetHit: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null = null
+  private onDecoySuccess: ((type: 'FLARE' | 'CHAFF') => void) | null = null
 
   private bodyMat = new THREE.MeshPhongMaterial({ color: 0xf5f5f5, emissive: 0x303030, shininess: 90 })
   private finMat  = new THREE.MeshPhongMaterial({ color: 0xa8a8a8, emissive: 0x1a1a1a, side: THREE.DoubleSide })
@@ -87,6 +88,10 @@ export class MissileSystem {
 
   setOnTargetHit(cb: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null): void {
     this.onTargetHit = cb
+  }
+
+  setOnDecoySuccess(cb: ((type: 'FLARE' | 'CHAFF') => void) | null): void {
+    this.onDecoySuccess = cb
   }
 
   launch(
@@ -230,23 +235,25 @@ export class MissileSystem {
           const seeker = m.spec.irSeeker
           const flares = targetWithCMDS?.cmds?.getActiveFlares?.() ?? []
           if (seeker && flares.length > 0) {
-            // Use squared distance to find nearest flare — avoids sqrt per comparison
-            let nearestFlare: (typeof flares[number]) | null = null
-            let nearestFlareDist2 = Infinity
-            for (const flare of flares) {
-              const dx = m.positionNED[0] - flare.positionNED[0]
-              const dy = m.positionNED[1] - flare.positionNED[1]
-              const dz = m.positionNED[2] - flare.positionNED[2]
-              const d2 = dx*dx + dy*dy + dz*dz
-              if (d2 < nearestFlareDist2) { nearestFlareDist2 = d2; nearestFlare = flare }
-            }
-            if (
-              nearestFlare &&
-              Math.random() < Math.min(1, dt * 4) &&
-              evaluateFlareSeduction(seeker, Math.max(1, target.spec.heatSignatureBaseKW), nearestFlare.heatSignatureKW)
-            ) {
-              guidanceTargetPos = [...nearestFlare.positionNED] as [number,number,number]
-              guidanceTargetVel = [0, 0, 0]
+            // Score flares by seeker-perceived irradiance (heat / dist²) within the
+            // gimbal cone — rewards the player for dragging a flare into the FOV.
+            const missileVelUnit = v3norm(m.velocityNED) as [number, number, number]
+            const bestFlare = selectBestFlare(m.positionNED, missileVelUnit, seeker.gimbalLimitDeg, flares)
+            if (bestFlare && Math.random() < Math.min(1, dt * 4)) {
+              // Use instantaneous aspect-aware heat so tail-on / AB state matters
+              const seekerToTarget: [number, number, number] = [
+                tPos[0] - m.positionNED[0],
+                tPos[1] - m.positionNED[1],
+                tPos[2] - m.positionNED[2],
+              ]
+              const instantHeatKW = computeHeatSignatureKW(target.spec, target.state, seekerToTarget)
+              if (evaluateFlareSeduction(seeker, Math.max(1, instantHeatKW), bestFlare.heatSignatureKW)) {
+                guidanceTargetPos = [...bestFlare.positionNED] as [number, number, number]
+                guidanceTargetVel = bestFlare.velocityNED
+                  ? [...bestFlare.velocityNED] as [number, number, number]
+                  : [0, 0, 0]
+                this.onDecoySuccess?.('FLARE')
+              }
             }
           }
           // IR seeker: allow 0.8 s for the missile to physically turn toward
@@ -320,9 +327,25 @@ export class MissileSystem {
                 const d2 = dx*dx + dy*dy + dz*dz
                 if (d2 < nearestChaffDist2) { nearestChaffDist2 = d2; nearestChaff = chaff }
               }
-              if (nearestChaff && nearestChaff.rcsM2 > 2.0 && Math.random() < Math.min(1, dt * 3.2)) {
-                guidanceTargetPos = [...nearestChaff.positionNED] as [number,number,number]
-                guidanceTargetVel = [...nearestChaff.velocityNED] as [number,number,number]
+              if (nearestChaff && nearestChaff.rcsM2 > 2.0) {
+                // Beam-aspect factor: the notch manoeuvre (target perpendicular to LOS)
+                // drops closing speed toward zero, making chaff far more convincing.
+                // At closing speed ≥400 m/s (head-on pursuit) the factor floors at 0.25.
+                const losDir = v3norm(v3sub(tPos, m.positionNED)) as [number, number, number]
+                const relVel: [number, number, number] = [
+                  m.velocityNED[0] - tVel[0],
+                  m.velocityNED[1] - tVel[1],
+                  m.velocityNED[2] - tVel[2],
+                ]
+                const closingSpeed = v3dot(relVel, losDir)
+                const beamFactor = Math.max(0.25, 1.0 - Math.min(1, closingSpeed / 400))
+                const eccmResist = m.spec.eccmResistance ?? 0
+                const seductionP = Math.min(1, dt * 3.2) * beamFactor * (1 - eccmResist)
+                if (Math.random() < seductionP) {
+                  guidanceTargetPos = [...nearestChaff.positionNED] as [number, number, number]
+                  guidanceTargetVel = [...nearestChaff.velocityNED] as [number, number, number]
+                  this.onDecoySuccess?.('CHAFF')
+                }
               }
             }
           }

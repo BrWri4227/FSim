@@ -92,6 +92,10 @@ export interface AircraftSpec {
   rcsTableM2: number[]   // 8-point: 0°/45°/90°/135°/180°/225°/270°/315°
   pilotEyePointM: Vec3
   cockpitFovDeg: number
+  /** Maximum flares carried. Defaults to 120 when omitted. */
+  cmdsFlareCount?: number
+  /** Maximum chaff bundles carried. Defaults to 120 when omitted. */
+  cmdsChaffCount?: number
 }
 
 export interface ControlInputs {

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { FlareContact } from '../types/ir'
 import { nedToThree } from '../utils/MathUtils'
 
-const POOL_SIZE = 8
+const POOL_SIZE = 24
 
 function makeFlareTexture(): THREE.Texture {
   const size = 64

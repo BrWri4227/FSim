@@ -331,8 +331,7 @@ export class LoadoutScreen {
       {
         label: 'COUNTERMEASURES',
         bindings: [
-          ['Z',           'Dispense flare'],
-          ['X',           'Dispense chaff'],
+          ['Z',           'Dispense countermeasures (flare + chaff)'],
         ],
       },
       {

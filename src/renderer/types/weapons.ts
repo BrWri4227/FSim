@@ -46,6 +46,12 @@ export interface MissileSpec {
   irSeeker?: IRSeekerSpec
   arSeeker?: ActiveRadarSeekerSpec
   dataLinkUpdateHz: number
+  /**
+   * Radar ECCM quality: 0 = naive seeker easily deceived by chaff,
+   * 1 = fully resistant. Multiplied against chaff seduction probability.
+   * Defaults to 0 (fully susceptible) when omitted.
+   */
+  eccmResistance?: number
 }
 
 export type MissileGuidanceMode = 'INERTIAL' | 'DATALINK' | 'ACTIVE' | 'IR_TRACK' | 'COAST'

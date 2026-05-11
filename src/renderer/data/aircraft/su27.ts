@@ -76,4 +76,6 @@ export const SU27: AircraftSpec = {
   rcsTableM2: [10.0, 16.0, 25.0, 18.0, 8.0, 18.0, 25.0, 16.0],
   pilotEyePointM: [4.2, 0, -1.5],
   cockpitFovDeg: 75,
+  cmdsFlareCount: 96,
+  cmdsChaffCount: 96,
 }
