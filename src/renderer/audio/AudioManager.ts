@@ -110,6 +110,9 @@ export class AudioManager {
   private seenSearchIdsPrev = new Set<string>()  // swap buffer — avoids per-frame Set allocation
   private prevFlareCount = -1
   private prevChaffCount = -1
+  private countermeasureCalloutQueue: Array<'chaff' | 'flare'> = []
+  private countermeasureCalloutTimer: ReturnType<typeof setTimeout> | null = null
+  private countermeasureCalloutBusy = false
 
   // ── IR seeker growl ─────────────────────────────────────────────────────
   private growlCarrier: OscillatorNode | null = null
@@ -319,10 +322,17 @@ export class AudioManager {
       if (!isFiring && this.gunFiring)  this.stopGun()
     }
 
-    // Countermeasures
+    // Countermeasures — combined Z-key dispense plays "Chaff" then "Flares"; queue prevents overlap.
     const fc = player.cmds.flareCount, cc = player.cmds.chaffCount
-    if (this.prevFlareCount >= 0 && fc < this.prevFlareCount) this.playOnce('flare', 0.7)
-    if (this.prevChaffCount >= 0 && cc < this.prevChaffCount) this.playOnce('chaff', 0.7)
+    const flareDropped = this.prevFlareCount >= 0 && fc < this.prevFlareCount
+    const chaffDropped = this.prevChaffCount >= 0 && cc < this.prevChaffCount
+    if (flareDropped && chaffDropped) {
+      this.enqueueCountermeasureCallouts(['chaff', 'flare'])
+    } else if (chaffDropped) {
+      this.enqueueCountermeasureCallouts(['chaff'])
+    } else if (flareDropped) {
+      this.enqueueCountermeasureCallouts(['flare'])
+    }
     this.prevFlareCount = fc
     this.prevChaffCount = cc
 
@@ -797,6 +807,12 @@ export class AudioManager {
     this.stopGun()
     this.stopGrowl()
     this.stopRadarTone()
+    if (this.countermeasureCalloutTimer !== null) {
+      clearTimeout(this.countermeasureCalloutTimer)
+      this.countermeasureCalloutTimer = null
+    }
+    this.countermeasureCalloutQueue.length = 0
+    this.countermeasureCalloutBusy = false
     if (this.engineSrc) { try { this.engineSrc.stop() } catch { /* */ } }
     try { this.engineOsc.stop() } catch { /* */ }
     try { this.ctx.close()      } catch { /* */ }
@@ -830,6 +846,33 @@ export class AudioManager {
     if (this.radarToneInterval !== null) { clearTimeout(this.radarToneInterval); this.radarToneInterval = null }
     if (this.radarToneOsc)  { try { this.radarToneOsc.stop()  } catch { /* */ }; this.radarToneOsc  = null }
     if (this.radarLockSrc)  { try { this.radarLockSrc.stop()  } catch { /* */ }; this.radarLockSrc  = null }
+  }
+
+  private enqueueCountermeasureCallouts(types: Array<'chaff' | 'flare'>): void {
+    this.countermeasureCalloutQueue.push(...types)
+    this.pumpCountermeasureCalloutQueue()
+  }
+
+  private pumpCountermeasureCalloutQueue(): void {
+    if (this.countermeasureCalloutBusy || this.countermeasureCalloutQueue.length === 0) return
+
+    this.countermeasureCalloutBusy = true
+    const type = this.countermeasureCalloutQueue.shift()!
+    const durationSec = this.playCountermeasureCallout(type)
+
+    if (this.countermeasureCalloutTimer !== null) clearTimeout(this.countermeasureCalloutTimer)
+    this.countermeasureCalloutTimer = setTimeout(() => {
+      this.countermeasureCalloutTimer = null
+      this.countermeasureCalloutBusy = false
+      this.pumpCountermeasureCalloutQueue()
+    }, durationSec * 1000 + 80)
+  }
+
+  private playCountermeasureCallout(type: 'chaff' | 'flare', gainVal = 0.7): number {
+    const key = type
+    const fallback = type === 'chaff' ? 'Chaff' : 'Flares'
+    if (!this.playOnce(key, gainVal)) this.speak(fallback)
+    return this.buffers.get(key)?.duration ?? 0.45
   }
 
   private speak(text: string): void {

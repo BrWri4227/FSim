@@ -19,6 +19,7 @@ const WEAPON_OPTIONS: Record<string, { label: string; count: number }> = {
 
 export class LoadoutScreen {
   private el: HTMLDivElement
+  private contentEl: HTMLDivElement
   private selectedSpec: AircraftSpec = AIRCRAFT_ROSTER[0]!
   private onLaunch: (
     spec: AircraftSpec,
@@ -61,9 +62,24 @@ export class LoadoutScreen {
       position: 'fixed', inset: '0',
       background: '#0a0f0a',
       color: '#00ff88', fontFamily: 'monospace',
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', zIndex: '8000', gap: '20px'
+      overflowY: 'auto', overflowX: 'hidden',
+      zIndex: '8000',
     })
+    this.contentEl = document.createElement('div')
+    Object.assign(this.contentEl.style, {
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', gap: 'clamp(12px, 2vh, 20px)',
+      width: '100%', maxWidth: '960px', minHeight: '100dvh',
+      padding: '48px 16px 24px', boxSizing: 'border-box',
+      margin: '0 auto',
+    })
+    this.el.appendChild(this.contentEl)
+
+    const versionBadge = document.createElement('div')
+    versionBadge.textContent = `v${window.fsim?.version ?? 'dev'}`
+    versionBadge.style.cssText = 'position:fixed;top:10px;right:14px;font-size:11px;color:#66bb88;letter-spacing:1px;z-index:8001;pointer-events:none'
+    this.el.appendChild(versionBadge)
+
     document.body.appendChild(this.el)
     const mp = this.getMultiplayerBridge()
     if (mp?.onLobbyEvent) {
@@ -108,21 +124,16 @@ export class LoadoutScreen {
   }
 
   private render(): void {
-    this.el.innerHTML = ''
-
-    const versionBadge = document.createElement('div')
-    versionBadge.textContent = `v${window.fsim?.version ?? 'dev'}`
-    versionBadge.style.cssText = 'position:absolute;top:10px;right:14px;font-size:11px;color:#66bb88;letter-spacing:1px'
-    this.el.appendChild(versionBadge)
+    this.contentEl.innerHTML = ''
 
     const title = document.createElement('h1')
     title.textContent = 'FSIM — SELECT AIRCRAFT'
-    title.style.cssText = 'color:#00ff88;letter-spacing:4px;font-size:22px;margin:0'
-    this.el.appendChild(title)
+    title.style.cssText = 'color:#00ff88;letter-spacing:clamp(2px,0.5vw,4px);font-size:clamp(16px,2.5vw,22px);margin:0;text-align:center'
+    this.contentEl.appendChild(title)
 
     // Aircraft cards
     const grid = document.createElement('div')
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:900px'
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(min(140px,100%),1fr));gap:12px;width:100%'
     for (const spec of AIRCRAFT_ROSTER) {
       const card = document.createElement('div')
       const selected = spec === this.selectedSpec
@@ -142,24 +153,24 @@ export class LoadoutScreen {
       }
       grid.appendChild(card)
     }
-    this.el.appendChild(grid)
+    this.contentEl.appendChild(grid)
 
     // Hardpoints
     const hpSection = document.createElement('div')
-    hpSection.style.cssText = 'border:1px solid #226644;padding:12px;max-width:900px;width:100%'
+    hpSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     hpSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">HARDPOINTS</div>'
 
     const selects: Array<{ hpId: string; sel: HTMLSelectElement }> = []
     for (const hp of this.selectedSpec.hardpoints) {
       const row = document.createElement('div')
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0;flex-wrap:wrap'
 
       const lbl = document.createElement('span')
       lbl.textContent = hp.id.padEnd(4, ' ')
       lbl.style.width = '40px'
 
       const sel = document.createElement('select')
-      sel.style.cssText = 'background:#0a150a;color:#00ff88;border:1px solid #226644;font:11px monospace'
+      sel.style.cssText = 'flex:1;min-width:0;max-width:100%;background:#0a150a;color:#00ff88;border:1px solid #226644;font:11px monospace'
       sel.innerHTML = `<option value="none">(Auto / Empty)</option>`
 
       // Only show compatible weapons
@@ -182,10 +193,10 @@ export class LoadoutScreen {
       row.appendChild(sel)
       hpSection.appendChild(row)
     }
-    this.el.appendChild(hpSection)
+    this.contentEl.appendChild(hpSection)
 
     const optSection = document.createElement('div')
-    optSection.style.cssText = 'border:1px solid #226644;padding:12px;max-width:900px;width:100%'
+    optSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     optSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">FLIGHT OPTIONS</div>'
 
     const glocRow = document.createElement('label')
@@ -201,10 +212,10 @@ export class LoadoutScreen {
     glocRow.appendChild(glocChk)
     glocRow.appendChild(glocLbl)
     optSection.appendChild(glocRow)
-    this.el.appendChild(optSection)
+    this.contentEl.appendChild(optSection)
 
     const mpSection = document.createElement('div')
-    mpSection.style.cssText = 'border:1px solid #226644;padding:12px;max-width:900px;width:100%'
+    mpSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     mpSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">LAN MULTIPLAYER</div>'
 
     const info = document.createElement('div')
@@ -213,12 +224,12 @@ export class LoadoutScreen {
     mpSection.appendChild(info)
 
     const joinRow = document.createElement('div')
-    joinRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
+    joinRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0;width:100%'
     const hostInput = document.createElement('input')
     hostInput.type = 'text'
     hostInput.value = this.joinHost
     hostInput.placeholder = 'Host IP (e.g. 192.168.1.25)'
-    hostInput.style.cssText = 'width:220px;background:#0a150a;color:#00ff88;border:1px solid #226644;font:11px monospace;padding:4px'
+    hostInput.style.cssText = 'flex:1;min-width:0;max-width:320px;background:#0a150a;color:#00ff88;border:1px solid #226644;font:11px monospace;padding:4px'
     hostInput.oninput = () => { this.joinHost = hostInput.value.trim() || '127.0.0.1' }
     joinRow.appendChild(hostInput)
     mpSection.appendChild(joinRow)
@@ -313,18 +324,18 @@ export class LoadoutScreen {
       events.innerHTML = eventRows.map(r => `<div>${r}</div>`).join('')
       mpSection.appendChild(events)
     }
-    this.el.appendChild(mpSection)
+    this.contentEl.appendChild(mpSection)
 
     if (this.lobbyConnected && this.multiplayerMode === 'join') {
       const hint = document.createElement('div')
-      hint.style.cssText = 'font-size:11px;color:#88bb88;margin-top:4px'
+      hint.style.cssText = 'font-size:11px;color:#88bb88;margin-top:4px;text-align:center'
       hint.textContent = 'Select your aircraft and weapons, then click LAUNCH MISSION to join the game.'
-      this.el.appendChild(hint)
+      this.contentEl.appendChild(hint)
     }
 
     // Controls reference
     const ctrlSection = document.createElement('div')
-    ctrlSection.style.cssText = 'border:1px solid #226644;padding:12px;max-width:900px;width:100%'
+    ctrlSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     ctrlSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">CONTROLS</div>'
 
     const ctrlGroups: Array<{ label: string; bindings: Array<[string, string]> }> = [
@@ -375,7 +386,7 @@ export class LoadoutScreen {
     ]
 
     const ctrlGrid = document.createElement('div')
-    ctrlGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px'
+    ctrlGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:12px'
 
     for (const group of ctrlGroups) {
       const col = document.createElement('div')
@@ -389,12 +400,12 @@ export class LoadoutScreen {
       ctrlGrid.appendChild(col)
     }
     ctrlSection.appendChild(ctrlGrid)
-    this.el.appendChild(ctrlSection)
+    this.contentEl.appendChild(ctrlSection)
 
     // Launch button
     const btn = document.createElement('button')
     btn.textContent = 'LAUNCH MISSION'
-    btn.style.cssText = 'padding:14px 48px;font:bold 16px monospace;background:#0a2a0a;color:#00ff88;border:2px solid #00ff88;cursor:pointer;letter-spacing:3px'
+    btn.style.cssText = 'padding:14px clamp(24px,6vw,48px);font:bold clamp(14px,2vw,16px) monospace;background:#0a2a0a;color:#00ff88;border:2px solid #00ff88;cursor:pointer;letter-spacing:3px;margin-bottom:8px'
     btn.onclick = () => {
       this.launchError = ''
       try {
@@ -435,7 +446,7 @@ export class LoadoutScreen {
         this.render()
       }
     }
-    this.el.appendChild(btn)
+    this.contentEl.appendChild(btn)
   }
 
   private async joinLobby(mode: 'host' | 'join'): Promise<void> {

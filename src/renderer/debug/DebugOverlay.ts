@@ -5,7 +5,9 @@ import type { Aircraft } from '../entities/Aircraft'
 import { mToFt } from '../utils/Units'
 import { sustainedTurnRateRefDegS } from '../data/aircraft/turnPerformance'
 import { F16C } from '../data/aircraft/f16c'
+import { F22 } from '../data/aircraft/f22'
 import { MIG29 } from '../data/aircraft/mig29'
+import { SU57 } from '../data/aircraft/su57'
 import type * as THREE from 'three'
 import { R73 } from '../data/weapons/r73'
 import { getStoreDragPenalty } from '../data/weapons/catalog'
@@ -13,7 +15,7 @@ import { v3sub, RAD2DEG, quatRotateVec, quatConjugate } from '../utils/MathUtils
 import { getWeather, setWeather, resetWeather, type TurbulenceLevel } from '../physics/WeatherState'
 import { GROUND_TARGET_SPECS } from '../data/groundTargets/catalog'
 
-const ENEMY_SPECS = { 'F-16C': F16C, 'MiG-29': MIG29 } as const
+const ENEMY_SPECS = { 'F-16C': F16C, 'F-22A': F22, 'MiG-29': MIG29, 'Su-57': SU57 } as const
 const BEHAVIORS   = ['FOLLOW_BEHIND', 'FOLLOW_IN_FRONT', 'FLY_STRAIGHT', 'TURN_CONSTANTLY', 'BVR_ENGAGE', 'AVOIDANCE'] as const
 
 export class DebugOverlay {

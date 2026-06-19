@@ -493,6 +493,182 @@ function buildSu35(): THREE.Group {
   return g
 }
 
+// ── F-22A Raptor ────────────────────────────────────────────────────────────
+// Diamond wing planform, twin outward-canted tails, DSI bumps, chined nose.
+function buildF22(): THREE.Group {
+  const g = new THREE.Group()
+  const C = 0x4a5568  // low-observable blue-grey
+  const Cw = C - 0x0c0c0d
+  const Cd = C - 0x181819
+  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+
+  // Blended fuselage — wide, flat-sided stealth shaping
+  addBox(g, fm, 11.5, 1.05, 1.45, 0, 0, 0)
+  // Chined nose (upper/lower facet meeting at sharp edge)
+  addCylX(g, fm, 0, 0.48, 3.0, 7.25, 0.05, 0, 6)
+  addBox(g, bm(C - 0x060608), 3.5, 0.12, 0.55, 5.5, 0.18, 0.85)
+  addBox(g, bm(C - 0x060608), 3.5, 0.12, 0.55, 5.5, 0.18, -0.85)
+
+  // Bubble canopy (set back, low profile)
+  const canopy = new THREE.Mesh(
+    new THREE.SphereGeometry(0.46, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    canopyMat()
+  )
+  canopy.position.set(3.5, 0.48, 0)
+  g.add(canopy)
+
+  // DSI inlet bumps (characteristic F-22/F-35 feature)
+  addBox(g, dm, 1.8, 0.55, 0.75, 2.2, -0.12, 1.05)
+  addBox(g, dm, 1.8, 0.55, 0.75, 2.2, -0.12, -1.05)
+
+  // Diamond wing — high sweep trapezoid, clipped tips
+  addWing(g, wm, 1, 1.8, -0.30, 0.70, 4.8, 1.4, 4.2, 1.35, 0.11)
+  addWing(g, wm, -1, 1.8, -0.30, 0.70, 4.8, 1.4, 4.2, 1.35, 0.11)
+
+  // Twin outward-canted vertical tails (~27° from vertical)
+  const vL = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.9, 0.12), wm)
+  vL.position.set(-4.2, 0.90, 0.62)
+  vL.rotation.x = 0.47
+  g.add(vL)
+  const vR = vL.clone()
+  vR.position.z = -0.62
+  vR.rotation.x = -0.47
+  g.add(vR)
+
+  // All-moving horizontal stabilators (canted to match tails)
+  addBox(g, wm, 1.6, 0.09, 2.2, -4.8, -0.18, 1.95)
+  addBox(g, wm, 1.6, 0.09, 2.2, -4.8, -0.18, -1.95)
+
+  // Twin engine nacelles (integrated, rectangular 2D TVC nozzle exits)
+  addCylX(g, dm, 0.40, 0.48, 4.2, -3.2, -0.08, 0.58)
+  addCylX(g, dm, 0.40, 0.48, 4.2, -3.2, -0.08, -0.58)
+  // Rectangular nozzle exits (F-22 2D thrust vectoring)
+  addBox(g, bm(0x333333, 60), 0.15, 0.55, 0.55, -5.5, -0.08, 0.58)
+  addBox(g, bm(0x333333, 60), 0.15, 0.55, 0.55, -5.5, -0.08, -0.58)
+
+  addFlapsGroup(g, 0.0, 0.75, 2.0, 1.1, -0.30)
+  addGearGroup(g, 4.5, 0.8, 1.0, -0.52, 0.52, 0.22)
+  placeNozzle(g, [[-5.6, -0.08, 0.58], [-5.6, -0.08, -0.58]])
+  g.rotation.y = Math.PI / 2
+  return g
+}
+
+// ── F-35A Lightning II ─────────────────────────────────────────────────────
+// Single engine, thick fuselage, DSI bumps, inward-canted twin tails, wide canopy.
+function buildF35A(): THREE.Group {
+  const g = new THREE.Group()
+  const C = 0x5a6678  // medium stealth grey
+  const Cw = C - 0x0d0d0e
+  const Cd = C - 0x1a1a1b
+  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+
+  // Thick mid-fuselage (JSF's distinctive barrel shape)
+  addBox(g, fm, 9.5, 1.15, 1.35, 0, 0, 0)
+  // Dorsal chine running from nose (key F-35 identifier)
+  addBox(g, bm(C - 0x050507), 7.0, 0.22, 0.70, 1.5, 0.42, 0)
+  // Chined nose
+  addCylX(g, fm, 0, 0.46, 2.6, 6.05, 0.08, 0, 6)
+
+  // Large single-piece visor canopy (very prominent on F-35)
+  const canopy = new THREE.Mesh(
+    new THREE.SphereGeometry(0.55, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.58),
+    canopyMat()
+  )
+  canopy.position.set(2.8, 0.52, 0)
+  g.add(canopy)
+
+  // DSI inlet bumps
+  addBox(g, dm, 1.6, 0.50, 0.70, 1.8, -0.15, 0.95)
+  addBox(g, dm, 1.6, 0.50, 0.70, 1.8, -0.15, -0.95)
+
+  // Moderate sweep trapezoidal wings (smaller than F-22)
+  addWing(g, wm, 1, 1.4, -0.26, 0.58, 3.5, 1.2, 3.0, 0.90, 0.10)
+  addWing(g, wm, -1, 1.4, -0.26, 0.58, 3.5, 1.2, 3.0, 0.90, 0.10)
+
+  // Twin outward-canted tails (smaller, closer together than F-22)
+  const vL = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.5, 0.11), wm)
+  vL.position.set(-3.8, 0.78, 0.52)
+  vL.rotation.x = 0.40
+  g.add(vL)
+  const vR = vL.clone()
+  vR.position.z = -0.52
+  vR.rotation.x = -0.40
+  g.add(vR)
+
+  // Horizontal stabilators
+  addBox(g, wm, 1.4, 0.08, 1.8, -4.3, -0.20, 1.65)
+  addBox(g, wm, 1.4, 0.08, 1.8, -4.3, -0.20, -1.65)
+
+  // Single engine nacelle with stealthy serrated nozzle
+  addCylX(g, dm, 0.38, 0.46, 3.8, -2.8, -0.05, 0)
+  addBox(g, bm(0x333333, 60), 0.12, 0.50, 0.50, -4.9, -0.05, 0)
+
+  addFlapsGroup(g, 0.2, 0.62, 1.6, 0.95, -0.26)
+  addGearGroup(g, 3.8, 0.6, 0.85, -0.57, 0.50, 0.21)
+  placeNozzle(g, [[-5.0, -0.05, 0]])
+  g.rotation.y = Math.PI / 2
+  return g
+}
+
+// ── Su-57 Felon ─────────────────────────────────────────────────────────────
+// Wide-spaced twin engines, angular stealth facets, S-duct intakes, LERX, IRST ball.
+function buildSu57(): THREE.Group {
+  const g = new THREE.Group()
+  const C = 0x6a7068  // blue-grey camouflage
+  const Cw = C - 0x101010
+  const Cd = C - 0x1c1c1c
+  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+
+  // Long angular fuselage with flat facet sides
+  addBox(g, fm, 12.5, 1.05, 1.40, 0, 0, 0)
+  // Flat upper fuselage facet (stealth shaping)
+  addBox(g, bm(C - 0x080808), 8.0, 0.35, 1.20, 0.5, 0.55, 0)
+  // Sharp chined nose
+  addCylX(g, fm, 0, 0.50, 3.0, 7.75, 0.05, 0, 6)
+  // Nose chines (angular stealth edges)
+  addBox(g, bm(Cd), 3.8, 0.16, 0.50, 5.0, 0.05, 0.90)
+  addBox(g, bm(Cd), 3.8, 0.16, 0.50, 5.0, 0.05, -0.90)
+  // IRST ball (offset to starboard — Su-57 signature)
+  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 6), bm(0x222222, 60))
+  irst.position.set(5.8, 0.05, 0.45)
+  g.add(irst)
+
+  addCanopy(g, 4.2, 0.56)
+
+  // Large LERX blending into wing roots
+  addBox(g, bm(C - 0x070707), 5.0, 0.18, 1.85, 1.5, -0.02, 1.90, -0.12)
+  addBox(g, bm(C - 0x070707), 5.0, 0.18, 1.85, 1.5, -0.02, -1.90, 0.12)
+
+  // S-duct intake openings (under wing root, angled)
+  addBox(g, dm, 2.5, 0.65, 0.80, 2.2, -0.55, 1.15)
+  addBox(g, dm, 2.5, 0.65, 0.80, 2.2, -0.55, -1.15)
+
+  // Large trapezoidal wings with moderate sweep
+  addWing(g, wm, 1, 2.0, -0.28, 0.80, 5.2, 1.7, 4.5, 1.05, 0.11)
+  addWing(g, wm, -1, 2.0, -0.28, 0.80, 5.2, 1.7, 4.5, 1.05, 0.11)
+
+  // Smaller canted vertical tails (vs Su-27 — stealth-optimised)
+  addBox(g, wm, 2.0, 1.8, 0.12, -4.8, 0.95, 0.68, 0.08)
+  addBox(g, wm, 2.0, 1.8, 0.12, -4.8, 0.95, -0.68, -0.08)
+
+  // All-moving horizontal stabilators
+  addBox(g, wm, 2.0, 0.09, 2.5, -5.3, -0.22, 2.15)
+  addBox(g, wm, 2.0, 0.09, 2.5, -5.3, -0.22, -2.15)
+
+  // Widely spaced engine nacelles — visible gap between them (Su-57 signature)
+  addCylX(g, dm, 0.42, 0.50, 5.5, -3.3, -0.05, 0.85)
+  addCylX(g, dm, 0.42, 0.50, 5.5, -3.3, -0.05, -0.85)
+  // 3D thrust-vectoring nozzle bells
+  addCylX(g, bm(0x333333, 60), 0.50, 0.40, 0.55, -6.2, -0.05, 0.85, 8)
+  addCylX(g, bm(0x333333, 60), 0.50, 0.40, 0.55, -6.2, -0.05, -0.85, 8)
+
+  addFlapsGroup(g, -0.1, 1.0, 2.2, 1.3, -0.28)
+  addGearGroup(g, 5.2, 0.5, 1.05, -0.52, 0.55, 0.23)
+  placeNozzle(g, [[-6.4, -0.05, 0.85], [-6.4, -0.05, -0.85]])
+  g.rotation.y = Math.PI / 2
+  return g
+}
+
 // ── Fallback generic jet ────────────────────────────────────────────────────
 
 function buildGeneric(nation: 'USA' | 'RUS'): THREE.Group {
@@ -525,6 +701,9 @@ export function createPlaceholderAircraftMesh(aircraftId: string, nation: 'USA' 
     case 'mig29': return buildMiG29()
     case 'su27':  return buildSu27()
     case 'su35':  return buildSu35()
+    case 'f22':   return buildF22()
+    case 'f35a':  return buildF35A()
+    case 'su57':  return buildSu57()
     default:      return buildGeneric(nation)
   }
 }
@@ -540,6 +719,9 @@ const GEAR_CLEARANCE: Record<string, { gearUp: number; gearDown: number }> = {
   mig29: { gearUp: 0.53, gearDown: 1.30 },
   su27:  { gearUp: 0.55, gearDown: 1.34 },
   su35:  { gearUp: 0.55, gearDown: 1.34 },
+  f22:   { gearUp: 0.52, gearDown: 1.29 },
+  f35a:  { gearUp: 0.57, gearDown: 1.32 },
+  su57:  { gearUp: 0.52, gearDown: 1.32 },
 }
 
 export function getGroundClearance(aircraftId: string, gearDown: boolean): number {
