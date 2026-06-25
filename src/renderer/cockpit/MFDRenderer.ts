@@ -58,7 +58,7 @@ export class MFDRenderer {
 
     switch (page) {
       case 'RADAR':
-        drawRadarPage(this.ctx, w, h, radar, state.positionNED)
+        drawRadarPage(this.ctx, w, h, radar, state.positionNED, state.attitudeQuat)
         break
       case 'EW':
         drawEWPage(this.ctx, w, h, rwr, flareCount, chaffCount, performance.now() / 1000)

@@ -3,7 +3,8 @@ import type { AircraftState } from '../types/aircraft'
 import type { AircraftSpec } from '../types/aircraft'
 import type { RadarState } from '../types/radar'
 import type { RWRState } from '../types/radar'
-import { mToFt } from '../utils/Units'
+import { mToFt, mToNm } from '../utils/Units'
+import { computeTrackBScope } from '../ui/HUDElements/RadarScope'
 
 const HUD_W = 512
 const HUD_H = 256
@@ -77,21 +78,20 @@ export class GlassHUD {
     c.arc(cx + betaPx, cy + alphaPx, 5, 0, Math.PI * 2)
     c.stroke()
 
-    // Radar target caret
+    // Radar target caret — B-scope style: azimuth across HUD, range toward horizon line.
     const stt = radar.sttTargetId
     if (stt && radar.mode === 'STT') {
       const track = radar.tracks.find(t => t.entityId === stt)
       if (track) {
-        const dx = track.positionNED[1] - spec.pilotEyePointM[1]
-        const dy = track.positionNED[0] - spec.pilotEyePointM[0]
-        const azRel = Math.atan2(dx, dy) * (180 / Math.PI)
-        const rangeM = Math.sqrt(dx * dx + dy * dy)
-        const ax = cx + (azRel / 60) * (HUD_W / 2)
-        const ay = cy
-        c.beginPath()
-        c.rect(ax - 8, ay - 8, 16, 16)
-        c.stroke()
-        c.fillText(`${Math.round(rangeM / 1852)} nm`, ax + 10, ay)
+        const { rangeM, azDeg } = computeTrackBScope(track.positionNED, state.positionNED, state.attitudeQuat)
+        if (azDeg >= -60 && azDeg <= 60 && rangeM <= radar.rangeModeM) {
+          const ax = cx + (azDeg / 60) * (HUD_W / 2)
+          const ay = cy - (rangeM / radar.rangeModeM) * (HUD_H / 2 - 24)
+          c.beginPath()
+          c.rect(ax - 8, ay - 8, 16, 16)
+          c.stroke()
+          c.fillText(`${Math.round(mToNm(rangeM))} nm`, ax + 10, ay)
+        }
       }
     }
 

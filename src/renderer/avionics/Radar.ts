@@ -1,9 +1,24 @@
 import type { AircraftSpec, AircraftState } from '../types/aircraft'
 import type { RadarState, RadarTrack } from '../types/radar'
+import type { Vec3 } from '../types/common'
 import type { Aircraft } from '../entities/Aircraft'
 import type { GroundTarget } from '../entities/GroundTarget'
 import { computeDetectionRange, isInScanBeam } from './RadarDetection'
 import { v3dist } from '../utils/MathUtils'
+
+function cloneVec3(v: Vec3): Vec3 {
+  return [v[0], v[1], v[2]]
+}
+
+/** Aircraft integration replaces state Vec3 arrays each tick — tracks must own copies. */
+function syncTrackKinematics(track: RadarTrack, positionNED: Vec3, velocityNED: Vec3): void {
+  track.positionNED[0] = positionNED[0]
+  track.positionNED[1] = positionNED[1]
+  track.positionNED[2] = positionNED[2]
+  track.velocityNED[0] = velocityNED[0]
+  track.velocityNED[1] = velocityNED[1]
+  track.velocityNED[2] = velocityNED[2]
+}
 
 export class Radar {
   state: RadarState
@@ -65,6 +80,7 @@ export class Radar {
       const target = liveTrackable.get(this.state.sttTargetId)
       if (target) {
         this.updateTrack(target, ownState)
+        this.refreshLiveTrackKinematics(liveTrackable)
       } else {
         // Remove the lost STT track using the Map for O(1) lookup
         const lostId = this.state.sttTargetId
@@ -90,6 +106,8 @@ export class Radar {
         this.updateTrack(enemy, ownState)
       }
     }
+
+    this.refreshLiveTrackKinematics(liveTrackable)
 
     // Single-pass: remove dead contacts AND decay confidence (was two separate filter calls)
     this.state.tracks = this.state.tracks.filter(t => {
@@ -153,18 +171,24 @@ export class Radar {
     if (prevSelected) this.state.selectedTrackId = prevSelected
   }
 
-  private updateTrack(enemy: Aircraft, ownState: AircraftState): void {
+  private refreshLiveTrackKinematics(liveTrackable: Map<string, Aircraft>): void {
+    for (const t of this.state.tracks) {
+      const live = liveTrackable.get(t.entityId)
+      if (live) syncTrackKinematics(t, live.state.positionNED, live.state.velocityNED)
+    }
+  }
+
+  private updateTrack(enemy: Aircraft, _ownState: AircraftState): void {
     const existing = this.trackById.get(enemy.entityId)
     if (existing) {
-      existing.positionNED = enemy.state.positionNED
-      existing.velocityNED = enemy.state.velocityNED
+      syncTrackKinematics(existing, enemy.state.positionNED, enemy.state.velocityNED)
       existing.lastUpdateSec = this.time
       existing.confidence = 1.0
     } else if (this.state.tracks.length < 8) {
       const track: RadarTrack = {
         entityId: enemy.entityId,
-        positionNED: enemy.state.positionNED,
-        velocityNED: enemy.state.velocityNED,
+        positionNED: cloneVec3(enemy.state.positionNED),
+        velocityNED: cloneVec3(enemy.state.velocityNED),
         rcsM2: this.getTargetRCS(enemy),
         lastUpdateSec: this.time,
         confidence: 1.0,
@@ -219,6 +243,11 @@ export class Radar {
       }
     }
 
+    for (const t of this.state.tracks) {
+      const gt = live.get(t.entityId)
+      if (gt) syncTrackKinematics(t, gt.state.positionNED, gt.state.velocityNED)
+    }
+
     // Decay / prune
     this.state.tracks = this.state.tracks.filter(t => {
       if (!live.has(t.entityId)) {
@@ -263,15 +292,14 @@ export class Radar {
   private upsertGroundTrack(gt: GroundTarget): void {
     const existing = this.trackById.get(gt.entityId)
     if (existing) {
-      existing.positionNED = gt.state.positionNED
-      existing.velocityNED = gt.state.velocityNED
+      syncTrackKinematics(existing, gt.state.positionNED, gt.state.velocityNED)
       existing.lastUpdateSec = this.time
       existing.confidence = 1.0
     } else if (this.state.tracks.length < 8) {
       const track: RadarTrack = {
         entityId: gt.entityId,
-        positionNED: gt.state.positionNED,
-        velocityNED: gt.state.velocityNED,
+        positionNED: cloneVec3(gt.state.positionNED),
+        velocityNED: cloneVec3(gt.state.velocityNED),
         rcsM2: gt.spec.rcsM2,
         lastUpdateSec: this.time,
         confidence: 1.0,

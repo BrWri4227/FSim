@@ -1,15 +1,16 @@
-import type { RadarState, RadarTrack } from '../../types/radar'
-import type { Vec3 } from '../../types/common'
+import type { RadarState } from '../../types/radar'
+import type { Vec3, Quat } from '../../types/common'
 import { mToNm } from '../../utils/Units'
-import { v3dist } from '../../utils/MathUtils'
+import { computeTrackBScope } from '../../ui/HUDElements/RadarScope'
 
-function trackAzimuthDeg(track: RadarTrack, ownPos: Vec3): number {
-  const dx = track.positionNED[1] - ownPos[1]
-  const dy = track.positionNED[0] - ownPos[0]
-  return Math.atan2(dx, dy) * (180 / Math.PI)
-}
-
-export function drawRadarPage(ctx: CanvasRenderingContext2D, w: number, h: number, radar: RadarState, ownPos: Vec3): void {
+export function drawRadarPage(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  radar: RadarState,
+  ownPos: Vec3,
+  ownAttitudeQuat?: Quat,
+): void {
   ctx.fillStyle = '#001100'
   ctx.fillRect(0, 0, w, h)
   ctx.strokeStyle = '#00ff44'
@@ -46,8 +47,10 @@ export function drawRadarPage(ctx: CanvasRenderingContext2D, w: number, h: numbe
 
   // Tracks
   for (const t of radar.tracks) {
-    const rangeM = v3dist(t.positionNED, ownPos)
-    const azDeg  = trackAzimuthDeg(t, ownPos)
+    const { rangeM, azDeg } = computeTrackBScope(t.positionNED, ownPos, ownAttitudeQuat)
+    if (azDeg < -60 || azDeg > 60) continue
+    if (rangeM > radar.rangeModeM) continue
+
     const tx = bx + ((azDeg + 60) / 120) * bw
     const ty = by + bh - (rangeM / radar.rangeModeM) * bh
     const isSTT = radar.mode === 'STT' && t.entityId === radar.sttTargetId

@@ -3,6 +3,29 @@ import type { Vec3, Quat } from '../../types/common'
 import { mToNm } from '../../utils/Units'
 import { v3dist, quatRotateVec, quatConjugate } from '../../utils/MathUtils'
 
+export function computeTrackBScope(
+  trackPos: Vec3,
+  ownPos: Vec3,
+  ownAttitudeQuat?: Quat,
+): { rangeM: number; azDeg: number } {
+  const rangeM = v3dist(trackPos, ownPos)
+  let azDeg: number
+  if (ownAttitudeQuat) {
+    const wd: Vec3 = [
+      trackPos[0] - ownPos[0],
+      trackPos[1] - ownPos[1],
+      trackPos[2] - ownPos[2],
+    ]
+    const bd = quatRotateVec(quatConjugate(ownAttitudeQuat), wd)
+    azDeg = Math.atan2(bd[1], bd[0]) * (180 / Math.PI)
+  } else {
+    const dx = trackPos[1] - ownPos[1]
+    const dy = trackPos[0] - ownPos[0]
+    azDeg = Math.atan2(dx, dy) * (180 / Math.PI)
+  }
+  return { rangeM, azDeg }
+}
+
 export function drawRadarScope(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radar: RadarState, ownPos: Vec3, ownAttitudeQuat?: Quat): void {
   ctx.strokeStyle = '#00ff44'
   ctx.lineWidth = 1
@@ -37,23 +60,7 @@ export function drawRadarScope(ctx: CanvasRenderingContext2D, x: number, y: numb
 
   // Tracks
   for (const t of radar.tracks) {
-    const rangeM = v3dist(t.positionNED, ownPos)
-    let azDeg: number
-    if (ownAttitudeQuat) {
-      // Body-relative azimuth — world delta rotated into body frame.
-      const wd: Vec3 = [
-        t.positionNED[0] - ownPos[0],
-        t.positionNED[1] - ownPos[1],
-        t.positionNED[2] - ownPos[2],
-      ]
-      const bd = quatRotateVec(quatConjugate(ownAttitudeQuat), wd)
-      azDeg = Math.atan2(bd[1], bd[0]) * (180 / Math.PI)
-    } else {
-      // Fallback: bearing from north (matches legacy behaviour when only facing north).
-      const dx = t.positionNED[1] - ownPos[1]
-      const dy = t.positionNED[0] - ownPos[0]
-      azDeg = Math.atan2(dx, dy) * (180 / Math.PI)
-    }
+    const { rangeM, azDeg } = computeTrackBScope(t.positionNED, ownPos, ownAttitudeQuat)
 
     // Skip targets outside the ±60° scope cone — they're behind the wing or off the side.
     if (azDeg < -60 || azDeg > 60) continue
