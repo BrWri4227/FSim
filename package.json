@@ -13,7 +13,8 @@
     "test": "vitest run",
     "ci": "npm run typecheck && npm run lint && npm run test",
     "dist": "electron-builder",
-    "dist:win": "electron-builder --win nsis --x64 --config.win.signAndEditExecutable=false"
+    "dist:win": "electron-builder --win nsis --x64 --config.win.signAndEditExecutable=false",
+    "dist:mac": "electron-builder --mac dmg zip --arm64 --x64 --publish never"
   },
   "dependencies": {
     "three": "^0.165.0",
@@ -46,6 +47,16 @@
     "files": [
       "dist-electron/**",
       "dist/**"
-    ]
+    ],
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.games",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "FSim ${version}"
+    }
   }
 }
