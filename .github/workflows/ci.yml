@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: lts/*
           cache: npm
       - run: npm ci
       - run: npm run ci
@@ -31,13 +31,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: lts/*
           cache: npm
       - run: npm ci
       - run: npm run build
       - name: Package (unsigned DMG + ZIP)
         env:
-          # No Apple Developer ID on CI — produce unsigned artifacts.
+          # Prevents electron-builder from hanging when no signing cert is present
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npm run dist:mac
       - name: List release artifacts
@@ -45,9 +45,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: FSim-mac
-          path: |
-            release/*.dmg
-            release/*.zip
+          path: release/*.{dmg,zip}
           if-no-files-found: error
 
   # ── Windows distributable build ─────────────────────────────────────────────
@@ -59,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: lts/*
           cache: npm
       - run: npm ci
       - run: npm run build
