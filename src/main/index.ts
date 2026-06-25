@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { networkInterfaces } from 'os'
 import { WebSocketServer, WebSocket } from 'ws'
+import { getPrimaryLanIp as _getPrimaryLanIp } from './lanIp'
 import type { WebSocket as WS, RawData } from 'ws'
 import type { IncomingMessage } from 'http'
 import { pathToFileURL } from 'url'
@@ -186,13 +187,7 @@ function broadcast(msg: ServerMessage, exceptPeerId?: string): void {
 }
 
 function getPrimaryLanIp(): string {
-  const ifaces = networkInterfaces()
-  for (const items of Object.values(ifaces)) {
-    for (const i of items ?? []) {
-      if (i.family === 'IPv4' && !i.internal) return i.address
-    }
-  }
-  return '127.0.0.1'
+  return _getPrimaryLanIp(networkInterfaces())
 }
 
 async function stopLanHost(): Promise<void> {
