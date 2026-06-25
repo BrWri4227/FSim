@@ -57,9 +57,10 @@ export const F15C: AircraftSpec = {
     CNdr: [-0.044,-0.042,-0.036,-0.028,-0.020],
   },
   engine: {
-    maxThrustDryN: 106000,
-    maxThrustWetN: 130000,
-    idleThrustN: 7000,
+    // 2× F100-PW-220E: 79.2 kN dry / 106.0 kN wet each → combined totals below
+    maxThrustDryN: 158400,
+    maxThrustWetN: 212000,
+    idleThrustN: 14000,
     spoolTimeSec: 3.5,
     sfcDry: 1.9e-5, sfcWet: 4.2e-5,
     afterburnerThrottleMin: 0.75,

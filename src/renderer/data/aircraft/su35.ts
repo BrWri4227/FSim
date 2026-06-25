@@ -57,9 +57,10 @@ export const SU35: AircraftSpec = {
     CNdr: [-0.044,-0.042,-0.036,-0.028,-0.020],
   },
   engine: {
-    maxThrustDryN: 137300,
-    maxThrustWetN: 142000,
-    idleThrustN: 9000,
+    // 2× Saturn AL-41F1S: 86.3 kN dry / 142.2 kN wet each → combined totals below
+    maxThrustDryN: 172600,
+    maxThrustWetN: 284400,
+    idleThrustN: 18000,
     spoolTimeSec: 3.0,
     sfcDry: 1.75e-5, sfcWet: 3.9e-5,
     afterburnerThrottleMin: 0.75,

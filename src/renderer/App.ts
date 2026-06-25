@@ -44,8 +44,8 @@ export class App {
 
     this.loadoutScreen = new LoadoutScreen(
       this.uiOverlay,
-      (spec, stores, multiplayer, client, glocEnabled) => {
-        this.enterFlight(spec, stores, multiplayer, client, glocEnabled)
+      (spec, stores, multiplayer, client, glocEnabled, autoRudder) => {
+        this.enterFlight(spec, stores, multiplayer, client, glocEnabled, autoRudder)
       },
       restore ?? undefined
     )
@@ -56,7 +56,8 @@ export class App {
     stores: LoadedStore[],
     multiplayer: MultiplayerConfig,
     multiplayerClient: MultiplayerClient | null,
-    glocEnabled: boolean
+    glocEnabled: boolean,
+    autoRudder: boolean
   ): void {
     this.state = 'FLIGHT'
     this.loadoutScreen?.dispose()
@@ -64,7 +65,7 @@ export class App {
 
     this.flightSession = new FlightSession(spec, stores, multiplayer, multiplayerClient, (result) => {
       this.enterDebrief(result)
-    }, glocEnabled)
+    }, glocEnabled, autoRudder)
     this.flightSession.start()
   }
 

@@ -2,7 +2,7 @@ import type { AircraftSpec, ControlInputs } from '../types/aircraft'
 import type { StateVec } from '../types/common'
 import type { FlightPenalties } from '../types/damage'
 import { computeAtmosphere, thrustLapseFactor } from './Atmosphere'
-import { computeAeroCoeffs, computeCL } from './AeroCoefficients'
+import { computeAeroCoeffs } from './AeroCoefficients'
 import { computeControlDeltas } from './ControlEffectiveness'
 import { computeInertia } from './MassProperties'
 import type { InertiaMatrix } from './MassProperties'
@@ -94,22 +94,24 @@ function computeDerivativeInto(
   const rollRadCmd  =  controls.roll  * maxRollRad  * penalties.rollAuthorityMultiplier
   const yawRadCmd   =  controls.yaw   * maxYawRad
 
-  // SAS-like damping:
-  // - Always damp body rates.
-  // - Add stronger beta stabilization when pilot lateral inputs are low
-  //   to suppress straight-flight dutch-roll oscillation.
+  // Beta stabilization: suppress dutch-roll in straight-and-level flight.
+  // Gated by lateral stick input AND bank angle so it does not fight maneuvering turns.
   const betaRad = betaDeg * DEG2RAD
   const lateralInput = Math.max(Math.abs(controls.roll), Math.abs(controls.yaw))
-  const stabilityAssist = 1 - clamp(lateralInput / 0.55, 0, 1)
+  const bankRad = Math.atan2(2*(qw*qx + qy*qz), 1 - 2*(qx*qx + qy*qy))
+  const bankFrac = clamp(Math.abs(bankRad) / (25 * DEG2RAD), 0, 1)
+  const stabilityAssist = (1 - clamp(lateralInput / 0.55, 0, 1)) * (1 - bankFrac)
 
-  const pitchDamped = clamp(pitchRadCmd - 0.05 * qr, -maxPitchRad, maxPitchRad)
+  // No explicit rate feedback here — physical damping derivatives (Cmq, Clp, Cnr)
+  // in computeAeroCoeffs handle rate damping correctly without fighting pilot inputs.
+  const pitchDamped = clamp(pitchRadCmd, -maxPitchRad, maxPitchRad)
   const rollDamped = clamp(
-    rollRadCmd - (0.10 * p) - (0.05 * betaRad * stabilityAssist),
+    rollRadCmd - (0.05 * betaRad * stabilityAssist),
     -maxRollRad,
     maxRollRad
   )
   const yawDamped = clamp(
-    yawRadCmd - (0.10 * r) - (0.26 * betaRad * stabilityAssist),
+    yawRadCmd - (0.26 * betaRad * stabilityAssist),
     -maxYawRad,
     maxYawRad
   )
@@ -276,10 +278,25 @@ export function computeActualThrustN(
 
 // ─── Derived flight state (HUD / instruments) ────────────────────────────────
 
-export function computeDerivedState(sv: StateVec, spec: AircraftSpec, massKg: number) {
+/**
+ * Compute derived flight state for HUD/instruments.
+ *
+ * Pass `controls` (the shaped+FCS-limited inputs that were fed to the integrator)
+ * and `flapCL` so that G-load includes elevator and flap lift contributions,
+ * matching what the integrator actually applied.  Both are optional for callers
+ * that only need aero angles / attitude.
+ */
+export function computeDerivedState(
+  sv: StateVec,
+  spec: AircraftSpec,
+  massKg: number,
+  controls?: ControlInputs,
+  flapCL = 0,
+) {
   // Read from sv by index to avoid extractFromSV sub-array allocations
   const vx = sv[3]!, vy = sv[4]!, vz = sv[5]!
   const qw = sv[6]!, qx = sv[7]!, qy = sv[8]!, qz = sv[9]!
+  const pRate = sv[10]!, qRate = sv[11]!, rRate = sv[12]!
   const altM    = -sv[2]!
 
   // Airspeed-relative velocity for IAS/Mach/alpha/beta (subtract wind).
@@ -290,7 +307,7 @@ export function computeDerivedState(sv: StateVec, spec: AircraftSpec, massKg: nu
   const speedMS = Math.sqrt(avx*avx + avy*avy + avz*avz)
 
   const atm  = computeAtmosphere(altM, speedMS)
-  const mach = speedMS / atm.speedOfSoundMS
+  const mach = speedMS / Math.max(atm.speedOfSoundMS, 1)
 
   // Velocity in body frame — inline conjugate rotation (no Quat allocation)
   const velTx = 2 * (-qy * avz + qz * avy)
@@ -308,12 +325,32 @@ export function computeDerivedState(sv: StateVec, spec: AircraftSpec, massKg: nu
   const iasMS = speedMS * Math.sqrt(atm.densityKgM3 / 1.225)
   const iasKts = iasMS * 1.94384
 
-  // Load factor: CL-only aero lookup (avoids the CD/Cm table lookups and object build)
-  const qBar  = atm.dynamicPressurePa
-  const S     = spec.mass.wingAreaM2
-  const CL    = computeCL(spec.aero, alphaDeg, mach)
-  const liftN = CL * qBar * S
-  const gCurrent  = liftN / (massKg * G0)
+  const qBar = atm.dynamicPressurePa
+  const S    = spec.mass.wingAreaM2
+
+  // Base aero coefficients (CL, CD from alpha/Mach tables).
+  // Using computeAeroCoeffs rather than the fast computeCL path so we get CD for
+  // the body-frame force calculation below.
+  const aeroCoeffs = computeAeroCoeffs(
+    spec.aero, alphaDeg, betaDeg, mach,
+    pRate, qRate, rRate, spec.mass.wingspanM, spec.mass.macM, vt,
+  )
+
+  // Total CL: match what the integrator used (base + elevator delta + flap).
+  // When controls are not supplied fall back to table-only (used by non-physics callers).
+  let totalCL = aeroCoeffs.CL
+  if (controls) {
+    const maxPitchRad = 28 * DEG2RAD
+    const pitchRad = clamp(-controls.pitch * maxPitchRad, -maxPitchRad, maxPitchRad)
+    const ctrlDeltas = computeControlDeltas(spec.controlEffectiveness, mach, pitchRad, 0, 0)
+    totalCL += ctrlDeltas.dCL + flapCL
+  }
+
+  // Body-frame aerodynamic z-force (negative = lift, per wind-axis → body rotation).
+  // G = accelerometer reading perpendicular to velocity: -Fz_aero / (m·g₀)
+  const alphaRad = alphaDeg * DEG2RAD
+  const Fz_aero  = (-aeroCoeffs.CD * Math.sin(alphaRad) - totalCL * Math.cos(alphaRad)) * qBar * S
+  const gCurrent = -Fz_aero / (massKg * G0)
 
   // Euler angles from quaternion
   const yaw   = Math.atan2(2*(qw*qz + qx*qy), 1 - 2*(qy*qy + qz*qz)) * RAD2DEG

@@ -39,17 +39,17 @@ export function computeAeroCoeffs(
   const qHat = qRad * macM / denom
   const rHat = rRad * wingspanM / denom
 
-  // Side force, roll moment, yaw moment from beta and damping
+  // Side force, roll moment, yaw moment from beta and damping.
+  // Gains were previously tuned to fight dutch-roll on top of an explicit SAS
+  // rate-feedback layer.  With SAS removed, the physical derivatives handle
+  // damping directly, so these multipliers are reduced toward 1.0×.
   const betaRad = betaDeg * (Math.PI / 180)
-  // Global lateral tuning:
-  // - Increase weathercock and damping terms to reduce dutch-roll oscillation.
-  // - Add mild cross-coupled damping (r->Cl and p->Cn) for straighter tracking.
-  const CY_STAB_GAIN = 1.1
-  const CLLP_DAMP_GAIN = 2.0
-  const CNR_DAMP_GAIN = 2.4
-  const CNBETA_STAB_GAIN = 1.8
-  const CL_R_CROSS_DAMP = -0.08
-  const CN_P_CROSS_DAMP = -0.05
+  const CY_STAB_GAIN = 1.0
+  const CLLP_DAMP_GAIN = 1.4
+  const CNR_DAMP_GAIN = 1.6
+  const CNBETA_STAB_GAIN = 1.3
+  const CL_R_CROSS_DAMP = -0.05
+  const CN_P_CROSS_DAMP = -0.03
 
   const CY = aero.CYbeta * CY_STAB_GAIN * betaRad
   const Cl = (aero.Clbeta * betaRad) + (aero.Clp * CLLP_DAMP_GAIN * pHat) + (CL_R_CROSS_DAMP * rHat)

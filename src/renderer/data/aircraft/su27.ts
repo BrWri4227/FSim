@@ -57,9 +57,10 @@ export const SU27: AircraftSpec = {
     CNdr: [-0.042,-0.040,-0.034,-0.026,-0.018],
   },
   engine: {
-    maxThrustDryN: 122600,
-    maxThrustWetN: 137300,
-    idleThrustN: 8000,
+    // 2× Lyulka AL-31F: 74.5 kN dry / 122.6 kN wet each → combined totals below
+    maxThrustDryN: 149000,
+    maxThrustWetN: 245200,
+    idleThrustN: 16000,
     spoolTimeSec: 3.5,
     sfcDry: 1.85e-5, sfcWet: 4.0e-5,
     afterburnerThrottleMin: 0.75,

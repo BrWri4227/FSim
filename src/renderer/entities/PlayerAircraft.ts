@@ -15,7 +15,7 @@ import type { RWRState } from '../types/radar'
 import type { HMSState } from '../types/ir'
 import type { DamageZone } from '../types/damage'
 import { getMissileSpec, getStoreDragPenalty } from '../data/weapons/catalog'
-import { quatRotateVec } from '../utils/MathUtils'
+import { quatRotateVec, clamp } from '../utils/MathUtils'
 
 export class PlayerAircraft extends Aircraft {
   private static readonly FLARE_DISPENSER_BODY_X_M = -2.8
@@ -34,14 +34,16 @@ export class PlayerAircraft extends Aircraft {
   readonly targetingPod: TargetingPod
 
   selectedWeaponIndex = 0
+  autoRudderEnabled: boolean
   private ejectKeyPrev = false
   private onMissileLaunch: ((category: 'IR_MISSILE' | 'ARH_MISSILE') => void) | null = null
   private onMissileRadarStateChange: ((missileId: string, mode: MissileState['guidanceMode']) => void) | null = null
   private onGPWSEvent: ((event: 'PULL_UP' | 'PULL_UP_URGENT') => void) | null = null
   private missileRadarModes = new Map<string, MissileState['guidanceMode']>()
 
-  constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene) {
+  constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, autoRudder = true) {
     super(spec, stores, scene, 'player')
+    this.autoRudderEnabled = autoRudder
 
     this.gun = new GunSystem(spec.gunSpec, scene)
     this.missiles = new MissileSystem(scene)
@@ -56,6 +58,22 @@ export class PlayerAircraft extends Aircraft {
 
     // Auto-load default loadout if stores empty
     if (stores.length === 0) this.applyDefaultLoadout()
+  }
+
+  /**
+   * Turn coordinator: add a yaw command proportional to sideslip angle so the
+   * aircraft stays coordinated without the pilot having to use the rudder keys.
+   * Fades out gracefully when the pilot applies manual yaw so it never fights
+   * deliberate rudder inputs (e.g. snap rolls, slips, knife-edge).
+   */
+  private applyAutoRudder(controls: ControlInputs): ControlInputs {
+    const betaDeg = this.state.betaDeg
+    // Proportional rudder to zero sideslip.  0.04 per degree → 40% rudder at 10° beta.
+    const autoYaw = clamp(betaDeg * 0.04, -1, 1)
+    // Blend to zero as pilot applies manual yaw (full override at |yaw| ≥ 0.3).
+    const manualFrac = clamp(Math.abs(controls.yaw) / 0.3, 0, 1)
+    const blendedYaw = clamp(controls.yaw + autoYaw * (1 - manualFrac), -1, 1)
+    return { ...controls, yaw: blendedYaw }
   }
 
   private applyDefaultLoadout(): void {
@@ -102,7 +120,7 @@ export class PlayerAircraft extends Aircraft {
     if (controls.ejectRequested && !this.ejectKeyPrev) this.eject()
     this.ejectKeyPrev = controls.ejectRequested
 
-    this.integrate(controls, dt)
+    this.integrate(this.autoRudderEnabled ? this.applyAutoRudder(controls) : controls, dt)
 
     if (controls.fireGun) this.gun.fire(this.state, this.spec)
     this.gun.update(dt, enemies)

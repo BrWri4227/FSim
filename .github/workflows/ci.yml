@@ -40,6 +40,8 @@ jobs:
           # Prevents electron-builder from hanging when no signing cert is present
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npm run dist:mac
+      - name: List release artifacts
+        run: ls -la release/
       - uses: actions/upload-artifact@v4
         with:
           name: FSim-mac
@@ -61,6 +63,9 @@ jobs:
       - run: npm run build
       - name: Package (NSIS installer)
         run: npm run dist:win
+      - name: List release artifacts
+        shell: bash
+        run: ls -la release/
       - uses: actions/upload-artifact@v4
         with:
           name: FSim-win

@@ -388,7 +388,7 @@ export class DebugOverlay {
     let trLine = `TrnRt: ${trSign}${state.headingRateDegPerSec.toFixed(1)}°/s`
     const refTurn = sustainedTurnRateRefDegS(this.player.spec.id)
     if (refTurn) trLine += ` (ref ${refTurn.min}–${refTurn.max})`
-    const sinkLine = state.lastTouchdownSinkMS !== null && state.lastTouchdownSinkMS !== undefined
+    const sinkLine = state.lastTouchdownSinkMS !== null
       ? `\nTD sink: ${state.lastTouchdownSinkMS.toFixed(1)} m/s${state.gearCollapsed ? ' [GEAR FAIL]' : ''}`
       : ''
     this.telemetry.textContent =

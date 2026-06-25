@@ -96,8 +96,9 @@ export class Aircraft {
     this.state.attitudeQuat   = [newSV[6], newSV[7], newSV[8], newSV[9]]
     this.state.angularRateBody = [newSV[10], newSV[11], newSV[12]]
 
-    // Derived
-    const d = computeDerivedState(newSV, this.spec, massKg)
+    // Derived — pass the same shaped controls and flapCL the integrator used so
+    // gCurrent includes elevator and flap lift (not just table CL).
+    const d = computeDerivedState(newSV, this.spec, massKg, fcsControls, flapCL)
     this.state.alphaDeg   = d.alphaDeg
     this.state.betaDeg    = d.betaDeg
     this.state.mach       = d.mach
@@ -206,10 +207,22 @@ export class Aircraft {
     const aoaFrac = clamp(Math.abs(this.state.alphaDeg) / Math.max(this.spec.maxAoADeg, 1), 0, 1)
     const dampingBoost = 1 + 0.15 * aoaFrac
 
-    // Keep just enough shaping to prevent jitter, but preserve crisp turn response.
-    this.shapedAxes.pitch = this.rateLimitedAxis(this.shapedAxes.pitch, controls.pitch, dtSafe, 0.05 * dampingBoost, 9.0)
-    this.shapedAxes.roll = this.rateLimitedAxis(this.shapedAxes.roll, controls.roll, dtSafe, 0.035 * dampingBoost, 12.0)
-    this.shapedAxes.yaw = this.rateLimitedAxis(this.shapedAxes.yaw, controls.yaw, dtSafe, 0.04 * dampingBoost, 10.0)
+    // Keyboard produces clean binary ±1/0 signals — use a short time constant
+    // so turns respond in 2-3 frames rather than 8+.  Gamepad/stick axes are
+    // analog and keep the longer smoothing to prevent jitter.
+    const isBinary = (v: number) => v === 0 || Math.abs(v) === 1
+    const pitchTau = isBinary(controls.pitch) ? 0.008 : 0.05 * dampingBoost
+    const rollTau  = isBinary(controls.roll)  ? 0.008 : 0.035 * dampingBoost
+    const yawTau   = isBinary(controls.yaw)   ? 0.008 : 0.04 * dampingBoost
+    // Rate caps are relaxed for binary inputs (effectively removed) because the
+    // short τ already bounds how fast the axis moves per frame.
+    const pitchRate = isBinary(controls.pitch) ? 50.0 : 9.0
+    const rollRate  = isBinary(controls.roll)  ? 50.0 : 12.0
+    const yawRate   = isBinary(controls.yaw)   ? 50.0 : 10.0
+
+    this.shapedAxes.pitch = this.rateLimitedAxis(this.shapedAxes.pitch, controls.pitch, dtSafe, pitchTau, pitchRate)
+    this.shapedAxes.roll = this.rateLimitedAxis(this.shapedAxes.roll, controls.roll, dtSafe, rollTau, rollRate)
+    this.shapedAxes.yaw = this.rateLimitedAxis(this.shapedAxes.yaw, controls.yaw, dtSafe, yawTau, yawRate)
 
     return {
       ...controls,
