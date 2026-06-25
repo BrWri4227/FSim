@@ -58,6 +58,7 @@ export class FlightSession {
   private completionTimer: ReturnType<typeof setTimeout> | null = null
   private gSmoothed = 1.0   // low-pass filtered G for visual effects
   private glocEnabled: boolean
+  private autoRudder: boolean
   private wasRadarShootCueActive = false
 
   private onComplete: (result: FlightResult) => void
@@ -68,10 +69,12 @@ export class FlightSession {
     multiplayer: MultiplayerConfig,
     existingMultiplayerClient: MultiplayerClient | null,
     onComplete: (result: FlightResult) => void,
-    glocEnabled = true
+    glocEnabled = true,
+    autoRudder = true
   ) {
     this.onComplete = onComplete
     this.glocEnabled = glocEnabled
+    this.autoRudder = autoRudder
     this.multiplayerConfig = multiplayer
     this.multiplayer = existingMultiplayerClient
 
@@ -85,7 +88,7 @@ export class FlightSession {
     // Attempt to load real sound files from public/sounds/. Falls back to synthesis silently.
     void this.audioManager.loadSounds('sounds/')
 
-    this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene)
+    this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene, this.autoRudder)
     this.player.setOnMissileLaunch(category => {
       this.audioManager.play(category === 'IR_MISSILE' ? 'MISSILE_LAUNCH_IR' : 'MISSILE_LAUNCH_ARH')
     })

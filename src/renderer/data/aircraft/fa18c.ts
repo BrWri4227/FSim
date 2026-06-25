@@ -57,9 +57,10 @@ export const FA18C: AircraftSpec = {
     CNdr: [-0.048,-0.046,-0.038,-0.030,-0.022],
   },
   engine: {
-    maxThrustDryN: 79000,
-    maxThrustWetN: 98000,
-    idleThrustN: 6000,
+    // 2× GE F404-GE-402: 57.8 kN dry / 78.7 kN wet each → combined totals below
+    maxThrustDryN: 115600,
+    maxThrustWetN: 157400,
+    idleThrustN: 12000,
     spoolTimeSec: 4.5,
     sfcDry: 2.1e-5, sfcWet: 4.8e-5,
     afterburnerThrottleMin: 0.75,

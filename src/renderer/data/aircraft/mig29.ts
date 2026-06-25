@@ -57,9 +57,10 @@ export const MIG29: AircraftSpec = {
     CNdr: [-0.046,-0.044,-0.036,-0.028,-0.020],
   },
   engine: {
-    maxThrustDryN: 81400,
-    maxThrustWetN: 98000,
-    idleThrustN: 6000,
+    // 2× Klimov RD-33 Ser.3: 49.4 kN dry / 81.4 kN wet each → combined totals below
+    maxThrustDryN: 98800,
+    maxThrustWetN: 162800,
+    idleThrustN: 12000,
     spoolTimeSec: 4.0,
     sfcDry: 2.0e-5, sfcWet: 4.4e-5,
     afterburnerThrottleMin: 0.75,

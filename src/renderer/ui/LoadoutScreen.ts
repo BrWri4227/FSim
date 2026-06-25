@@ -26,9 +26,11 @@ export class LoadoutScreen {
     stores: LoadedStore[],
     multiplayer: MultiplayerConfig,
     multiplayerClient: MultiplayerClient | null,
-    glocEnabled: boolean
+    glocEnabled: boolean,
+    autoRudder: boolean
   ) => void
   private glocEnabled = true
+  private autoRudder = true
   private multiplayerMode: MultiplayerConfig['mode'] = 'single'
   private joinHost = '127.0.0.1'
   private hostLanIp = '127.0.0.1'
@@ -52,7 +54,8 @@ export class LoadoutScreen {
       stores: LoadedStore[],
       multiplayer: MultiplayerConfig,
       multiplayerClient: MultiplayerClient | null,
-      glocEnabled: boolean
+      glocEnabled: boolean,
+      autoRudder: boolean
     ) => void,
     lobbyRestore?: LobbyRestoreBundle | null
   ) {
@@ -212,6 +215,25 @@ export class LoadoutScreen {
     glocRow.appendChild(glocChk)
     glocRow.appendChild(glocLbl)
     optSection.appendChild(glocRow)
+
+    const rudderRow = document.createElement('label')
+    rudderRow.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;margin-top:6px'
+    const rudderChk = document.createElement('input')
+    rudderChk.type = 'checkbox'
+    rudderChk.checked = this.autoRudder
+    rudderChk.style.cssText = 'cursor:pointer;accent-color:#00ff88'
+    rudderChk.onchange = () => { this.autoRudder = rudderChk.checked }
+    const rudderLbl = document.createElement('span')
+    rudderLbl.textContent = 'Auto Rudder (turn coordinator)'
+    rudderLbl.style.color = '#88bb88'
+    const rudderHint = document.createElement('span')
+    rudderHint.textContent = '— keeps sideslip near zero; disable for full manual coordination'
+    rudderHint.style.cssText = 'color:#446644;font-size:10px'
+    rudderRow.appendChild(rudderChk)
+    rudderRow.appendChild(rudderLbl)
+    rudderRow.appendChild(rudderHint)
+    optSection.appendChild(rudderRow)
+
     this.contentEl.appendChild(optSection)
 
     const mpSection = document.createElement('div')
@@ -438,7 +460,7 @@ export class LoadoutScreen {
           this.lobbyClient = null
           this.lobbyConnected = false
         }
-        this.onLaunch(this.selectedSpec, stores, multiplayer, handoffClient, this.glocEnabled)
+        this.onLaunch(this.selectedSpec, stores, multiplayer, handoffClient, this.glocEnabled, this.autoRudder)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         this.launchError = `Launch failed: ${msg}`
