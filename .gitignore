@@ -1,6 +1,36 @@
+# Dependencies
 node_modules/
+
+# Build outputs (generated — run npm run dev or npm run build after clone)
 dist/
 dist-electron/
+out/
 release/
+release-temp/
+release-*/
+
+# Local / environment
 *.local
+.env
+.env.*
+
+# OS files
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# Local editor / AI settings
+.claude/
+
+# ── Game assets (required at runtime — keep tracked) ─────────────────────────
+# Shipped audio: src/renderer/public/sounds/
+# Vite copies public/ into dist-electron/renderer/ on build; dev serves /sounds/.
+#
+# Broad media ignores below only apply outside the shipped sounds folder.
+# Negation rules ensure clone-and-run still gets all WAV/MP3/OGG game audio.
+
+*.wav
+*.mp3
+*.ogg
+!src/renderer/public/sounds/
+!src/renderer/public/sounds/**

@@ -1,44 +1,98 @@
-# FSim Sound Files
+# FSim
 
-Drop your audio files here. The game will automatically load them and replace the
-synthesized placeholders. Any missing file silently falls back to synthesis.
+Combat flight simulator pitting US and Russian fighters against each other. Fly modern jets with a simplified but responsive flight model, radar and weapons systems, AI opponents, and optional LAN multiplayer — all in a desktop app built with Electron and Three.js.
 
-## Required filenames (WAV or MP3, any sample rate)
+**Version:** 0.1.5
 
-| Filename              | What it plays                                              |
-|-----------------------|------------------------------------------------------------|
-| `engine_idle.wav`     | Jet engine at idle — looped, pitch-shifted by throttle     |
-| `engine_ab.wav`       | Afterburner roar (optional, reserved for future use)       |
-| `engine_flameout.wav` | Engine wind-down / compressor stall one-shot               |
-| `gun_20mm.wav`        | M61A1 Vulcan burst — looped while firing                   |
-| `gun_30mm.wav`        | GSh-30 burst — looped while firing                         |
-| `ir_growl_cold.wav`   | AIM-9 / R-73 seeker acquiring — looped                     |
-| `ir_growl_hot.wav`    | AIM-9 / R-73 seeker locked — looped                        |
-| `rwr_search.wav`      | Single RWR search ping                                     |
-| `rwr_track.wav`       | Single RWR track ping (plays faster than search)           |
-| `rwr_lock.wav`        | RWR continuous STT lock tone — looped                      |
-| `missile_launch.wav`  | Missile motor ignition one-shot                            |
-| `pull_up.wav`         | GPWS "pull up" voice warning                               |
-| `pull_up_urgent.wav`  | GPWS "pull up pull up" urgent warning                      |
+## Features
 
-## Free sources for realistic military aircraft sounds
+- **Aircraft roster** — F-22, F-35A, F-16C, F-15C, FA-18C, MiG-29, Su-57, Su-27, Su-35
+- **Combat systems** — guns, IR and radar-guided missiles, countermeasures (flares/chaff), RWR, targeting pod
+- **Avionics & HUD** — attitude indicator, radar scope, threat display, GPWS callouts
+- **AI & wingmen** — enemy AI, wingman radio commands (engage, cover, RTB, rejoin)
+- **LAN multiplayer** — host or join via WebSocket (`ws`)
+- **Tech stack** — Electron, Vite, Three.js, TypeScript
 
-- **Freesound.org** — search "F-16 engine", "jet cannon", "missile launch", "radar warning receiver"
-  - Many CC0 / Attribution licensed recordings
-  - https://freesound.org
+## Prerequisites
 
-- **ZapSplat** — royalty-free sound effects including aviation
-  - https://www.zapsplat.com
+- **Node.js 18+** (recommended; no `engines` field is set in `package.json`)
+- **npm** (ships with Node.js)
+- **Windows** for `npm run dist:win` packaging (the app runs cross-platform in dev)
 
-- **DCS World community** — DCS forum users occasionally share RWR tones and cockpit sounds
-  - Search the ED forums for "RWR sounds pack"
+## Getting Started
 
-- **MSFS / X-Plane community** — some aircraft sound packs are redistributable
+Clone the repository and install dependencies:
 
-## Tips
+```bash
+git clone https://github.com/BrWri4227/FSim.git
+cd FSim
+npm install
+```
 
-- WAV files at 44.1 kHz or 48 kHz work best; the Web Audio API resamples automatically.
-- Looped sounds (engine, growl, gun, rwr_lock) should loop cleanly — trim silence at start/end.
-- Mono is fine for all sounds; stereo is supported but not required.
-- The engine sound is pitch-shifted via `playbackRate` (0.85 at idle → 1.25 at afterburner),
-  so record/use the engine at a neutral mid-throttle pitch for best results.
+## Development
+
+Start the Electron app with hot reload:
+
+```bash
+npm run dev
+```
+
+## Production Build
+
+Build the app, then launch the built output:
+
+```bash
+npm run build
+npm run preview
+```
+
+## Packaging (Optional)
+
+Create a distributable installer with electron-builder:
+
+```bash
+npm run dist        # platform default
+npm run dist:win    # Windows NSIS installer (x64)
+```
+
+Installers are written to the `release/` directory.
+
+## Audio Assets
+
+Sound effects (WAV) are included under `src/renderer/public/sounds/`. The game loads these automatically; any missing file falls back to synthesized placeholders.
+
+To regenerate missing sounds locally:
+
+```bash
+node scripts/generate-sounds.cjs
+```
+
+For filenames, sources, and recording tips, see [`src/renderer/public/sounds/README.md`](src/renderer/public/sounds/README.md).
+
+## Controls
+
+Default keyboard bindings are defined in [`src/renderer/input/ControlMapping.ts`](src/renderer/input/ControlMapping.ts). A full control reference is also shown on the in-game loadout screen.
+
+| Category | Keys |
+|----------|------|
+| **Flight** | W/S pitch, A/D roll, Q/E yaw, Shift/Ctrl throttle, G gear, V flaps, B brakes |
+| **Weapons** | Space gun, F missile, C cycle missile |
+| **Countermeasures** | Z flares + chaff |
+| **Radar** | R mode, T next track, L lock, U unlock |
+| **Misc** | Tab camera, F12 debug overlay, ` eject |
+| **Wingmen** | 1 engage, 2 cover, 3 RTB, 4 rejoin |
+| **Targeting pod** | P toggle, O lock, K unlock |
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Development server (electron-vite) |
+| `npm run build` | Production build |
+| `npm run preview` | Run built app |
+| `npm run typecheck` | TypeScript check |
+| `npm run lint` | ESLint |
+| `npm run test` | Vitest unit tests |
+| `npm run ci` | typecheck + lint + test |
+| `npm run dist` | Package with electron-builder |
+| `npm run dist:win` | Windows NSIS package |
