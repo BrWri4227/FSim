@@ -217,7 +217,7 @@ export class EntityManager {
         this.despawnGround(gt.entityId)
         continue
       }
-      gt.update(dt)
+      gt.update(dt, player.state.positionNED as [number, number, number])
 
       if (gt.spec.category === 'SAM_SITE') {
         const dx = player.state.positionNED[0] - gt.state.positionNED[0]

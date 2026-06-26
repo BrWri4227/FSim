@@ -6,12 +6,17 @@ import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState, computeActualThrustN } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
-import { createPlaceholderAircraftMesh, createNozzlePoint, applyDamageTint, setGearVisible, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
+import { createPlaceholderAircraftMesh, buildDistantAircraftMesh, buildStoreMesh, createNozzlePoint, applyDamageTint, setGearAnimT, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp, MESH_BIAS_QUAT, RAD2DEG } from '../utils/MathUtils'
 import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
 import { ThrusterEffect } from '../scene/ThrusterEffect'
+import { ContrailEffect } from '../scene/ContrailEffect'
 import { applyFCSLimits } from '../avionics/FCS'
+
+/** Set this from FlightSession after camera is ready so all aircraft can LOD against it. */
+export let _lodCamera: THREE.Camera | null = null
+export function setLODCamera(cam: THREE.Camera): void { _lodCamera = cam }
 
 let _entityCounter = 0
 
@@ -24,8 +29,13 @@ export class Aircraft {
   radar: Radar | null = null
 
   mesh: THREE.Group
+  private lodMesh: THREE.Group
+  private usingLOD = false
   protected scene: THREE.Scene
   private thrusterEffect: ThrusterEffect
+  private contrailEffect: ContrailEffect
+  private storeMeshes = new Map<string, THREE.Group>()  // hardpointId → store mesh
+  private gearAnimT = 0   // 0 = retracted, 1 = deployed
   private shapedAxes = { pitch: 0, roll: 0, yaw: 0 }
 
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, entityId?: string) {
@@ -58,9 +68,33 @@ export class Aircraft {
     this.mesh = createPlaceholderAircraftMesh(spec.id, spec.nation)
     scene.add(this.mesh)
 
+    this.lodMesh = buildDistantAircraftMesh(spec.id, spec.nation)
+    // LOD mesh starts hidden; swapped in at distance
+    this.lodMesh.visible = false
+    scene.add(this.lodMesh)
+
+    // Attach store meshes at hardpoint positions
+    this.attachStoreMeshes(stores)
+
     // Attach engine glow to the nozzle point
     const nozzle = createNozzlePoint(this.mesh)
     this.thrusterEffect = new ThrusterEffect(nozzle, 1.8)
+    this.contrailEffect = new ContrailEffect(scene, 80)
+  }
+
+  private attachStoreMeshes(stores: LoadedStore[]): void {
+    for (const store of stores) {
+      if (store.category === 'EMPTY') continue
+      const hp = this.spec.hardpoints.find(h => h.id === store.hardpointId)
+      if (!hp) continue
+      const storeMesh = buildStoreMesh(store.category)
+      if (!storeMesh) continue
+      // Convert NED body frame (forward, right, down) to group local (x=fwd, y=up, z=right)
+      const [nx, ny, nz] = hp.posBodyM
+      storeMesh.position.set(nx, -nz, ny)
+      this.mesh.add(storeMesh)
+      this.storeMeshes.set(store.hardpointId, storeMesh)
+    }
   }
 
   protected integrate(controls: ControlInputs, dt: number): void {
@@ -246,9 +280,27 @@ export class Aircraft {
   }
 
   updateMesh(dt = 0.016): void {
-    if (this.state.ejected) { this.mesh.visible = false; return }
+    if (this.state.ejected) {
+      this.mesh.visible = false
+      this.lodMesh.visible = false
+      return
+    }
+
     const pos  = nedToThree(this.state.positionNED)
     const quat = nedQuatToThree(this.state.attitudeQuat)
+
+    // LOD: switch to simplified mesh beyond 5 km from camera
+    const LOD_DIST = 5000
+    let useLOD = false
+    if (_lodCamera) {
+      useLOD = pos.distanceTo(_lodCamera.position) > LOD_DIST
+    }
+    if (useLOD !== this.usingLOD) {
+      this.mesh.visible    = !useLOD
+      this.lodMesh.visible =  useLOD
+      this.usingLOD = useLOD
+    }
+
     // PlaceholderMesh fuselage runs along local +X; we need it to face Three.js -Z (NED North).
     // nedQuatToThree(identity) = identity, so add a +90° Y-bias to rotate +X → -Z.
     // MESH_BIAS_QUAT is a module-level constant — quat.multiply() modifies quat in-place,
@@ -256,17 +308,40 @@ export class Aircraft {
     this.mesh.position.copy(pos)
     this.mesh.quaternion.copy(quat.multiply(MESH_BIAS_QUAT))
 
+    if (useLOD) {
+      this.lodMesh.position.copy(pos)
+      this.lodMesh.quaternion.copy(this.mesh.quaternion)
+    }
+
     // Engine glow: extinguished when engine is failed
     const thrThrottle = this.damage.engineFailed ? 0 : this.state.throttle
     const isAfterburner = !this.damage.engineFailed && this.state.throttle >= this.spec.engine.afterburnerThrottleMin
     this.thrusterEffect.update(thrThrottle, isAfterburner, dt)
 
+    // Contrails at high altitude (throttle independent — formed by engine heat)
+    const isContrailing = !this.state.ejected && this.state.altitudeM > 7500
+    this.contrailEffect.update(pos, this.state.altitudeM, isContrailing, dt)
+
     // Visual damage: tint mesh based on accumulated damage
     applyDamageTint(this.mesh, overallDamage(this.damage), this.damage.onFire)
 
-    // Gear and flap visibility
-    setGearVisible(this.mesh, this.state.gearDown)
+    // Gear lerp animation — 3 s cycle
+    const gearTarget = this.state.gearDown ? 1 : 0
+    const GEAR_SPEED = 1 / 3.0
+    this.gearAnimT = clamp(
+      this.gearAnimT + (gearTarget > this.gearAnimT ? 1 : -1) * GEAR_SPEED * dt,
+      0, 1
+    )
+    setGearAnimT(this.mesh, this.gearAnimT)
+
+    // Flap visibility
     setFlapsVisible(this.mesh, this.state.flaps > 0)
+
+    // Show/hide store meshes as weapons are expended
+    const activeHardpoints = new Set(this.state.loadedStores.map(s => s.hardpointId))
+    for (const [id, mesh] of this.storeMeshes) {
+      mesh.visible = activeHardpoints.has(id)
+    }
   }
 
   /** Returns the minimal radar info the RWR needs. Overridden by NetworkAircraft. */
@@ -282,6 +357,8 @@ export class Aircraft {
 
   dispose(): void {
     this.thrusterEffect.dispose()
+    this.contrailEffect.dispose()
     this.scene.remove(this.mesh)
+    this.scene.remove(this.lodMesh)
   }
 }
