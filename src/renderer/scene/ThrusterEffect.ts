@@ -13,6 +13,76 @@ function makeGlowTexture(innerRgba: string, outerRgba: string): THREE.Texture {
   return new THREE.CanvasTexture(c)
 }
 
+// Shared GPU assets for missile thrusters (baseScale ≤ 1.5) — avoids per-launch
+// texture/material creation and the ~60 ms shader-compile hitch on first render.
+const MISSILE_THRUSTER_SCALE = 1.4
+let missileCoreTex: THREE.Texture | undefined
+let missileGlowTex: THREE.Texture | undefined
+let missileCoreMat: THREE.SpriteMaterial | undefined
+let missileGlowMat: THREE.SpriteMaterial | undefined
+let missilePlumeMat: THREE.MeshBasicMaterial | undefined
+let missileDiamondMat: THREE.MeshBasicMaterial | undefined
+let missilePlumeGeo: THREE.ConeGeometry | undefined
+let missileDiamondGeo: THREE.OctahedronGeometry | undefined
+
+function ensureMissileThrusterAssets(): void {
+  if (missileCoreTex) return
+  missileCoreTex = makeGlowTexture('rgba(255,255,255,1)', 'rgba(160,210,255,0.7)')
+  missileGlowTex = makeGlowTexture('rgba(255,160,40,0.9)', 'rgba(255,80,10,0.4)')
+  missileCoreMat = new THREE.SpriteMaterial({
+    map: missileCoreTex,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    transparent: true,
+  })
+  missileGlowMat = new THREE.SpriteMaterial({
+    map: missileGlowTex,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    transparent: true,
+  })
+  missilePlumeMat = new THREE.MeshBasicMaterial({
+    color: 0x77aaff,
+    transparent: true,
+    opacity: 0.35,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  missileDiamondMat = new THREE.MeshBasicMaterial({
+    color: 0x9dd7ff,
+    transparent: true,
+    opacity: 0.6,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  missilePlumeGeo = new THREE.ConeGeometry(
+    MISSILE_THRUSTER_SCALE * 0.42,
+    MISSILE_THRUSTER_SCALE * 4.2,
+    16, 1, true,
+  )
+  missileDiamondGeo = new THREE.OctahedronGeometry(MISSILE_THRUSTER_SCALE * 0.22, 0)
+}
+
+let sharedTrailMat: THREE.PointsMaterial | undefined
+
+function getSharedTrailMat(): THREE.PointsMaterial {
+  if (!sharedTrailMat) {
+    sharedTrailMat = new THREE.PointsMaterial({
+      size: 6,
+      vertexColors: false,
+      color: 0xffaa44,
+      transparent: true,
+      opacity: 0.55,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    })
+  }
+  return sharedTrailMat
+}
+
 /**
  * Glow-sprite + point-light thruster effect.
  * Attach to any Object3D (e.g. nozzle or a rear-mount group on a missile).
@@ -23,62 +93,88 @@ export class ThrusterEffect {
   private glow: THREE.Sprite
   private plume: THREE.Mesh
   private abDiamond: THREE.Mesh
-  readonly light: THREE.PointLight
+  private light: THREE.PointLight | null = null
   private baseScale: number
   private time = 0
+  private readonly usesSharedAssets: boolean
 
   constructor(parent: THREE.Object3D, baseScale = 1.0) {
     this.baseScale = baseScale
+    this.usesSharedAssets = baseScale <= 1.5
 
-    const coreTex = makeGlowTexture('rgba(255,255,255,1)', 'rgba(160,210,255,0.7)')
-    this.core = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: coreTex,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      transparent: true,
-    }))
-    this.core.scale.setScalar(baseScale * 2)
-    parent.add(this.core)
+    if (this.usesSharedAssets) {
+      ensureMissileThrusterAssets()
+      this.core = new THREE.Sprite(missileCoreMat!)
+      this.core.scale.setScalar(baseScale * 2)
+      parent.add(this.core)
 
-    const glowTex = makeGlowTexture('rgba(255,160,40,0.9)', 'rgba(255,80,10,0.4)')
-    this.glow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glowTex,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      transparent: true,
-    }))
-    this.glow.scale.setScalar(baseScale * 5)
-    parent.add(this.glow)
+      this.glow = new THREE.Sprite(missileGlowMat!)
+      this.glow.scale.setScalar(baseScale * 5)
+      parent.add(this.glow)
 
-    const plumeMat = new THREE.MeshBasicMaterial({
-      color: 0x77aaff,
-      transparent: true,
-      opacity: 0.35,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    })
-    this.plume = new THREE.Mesh(new THREE.ConeGeometry(baseScale * 0.42, baseScale * 4.2, 16, 1, true), plumeMat)
-    // ConeGeometry axis is +Y; rotate so plume points out of rear nozzle (-X in local placeholder mesh space).
-    this.plume.rotation.z = Math.PI / 2
-    this.plume.position.x = -baseScale * 2.1
-    parent.add(this.plume)
+      this.plume = new THREE.Mesh(missilePlumeGeo!, missilePlumeMat!)
+      this.plume.rotation.z = Math.PI / 2
+      this.plume.position.x = -baseScale * 2.1
+      parent.add(this.plume)
 
-    const diamondMat = new THREE.MeshBasicMaterial({
-      color: 0x9dd7ff,
-      transparent: true,
-      opacity: 0.6,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    })
-    this.abDiamond = new THREE.Mesh(new THREE.OctahedronGeometry(baseScale * 0.22, 0), diamondMat)
-    this.abDiamond.position.x = -baseScale * 3.3
-    this.abDiamond.visible = false
-    parent.add(this.abDiamond)
+      this.abDiamond = new THREE.Mesh(missileDiamondGeo!, missileDiamondMat!)
+      this.abDiamond.position.x = -baseScale * 3.3
+      this.abDiamond.visible = false
+      parent.add(this.abDiamond)
+    } else {
+      const coreTex = makeGlowTexture('rgba(255,255,255,1)', 'rgba(160,210,255,0.7)')
+      this.core = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: coreTex,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        transparent: true,
+      }))
+      this.core.scale.setScalar(baseScale * 2)
+      parent.add(this.core)
 
-    this.light = new THREE.PointLight(0x88aaff, 0, baseScale * 40)
-    parent.add(this.light)
+      const glowTex = makeGlowTexture('rgba(255,160,40,0.9)', 'rgba(255,80,10,0.4)')
+      this.glow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glowTex,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        transparent: true,
+      }))
+      this.glow.scale.setScalar(baseScale * 5)
+      parent.add(this.glow)
+
+      const plumeMat = new THREE.MeshBasicMaterial({
+        color: 0x77aaff,
+        transparent: true,
+        opacity: 0.35,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+      this.plume = new THREE.Mesh(new THREE.ConeGeometry(baseScale * 0.42, baseScale * 4.2, 16, 1, true), plumeMat)
+      this.plume.rotation.z = Math.PI / 2
+      this.plume.position.x = -baseScale * 2.1
+      parent.add(this.plume)
+
+      const diamondMat = new THREE.MeshBasicMaterial({
+        color: 0x9dd7ff,
+        transparent: true,
+        opacity: 0.6,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+      this.abDiamond = new THREE.Mesh(new THREE.OctahedronGeometry(baseScale * 0.22, 0), diamondMat)
+      this.abDiamond.position.x = -baseScale * 3.3
+      this.abDiamond.visible = false
+      parent.add(this.abDiamond)
+    }
+
+    // Missiles use sprite/plume glow only — a PointLight per missile forces Three.js to
+    // recompile every MeshStandardMaterial shader when the scene light count changes.
+    if (!this.usesSharedAssets) {
+      this.light = new THREE.PointLight(0x88aaff, 0, baseScale * 40)
+      parent.add(this.light)
+    }
   }
 
   update(intensity: number, isAfterburner = false, dt = 0.016): void {
@@ -118,12 +214,15 @@ export class ThrusterEffect {
       diamondMat.opacity = 0.45 + 0.25 * pulse
     }
 
-    this.light.color.set(isAfterburner ? 0x9bcfff : 0xffa060)
-    this.light.intensity = eff * (isAfterburner ? 8 : 3.8)
-    this.light.distance = this.baseScale * (isAfterburner ? 68 : 40)
+    if (this.light) {
+      this.light.color.set(isAfterburner ? 0x9bcfff : 0xffa060)
+      this.light.intensity = eff * (isAfterburner ? 8 : 3.8)
+      this.light.distance = this.baseScale * (isAfterburner ? 68 : 40)
+    }
   }
 
   dispose(): void {
+    if (this.usesSharedAssets) return
     ;(this.core.material as THREE.SpriteMaterial).map?.dispose()
     ;(this.core.material as THREE.SpriteMaterial).dispose()
     ;(this.glow.material as THREE.SpriteMaterial).map?.dispose()
@@ -148,6 +247,7 @@ export class RocketTrail {
   private head = 0
   private readonly maxPts: number
   private readonly lifetime: number
+  private readonly usesSharedMat: boolean
 
   constructor(scene: THREE.Scene, maxPts = 48, lifetime = 0.8) {
     this.scene = scene
@@ -158,16 +258,8 @@ export class RocketTrail {
 
     this.geo = new THREE.BufferGeometry()
     this.geo.setAttribute('position', new THREE.BufferAttribute(this.buf, 3))
-    this.pts = new THREE.Points(this.geo, new THREE.PointsMaterial({
-      size: 6,
-      vertexColors: false,
-      color: 0xffaa44,
-      transparent: true,
-      opacity: 0.55,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      sizeAttenuation: true,
-    }))
+    this.usesSharedMat = true
+    this.pts = new THREE.Points(this.geo, getSharedTrailMat())
     this.pts.frustumCulled = false
     scene.add(this.pts)
   }
@@ -192,9 +284,15 @@ export class RocketTrail {
     this.pts.visible = active > 0
   }
 
+  getPointsObject(): THREE.Points {
+    return this.pts
+  }
+
   dispose(): void {
     this.scene.remove(this.pts)
     this.geo.dispose()
-    ;(this.pts.material as THREE.PointsMaterial).dispose()
+    if (!this.usesSharedMat) {
+      ;(this.pts.material as THREE.PointsMaterial).dispose()
+    }
   }
 }

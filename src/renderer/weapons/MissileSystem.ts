@@ -28,44 +28,88 @@ interface CountermeasureProvider {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Build a detailed missile Group: body + nose cone + 4 tail fins + 4 canards
-// The long axis runs along +Z so mesh.lookAt() aligns it with velocity.
-// ---------------------------------------------------------------------------
+let missileBodyGeo: THREE.CylinderGeometry | null = null
+let missileNoseGeo: THREE.ConeGeometry | null = null
+let missileTailFinGeo: THREE.BoxGeometry | null = null
+let missileCanardGeo: THREE.BoxGeometry | null = null
+
 export function buildMissileMesh(bodyMat: THREE.Material, finMat: THREE.Material): THREE.Group {
   const group = new THREE.Group()
 
-  // Body cylinder (tapered slightly at tail)
-  const bodyGeo = new THREE.CylinderGeometry(0.12, 0.15, 2.35, 10)
-  bodyGeo.rotateX(Math.PI / 2)
-  group.add(new THREE.Mesh(bodyGeo, bodyMat))
+  if (!missileBodyGeo) {
+    const bodyGeo = new THREE.CylinderGeometry(0.12, 0.15, 2.35, 10)
+    bodyGeo.rotateX(Math.PI / 2)
+    missileBodyGeo = bodyGeo
 
-  // Nose cone
-  const noseGeo = new THREE.ConeGeometry(0.12, 0.62, 10)
-  noseGeo.rotateX(-Math.PI / 2)   // tip → +Z
-  const noseMesh = new THREE.Mesh(noseGeo, bodyMat)
+    const noseGeo = new THREE.ConeGeometry(0.12, 0.62, 10)
+    noseGeo.rotateX(-Math.PI / 2)
+    missileNoseGeo = noseGeo
+
+    missileTailFinGeo = new THREE.BoxGeometry(0.72, 0.024, 0.42)
+    missileCanardGeo = new THREE.BoxGeometry(0.36, 0.018, 0.22)
+  }
+
+  group.add(new THREE.Mesh(missileBodyGeo, bodyMat))
+
+  const noseMesh = new THREE.Mesh(missileNoseGeo!, bodyMat)
   noseMesh.position.z = 1.48
   group.add(noseMesh)
 
-  // Tail fins — 4× cruciform, 0.5 m span, at z = -0.85
-  const tailFinGeo = new THREE.BoxGeometry(0.72, 0.024, 0.42)
   for (let i = 0; i < 4; i++) {
-    const fin = new THREE.Mesh(tailFinGeo, finMat)
+    const fin = new THREE.Mesh(missileTailFinGeo!, finMat)
     fin.rotation.z = i * (Math.PI / 2)
     fin.position.z = -0.95
     group.add(fin)
   }
 
-  // Canard fins — 4× smaller, at z = +0.7 (forward third)
-  const canardGeo = new THREE.BoxGeometry(0.36, 0.018, 0.22)
   for (let i = 0; i < 4; i++) {
-    const fin = new THREE.Mesh(canardGeo, finMat)
+    const fin = new THREE.Mesh(missileCanardGeo!, finMat)
     fin.rotation.z = i * (Math.PI / 2)
     fin.position.z = 0.82
     group.add(fin)
   }
 
   return group
+}
+
+/** Pre-compile missile visual shaders at session start to avoid launch hitches. */
+export function warmupMissileVisuals(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  camera: THREE.Camera,
+  bodyMat: THREE.Material,
+  finMat: THREE.Material,
+): void {
+  const root = new THREE.Group()
+  root.position.set(0, -99999, 0)
+  const mesh = buildMissileMesh(bodyMat, finMat)
+  root.add(mesh)
+  const rearMount = new THREE.Object3D()
+  rearMount.position.set(0, 0, -1.35)
+  mesh.add(rearMount)
+  new ThrusterEffect(rearMount, 1.4)
+  const trail = new RocketTrail(scene, 80, 1.4)
+  scene.add(root)
+  renderer.compile(root, camera)
+  renderer.compile(trail.getPointsObject(), camera)
+  scene.remove(root)
+  trail.dispose()
+}
+
+let sharedMissileBodyMat: THREE.MeshStandardMaterial | undefined
+let sharedMissileFinMat: THREE.MeshStandardMaterial | undefined
+
+function getSharedMissileMaterials(): [THREE.MeshStandardMaterial, THREE.MeshStandardMaterial] {
+  if (!sharedMissileBodyMat) {
+    sharedMissileBodyMat = new THREE.MeshStandardMaterial({
+      color: 0xf0f0f0, metalness: 0.55, roughness: 0.45,
+      emissive: new THREE.Color(0.04, 0.04, 0.04),
+    })
+    sharedMissileFinMat = new THREE.MeshStandardMaterial({
+      color: 0xa8a8a8, metalness: 0.45, roughness: 0.55, side: THREE.DoubleSide,
+    })
+  }
+  return [sharedMissileBodyMat, sharedMissileFinMat]
 }
 
 export class MissileSystem {
@@ -78,12 +122,18 @@ export class MissileSystem {
   private onTargetHit: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null = null
   private onDecoySuccess: ((type: 'FLARE' | 'CHAFF') => void) | null = null
 
-  private bodyMat = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, metalness: 0.55, roughness: 0.45, emissive: new THREE.Color(0.04, 0.04, 0.04) })
-  private finMat  = new THREE.MeshStandardMaterial({ color: 0xa8a8a8, metalness: 0.45, roughness: 0.55, side: THREE.DoubleSide })
+  private bodyMat: THREE.MeshStandardMaterial
+  private finMat: THREE.MeshStandardMaterial
 
   constructor(scene: THREE.Scene) {
     this.scene = scene
     this.explosions = new ExplosionManager(scene)
+    ;[this.bodyMat, this.finMat] = getSharedMissileMaterials()
+  }
+
+  /** Materials used by missile meshes — pass to warmupMissileVisuals at session start. */
+  getWarmupMaterials(): [THREE.Material, THREE.Material] {
+    return [this.bodyMat, this.finMat]
   }
 
   setOnTargetHit(cb: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null): void {
@@ -493,8 +543,6 @@ export class MissileSystem {
     for (const m of this.meshes) this.scene.remove(m)
     for (const t of this.thrusters) t.dispose()
     for (const t of this.trails) t.dispose()
-    this.bodyMat.dispose()
-    this.finMat.dispose()
     this.explosions.dispose()
   }
 }

@@ -20,6 +20,8 @@ import type { FlightResult } from './App'
 import { FlareEffect } from './scene/FlareEffect'
 import { ChaffEffect } from './scene/ChaffEffect'
 import { setLODCamera } from './entities/Aircraft'
+import { warmupMissileVisuals } from './weapons/MissileSystem'
+import { warmupExplosionVisuals } from './scene/ExplosionEffect'
 
 const FIXED_DT = 1 / 60
 
@@ -90,6 +92,19 @@ export class FlightSession {
     void this.audioManager.loadSounds('sounds/')
 
     this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene, this.autoRudder)
+    const [bodyMat, finMat] = this.player.missiles.getWarmupMaterials()
+    warmupMissileVisuals(
+      this.sceneManager.renderer,
+      this.sceneManager.scene,
+      this.sceneManager.camera,
+      bodyMat,
+      finMat,
+    )
+    warmupExplosionVisuals(
+      this.sceneManager.renderer,
+      this.sceneManager.scene,
+      this.sceneManager.camera,
+    )
     this.player.setOnMissileLaunch(category => {
       this.audioManager.play(category === 'IR_MISSILE' ? 'MISSILE_LAUNCH_IR' : 'MISSILE_LAUNCH_ARH')
     })
