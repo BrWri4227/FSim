@@ -6,7 +6,7 @@ import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState, computeActualThrustN } from '../physics/FlightModel'
 import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
-import { createPlaceholderAircraftMesh, buildDistantAircraftMesh, buildStoreMesh, createNozzlePoint, applyDamageTint, setGearAnimT, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
+import { createPlaceholderAircraftMesh, buildDistantAircraftMesh, buildStoreMesh, createNozzlePoints, getThrusterScale, applyDamageTint, setGearAnimT, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp, MESH_BIAS_QUAT, RAD2DEG } from '../utils/MathUtils'
 import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import type { FlightPenalties } from '../types/damage'
@@ -32,7 +32,7 @@ export class Aircraft {
   private lodMesh: THREE.Group
   private usingLOD = false
   protected scene: THREE.Scene
-  private thrusterEffect: ThrusterEffect
+  private thrusterEffects: ThrusterEffect[] = []
   private contrailEffect: ContrailEffect
   private storeMeshes = new Map<string, THREE.Group>()  // hardpointId → store mesh
   private gearAnimT = 0   // 0 = retracted, 1 = deployed
@@ -76,9 +76,12 @@ export class Aircraft {
     // Attach store meshes at hardpoint positions
     this.attachStoreMeshes(stores)
 
-    // Attach engine glow to the nozzle point
-    const nozzle = createNozzlePoint(this.mesh)
-    this.thrusterEffect = new ThrusterEffect(nozzle, 1.8)
+    // One thruster effect per engine nozzle (single- or twin-engine)
+    const nozzles = createNozzlePoints(this.mesh)
+    const thrusterScale = getThrusterScale(nozzles.length)
+    for (let i = 0; i < nozzles.length; i++) {
+      this.thrusterEffects.push(new ThrusterEffect(nozzles[i]!, thrusterScale, i * 1.7))
+    }
     this.contrailEffect = new ContrailEffect(scene, 80)
   }
 
@@ -316,7 +319,9 @@ export class Aircraft {
     // Engine glow: extinguished when engine is failed
     const thrThrottle = this.damage.engineFailed ? 0 : this.state.throttle
     const isAfterburner = !this.damage.engineFailed && this.state.throttle >= this.spec.engine.afterburnerThrottleMin
-    this.thrusterEffect.update(thrThrottle, isAfterburner, dt)
+    for (const thruster of this.thrusterEffects) {
+      thruster.update(thrThrottle, isAfterburner, dt)
+    }
 
     // Contrails at high altitude (throttle independent — formed by engine heat)
     const isContrailing = !this.state.ejected && this.state.altitudeM > 7500
@@ -356,7 +361,7 @@ export class Aircraft {
   }
 
   dispose(): void {
-    this.thrusterEffect.dispose()
+    for (const thruster of this.thrusterEffects) thruster.dispose()
     this.contrailEffect.dispose()
     this.scene.remove(this.mesh)
     this.scene.remove(this.lodMesh)

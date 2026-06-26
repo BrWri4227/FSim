@@ -8,16 +8,20 @@ import * as THREE from 'three'
 
 /** Standard aircraft skin — low-to-medium metalness for a painted-metal look. */
 function bm(color: number): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, metalness: 0.30, roughness: 0.70 })
+  return new THREE.MeshStandardMaterial({
+    color, metalness: 0.35, roughness: 0.62, emissive: 0x000000,
+  })
 }
 /** Metallic / dark-metal parts: nozzles, IRST balls, TVC bells. */
 function mm(color: number): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, metalness: 0.85, roughness: 0.25 })
+  return new THREE.MeshStandardMaterial({
+    color, metalness: 0.88, roughness: 0.22, emissive: 0x000000,
+  })
 }
 function canopyMat(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
-    color: 0x1a2f3a, metalness: 0.85, roughness: 0.10,
-    transparent: true, opacity: 0.65,
+    color: 0x142838, metalness: 0.90, roughness: 0.08,
+    transparent: true, opacity: 0.58, emissive: 0x000000,
   })
 }
 
@@ -104,12 +108,131 @@ function addWing(
   return mesh
 }
 
-function addCanopy(g: THREE.Group, x: number, y: number): void {
+function addCanopy(
+  g: THREE.Group, x: number, y: number,
+  radius = 0.52, arc = 0.5, segs = 12
+): void {
   const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(0.52, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.SphereGeometry(radius, segs, segs - 2, 0, Math.PI * 2, 0, Math.PI * arc),
     canopyMat()
   )
   mesh.position.set(x, y, 0)
+  mesh.castShadow = true
+  g.add(mesh)
+}
+
+/** Uniform fuselage box. Nose at +X, centered on origin. */
+function addFuselage(
+  g: THREE.Group, m: THREE.Material,
+  len: number, h: number, w: number
+): void {
+  addBox(g, m, len, h, w, 0, 0, 0)
+}
+
+function cylFrontX(cx: number, len: number): number { return cx + len / 2 }
+function cylRearX(cx: number, len: number): number { return cx - len / 2 }
+
+/** Z center for a part mounted flush on the fuselage side. */
+function sideZ(fuseW: number, partD: number): number {
+  return fuseW / 2 + partD / 2
+}
+
+/** Nose cone; returns X of the forward tip. */
+function addNoseCone(
+  g: THREE.Group, m: THREE.Material,
+  cx: number, len: number, tipR: number
+): number {
+  addCylX(g, m, 0, tipR, len, cx, 0, 0, 10)
+  return cylFrontX(cx, len)
+}
+
+/** Short radome cap extending forward from nose tip. */
+function addRadomeCap(
+  g: THREE.Group, noseTipX: number, radius: number, len = 0.35
+): number {
+  addCylX(g, mm(0x1a1a22), radius, radius * 0.88, len, noseTipX + len / 2, 0, 0, 10)
+  return noseTipX + len
+}
+
+/** Pitot tube extending forward from the given X. */
+function addPitotAt(
+  g: THREE.Group, frontX: number,
+  len = 0.4, y = 0.10, z = 0.25
+): void {
+  addCylX(g, mm(0x999999), 0.016, 0.008, len, frontX + len / 2, y, z, 6)
+}
+
+/** Circular nozzle bell mounted at nacelle tail; returns exhaust X. */
+function addNozzleAt(
+  g: THREE.Group, rearX: number, y: number, z: number,
+  radius: number, depth: number
+): number {
+  addCylX(g, mm(0x2a2a2a), radius, radius * 0.90, depth, rearX - depth / 2, y, z, 10)
+  return rearX - depth
+}
+
+/** TVC bell mounted at nacelle tail; returns exhaust X. */
+function addTvcAt(
+  g: THREE.Group, rearX: number, y: number, z: number,
+  rIn: number, rOut: number, depth: number
+): number {
+  addCylX(g, mm(0x333333), rIn, rOut, depth, rearX - depth / 2, y, z, 10)
+  return rearX - depth
+}
+
+/** Rectangular nozzle mounted at nacelle tail; returns exhaust X. */
+function addRectNozzleAt(
+  g: THREE.Group, rearX: number, y: number, z: number,
+  h: number, w: number, depth = 0.14
+): number {
+  addBox(g, mm(0x333333), depth, h, w, rearX - depth / 2, y, z)
+  return rearX - depth
+}
+
+/** Wing fence standing on the wing upper surface. */
+function addWingFence(
+  g: THREE.Group, m: THREE.Material,
+  x: number, wingY: number, z: number,
+  height: number, wingThick = 0.12
+): void {
+  addBox(g, m, 0.04, height, 0.28, x, wingY + wingThick / 2 + height / 2, z)
+}
+
+/** LEX pair blending from fuselage shoulders. */
+function addLexPair(
+  g: THREE.Group, m: THREE.Material,
+  fuseW: number, x: number, y: number,
+  len: number, height: number, depth: number,
+  sweepRz = 0.12
+): void {
+  const z = sideZ(fuseW, depth)
+  addBox(g, m, len, height, depth, x, y, z, 0, -sweepRz)
+  addBox(g, m, len, height, depth, x, y, -z, 0, sweepRz)
+}
+
+/** Side intake pair flush with fuselage. */
+function addSideIntakePair(
+  g: THREE.Group, m: THREE.Material,
+  fuseW: number, fuseH: number,
+  x: number, w: number, h: number, d: number,
+  bellyInset = 0.04
+): void {
+  const z = sideZ(fuseW, d)
+  const y = -fuseH / 2 + h / 2 + bellyInset
+  addBox(g, m, w, h, d, x, y, z)
+  addBox(g, m, w, h, d, x, y, -z)
+}
+
+/** Outward- or inward-canted vertical stabilizer rooted on fuselage top. */
+function addCantedVStab(
+  g: THREE.Group, m: THREE.Material,
+  x: number, fuseTopY: number, z: number,
+  w: number, h: number, d: number,
+  cantRad: number
+): void {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m)
+  mesh.position.set(x, fuseTopY + h / 2, z)
+  mesh.rotation.x = cantRad
   mesh.castShadow = true
   g.add(mesh)
 }
@@ -193,507 +316,499 @@ function addGearGroup(
   g.add(gear)
 }
 
-/** Place the invisible nozzle Object3D (average of provided positions). */
+/** Place one invisible nozzle Object3D per engine exhaust. */
 function placeNozzle(g: THREE.Group, positions: [number, number, number][]): void {
-  const n = positions.length
-  const cx = positions.reduce((s, p) => s + p[0], 0) / n
-  const cy = positions.reduce((s, p) => s + p[1], 0) / n
-  const cz = positions.reduce((s, p) => s + p[2], 0) / n
-  const nozzle = new THREE.Object3D()
-  nozzle.name = 'nozzle'
-  nozzle.position.set(cx, cy, cz)
-  g.add(nozzle)
+  for (let i = 0; i < positions.length; i++) {
+    const [x, y, z] = positions[i]!
+    const nozzle = new THREE.Object3D()
+    nozzle.name = positions.length === 1 ? 'nozzle' : `nozzle-${i}`
+    nozzle.position.set(x, y, z)
+    g.add(nozzle)
+  }
 }
 
 // ── F-15C Eagle ─────────────────────────────────────────────────────────────
-// Twin engine, twin upright vertical tails, massive cheek intakes, large trapezoidal wings.
-function buildF15C(): THREE.Group {
+function buildF15C(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x7799bb  // steel blue-grey
+  const C = 0x7799bb
   const Cw = C - 0x0f0f10
   const Cd = C - 0x1f1f20
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 10.0, fH = 1.1, fW = 1.3
 
-  // Fuselage body
-  addBox(g, fm, 10.0, 1.1, 1.3, 0, 0, 0)
-  // Nose cone (long, faceted)
-  addCylX(g, fm, 0, 0.55, 2.8, 6.4, 0, 0, 6)
+  addFuselage(g, fm, fLen, fH, fW)
+  const noseTip = addNoseCone(g, fm, 6.4, 2.8, 0.55)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.55))
 
-  // Canopy (raised, behind nose)
-  addCanopy(g, 3.3, 0.57)
+  addCanopy(g, 3.3, fH / 2 + 0.02, 0.50, 0.52)
 
-  // Cheek intakes — large rectangular boxes on each side of fuselage
-  addBox(g, dm, 3.0, 0.65, 0.7, 1.5, -0.18, 1.1)
-  addBox(g, dm, 3.0, 0.65, 0.7, 1.5, -0.18, -1.1)
+  // Cheek intakes — flush with fuselage sides
+  const iD = 0.7, iZ = sideZ(fW, iD)
+  addBox(g, dm, 3.0, 0.65, iD, 1.5, -0.18, iZ)
+  addBox(g, dm, 3.0, 0.65, iD, 1.5, -0.18, -iZ)
 
-  // Main wings — trapezoidal planform with root attached to fuselage shoulder.
-  addWing(g, wm, 1, 2.0, -0.28, 0.74, 4.4, 1.7, 3.7, 1.0, 0.12)
-  addWing(g, wm, -1, 2.0, -0.28, 0.74, 4.4, 1.7, 3.7, 1.0, 0.12)
+  const wingY = -0.28
+  addWing(g, wm, 1, 2.0, wingY, sideZ(fW, 0.10), 4.4, 1.7, 3.7, 1.0, 0.12)
+  addWing(g, wm, -1, 2.0, wingY, sideZ(fW, 0.10), 4.4, 1.7, 3.7, 1.0, 0.12)
 
-  // Twin upright vertical stabilizers (close together, slight toe-in)
-  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, 1.0, 0.75, 0.05)
-  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, 1.0, -0.75, -0.05)
+  const tailZ = sideZ(fW, 0.13)
+  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, fH / 2 + 1.0, tailZ, 0.05)
+  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, fH / 2 + 1.0, -tailZ, -0.05)
 
-  // Horizontal stabilators (all-moving, wide)
-  addBox(g, wm, 2.0, 0.10, 2.5, -4.5, -0.22, 2.1)
-  addBox(g, wm, 2.0, 0.10, 2.5, -4.5, -0.22, -2.1)
+  const stabZ = sideZ(fW, 2.5)
+  addBox(g, wm, 2.0, 0.10, 2.5, -4.5, wingY + 0.06, stabZ)
+  addBox(g, wm, 2.0, 0.10, 2.5, -4.5, wingY + 0.06, -stabZ)
 
-  // Engine nacelles (twin, round cross-section)
-  addCylX(g, bm(Cd), 0.42, 0.52, 4.5, -3.0, -0.05, 0.55)
-  addCylX(g, bm(Cd), 0.42, 0.52, 4.5, -3.0, -0.05, -0.55)
+  const engZ = sideZ(fW * 0.85, 0.52 * 2)
+  const nLen = 4.5, nCx = -3.0
+  addCylX(g, dm, 0.42, 0.52, nLen, nCx, -0.05, engZ, 12)
+  addCylX(g, dm, 0.42, 0.52, nLen, nCx, -0.05, -engZ, 12)
+  const exL = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.52, 0.28)
+  const exR = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.52, 0.28)
 
-  addFlapsGroup(g, 0.0, 0.8, 2.0, 1.2, -0.28)
-  addGearGroup(g, 4.0, 1.0, 1.0, -0.55, 0.5, 0.22)
-  placeNozzle(g, [[-5.4, -0.05, 0.55], [-5.4, -0.05, -0.55]])
+  addFlapsGroup(g, 0.0, 0.8, 2.0, 1.2, wingY)
+  addGearGroup(g, 4.0, 1.0, 1.0, -fH / 2, 0.5, 0.22)
+  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── F-16C Fighting Falcon ───────────────────────────────────────────────────
-// Single engine, single tall vertical tail, chin intake, cropped-delta wing, bubble canopy.
-function buildF16C(): THREE.Group {
+function buildF16C(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x6688aa  // medium grey-blue
+  const C = 0x6688aa
   const Cw = C - 0x101010
   const Cd = C - 0x1a1a1a
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 9.0, fH = 0.9, fW = 1.05
 
-  // Slim fuselage
-  addBox(g, fm, 9.0, 0.9, 1.05, 0, 0, 0)
-  // Long sharp nose
-  addCylX(g, fm, 0, 0.45, 3.2, 6.1, 0.0, 0, 6)
+  addFuselage(g, fm, fLen, fH, fW)
+  const noseTip = addNoseCone(g, fm, 6.1, 3.2, 0.45)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.45))
 
-  // Bubble canopy (very prominent, full bubble style)
   const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(0.50, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.6),
+    new THREE.SphereGeometry(0.50, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.62),
     canopyMat()
   )
-  canopy.position.set(2.9, 0.42, 0)
+  canopy.position.set(2.9, fH / 2 + 0.0, 0)
+  canopy.castShadow = true
   g.add(canopy)
 
-  // Chin intake (below-centre, forward of wing)
-  addBox(g, dm, 2.2, 0.52, 0.85, 1.2, -0.58, 0)
+  // Chin intake — centered under fuselage belly
+  addBox(g, dm, 2.2, 0.52, 0.85, 1.2, -fH / 2 - 0.52 / 2 + 0.04, 0)
 
-  // Cropped-delta wings with pronounced root and short tip chord.
-  addWing(g, wm, 1, 1.6, -0.26, 0.58, 4.0, 1.0, 3.2, 1.25, 0.11)
-  addWing(g, wm, -1, 1.6, -0.26, 0.58, 4.0, 1.0, 3.2, 1.25, 0.11)
+  const wingY = -0.26
+  addWing(g, wm, 1, 1.6, wingY, sideZ(fW, 0.10), 4.0, 1.0, 3.2, 1.25, 0.11)
+  addWing(g, wm, -1, 1.6, wingY, sideZ(fW, 0.10), 4.0, 1.0, 3.2, 1.25, 0.11)
 
-  // Single tall vertical stabilizer (with slight taper)
-  addBox(g, wm, 2.4, 2.1, 0.13, -3.6, 1.05, 0)
+  addBox(g, wm, 2.4, 2.1, 0.13, -3.6, fH / 2 + 1.05, 0)
 
-  // Small delta-ish horizontal stabs
-  addBox(g, wm, 1.5, 0.09, 1.8, -4.2, -0.22, 1.6)
-  addBox(g, wm, 1.5, 0.09, 1.8, -4.2, -0.22, -1.6)
+  const stabZ = sideZ(fW, 1.8)
+  addBox(g, wm, 1.5, 0.09, 1.8, -4.2, wingY + 0.04, stabZ)
+  addBox(g, wm, 1.5, 0.09, 1.8, -4.2, wingY + 0.04, -stabZ)
 
-  // Single engine nacelle
-  addCylX(g, dm, 0.38, 0.48, 4.0, -2.8, 0.0, 0)
+  const nLen = 4.0, nCx = -2.8
+  addCylX(g, dm, 0.38, 0.48, nLen, nCx, 0.0, 0, 12)
+  const ex = addNozzleAt(g, cylRearX(nCx, nLen), 0.0, 0, 0.48, 0.26)
 
-  addFlapsGroup(g, 0.2, 0.65, 1.8, 1.0, -0.26)
-  addGearGroup(g, 3.5, 1.0, 0.9, -0.45, 0.5, 0.20)
-  placeNozzle(g, [[-5.0, 0.0, 0]])
+  addFlapsGroup(g, 0.2, 0.65, 1.8, 1.0, wingY)
+  addGearGroup(g, 3.5, 1.0, 0.9, -fH / 2, 0.5, 0.20)
+  placeNozzle(g, [[ex, 0.0, 0]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── F/A-18C Hornet ──────────────────────────────────────────────────────────
-// Twin engines, prominent LEX, twin OUTWARD-canted vertical tails, trapezoidal wings.
-function buildFA18C(): THREE.Group {
+function buildFA18C(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x556677  // darker blue-grey
+  const C = 0x556677
   const Cw = C - 0x0e0e0e
   const Cd = C - 0x1a1a1a
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 9.5, fH = 1.0, fW = 1.25
 
-  // Fuselage
-  addBox(g, fm, 9.5, 1.0, 1.25, 0, 0, 0)
-  addCylX(g, fm, 0, 0.50, 2.8, 6.15, 0, 0, 6)
+  addFuselage(g, fm, fLen, fH, fW)
+  const noseTip = addNoseCone(g, fm, 6.15, 2.8, 0.50)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.50))
 
-  addCanopy(g, 3.0, 0.56)
+  addCanopy(g, 3.0, fH / 2 + 0.06, 0.48, 0.50)
 
-  // LEX — large, sweeping leading-edge root extensions (defining feature)
-  addBox(g, bm(C - 0x08080a), 4.2, 0.18, 1.4, 1.8, -0.10, 1.55, -0.12)
-  addBox(g, bm(C - 0x08080a), 4.2, 0.18, 1.4, 1.8, -0.10, -1.55, 0.12)
+  addLexPair(g, bm(C - 0x08080a), fW, 1.8, -0.10, 4.2, 0.18, 1.4, 0.12)
+  addSideIntakePair(g, dm, fW, fH, 1.0, 2.0, 0.55, 0.65, 0.02)
 
-  // Intakes (twin, behind LEX leading edge, underneath)
-  addBox(g, dm, 2.0, 0.55, 0.65, 1.0, -0.48, 1.05)
-  addBox(g, dm, 2.0, 0.55, 0.65, 1.0, -0.48, -1.05)
+  const wingY = -0.28
+  addWing(g, wm, 1, 1.5, wingY, sideZ(fW, 0.10), 3.9, 1.6, 3.5, 0.95, 0.11)
+  addWing(g, wm, -1, 1.5, wingY, sideZ(fW, 0.10), 3.9, 1.6, 3.5, 0.95, 0.11)
 
-  // Hornet wing with moderate sweep and clipped tip.
-  addWing(g, wm, 1, 1.5, -0.28, 0.64, 3.9, 1.6, 3.5, 0.95, 0.11)
-  addWing(g, wm, -1, 1.5, -0.28, 0.64, 3.9, 1.6, 3.5, 0.95, 0.11)
+  const tailZ = sideZ(fW, 0.13)
+  addCantedVStab(g, wm, -3.6, fH / 2, tailZ, 2.0, 1.8, 0.13, 0.36)
+  addCantedVStab(g, wm, -3.6, fH / 2, -tailZ, 2.0, 1.8, 0.13, -0.36)
 
-  // Twin vertical stabilizers canted OUTWARD ~20° (key Hornet identifier)
-  const vstabMesh1 = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.8, 0.13), wm)
-  vstabMesh1.position.set(-3.6, 0.85, 0.68)
-  vstabMesh1.rotation.x = 0.36  // ~20° outward cant
-  g.add(vstabMesh1)
-  const vstabMesh2 = vstabMesh1.clone()
-  vstabMesh2.position.z = -0.68
-  vstabMesh2.rotation.x = -0.36
-  g.add(vstabMesh2)
+  const stabZ = sideZ(fW, 2.2)
+  addBox(g, wm, 1.8, 0.10, 2.2, -4.2, wingY + 0.08, stabZ)
+  addBox(g, wm, 1.8, 0.10, 2.2, -4.2, wingY + 0.08, -stabZ)
 
-  // Horizontal stabilators
-  addBox(g, wm, 1.8, 0.10, 2.2, -4.2, -0.20, 2.0)
-  addBox(g, wm, 1.8, 0.10, 2.2, -4.2, -0.20, -2.0)
+  const engZ = sideZ(fW, 0.65)
+  const nLen = 3.8, nCx = -3.0
+  addCylX(g, dm, 0.38, 0.46, nLen, nCx, -0.05, engZ, 12)
+  addCylX(g, dm, 0.38, 0.46, nLen, nCx, -0.05, -engZ, 12)
+  const exL = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.46, 0.26)
+  const exR = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.46, 0.26)
 
-  // Twin engine nacelles
-  addCylX(g, dm, 0.38, 0.46, 3.8, -3.0, -0.05, 0.52)
-  addCylX(g, dm, 0.38, 0.46, 3.8, -3.0, -0.05, -0.52)
-
-  addFlapsGroup(g, 0.0, 0.7, 1.9, 1.1, -0.28)
-  addGearGroup(g, 3.5, 0.5, 0.9, -0.50, 0.5, 0.21)
-  placeNozzle(g, [[-5.1, -0.05, 0.52], [-5.1, -0.05, -0.52]])
+  addFlapsGroup(g, 0.0, 0.7, 1.9, 1.1, wingY)
+  addGearGroup(g, 3.5, 0.5, 0.9, -fH / 2, 0.5, 0.21)
+  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── MiG-29 Fulcrum ──────────────────────────────────────────────────────────
-// Wide body with clearly separated twin engines, huge triangular LEX, underside ramp intakes.
-function buildMiG29(): THREE.Group {
+function buildMiG29(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x887766  // sandy camouflage
+  const C = 0x887766
   const Cw = C - 0x0f0f0e
   const Cd = C - 0x1a1a18
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 9.5, fH = 1.05, fW = 1.55
 
-  // Wide fuselage body
-  addBox(g, fm, 9.5, 1.05, 1.55, 0, 0, 0)
-  addCylX(g, fm, 0, 0.52, 2.5, 6.0, 0.0, 0, 6)
+  addFuselage(g, fm, fLen, fH, fW)
+  const noseTip = addNoseCone(g, fm, 6.0, 2.5, 0.52)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.52))
 
-  addCanopy(g, 3.1, 0.57)
+  addCanopy(g, 3.1, fH / 2 + 0.045, 0.48, 0.50)
 
-  // Very large triangular LEX blending into the nose (key Fulcrum feature)
-  addBox(g, bm(C - 0x080808), 5.0, 0.20, 1.7, 1.5, 0.05, 1.7, -0.15)
-  addBox(g, bm(C - 0x080808), 5.0, 0.20, 1.7, 1.5, 0.05, -1.7, 0.15)
+  addLexPair(g, bm(C - 0x080808), fW, 1.5, 0.05, 5.0, 0.20, 1.7, 0.15)
 
-  // Underslung ramp intakes (open rectangular face, characteristic MiG-29 look)
-  addBox(g, dm, 2.8, 0.7, 0.85, 1.8, -0.58, 1.0)
-  addBox(g, dm, 2.8, 0.7, 0.85, 1.8, -0.58, -1.0)
+  const iD = 0.85
+  addSideIntakePair(g, dm, fW, fH, 1.8, 2.8, 0.7, iD, 0.06)
 
-  // Fulcrum broad trapezoid wings blended from pronounced LEX roots.
-  addWing(g, wm, 1, 2.0, -0.28, 0.78, 4.2, 1.6, 3.9, 0.95, 0.12)
-  addWing(g, wm, -1, 2.0, -0.28, 0.78, 4.2, 1.6, 3.9, 0.95, 0.12)
+  const wingY = -0.28
+  const wingRoot = sideZ(fW, 0.10)
+  addWing(g, wm, 1, 2.0, wingY, wingRoot, 4.2, 1.6, 3.9, 0.95, 0.12)
+  addWing(g, wm, -1, 2.0, wingY, wingRoot, 4.2, 1.6, 3.9, 0.95, 0.12)
+  addWingFence(g, wm, 0.5, wingY, wingRoot + 0.8, 0.32, 0.12)
+  addWingFence(g, wm, 0.5, wingY, -(wingRoot + 0.8), 0.32, 0.12)
 
-  // Twin vertical stabilizers (slightly canted outward)
-  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, 1.0, 0.72, 0.07)
-  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, 1.0, -0.72, -0.07)
+  const tailZ = sideZ(fW, 0.13)
+  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, fH / 2 + 1.0, tailZ, 0.07)
+  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, fH / 2 + 1.0, -tailZ, -0.07)
 
-  // Horizontal stabilators
-  addBox(g, wm, 2.0, 0.10, 2.4, -4.3, -0.22, 2.0)
-  addBox(g, wm, 2.0, 0.10, 2.4, -4.3, -0.22, -2.0)
+  const stabZ = sideZ(fW, 2.4)
+  addBox(g, wm, 2.0, 0.10, 2.4, -4.3, wingY + 0.06, stabZ)
+  addBox(g, wm, 2.0, 0.10, 2.4, -4.3, wingY + 0.06, -stabZ)
 
-  // Twin engine nacelles (widely spaced — visible gap between them)
-  addCylX(g, dm, 0.42, 0.52, 4.8, -3.0, 0.0, 0.65)
-  addCylX(g, dm, 0.42, 0.52, 4.8, -3.0, 0.0, -0.65)
+  const engZ = sideZ(fW, 0.65 * 2) * 0.85
+  const nLen = 4.8, nCx = -3.0
+  addCylX(g, dm, 0.42, 0.52, nLen, nCx, 0.0, engZ, 12)
+  addCylX(g, dm, 0.42, 0.52, nLen, nCx, 0.0, -engZ, 12)
+  const exL = addNozzleAt(g, cylRearX(nCx, nLen), 0.0, engZ, 0.52, 0.28)
+  const exR = addNozzleAt(g, cylRearX(nCx, nLen), 0.0, -engZ, 0.52, 0.28)
 
-  addFlapsGroup(g, 0.2, 0.85, 2.0, 1.2, -0.28)
-  addGearGroup(g, 3.8, 0.8, 1.0, -0.525, 0.55, 0.22)
-  placeNozzle(g, [[-5.5, 0.0, 0.65], [-5.5, 0.0, -0.65]])
+  addFlapsGroup(g, 0.2, 0.85, 2.0, 1.2, wingY)
+  addGearGroup(g, 3.8, 0.8, 1.0, -fH / 2, 0.55, 0.22)
+  placeNozzle(g, [[exL, 0.0, engZ], [exR, 0.0, -engZ]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── Su-27 Flanker ───────────────────────────────────────────────────────────
-// Long body with spine hump, huge blended wing-body, very large LEX, twin tails.
-function buildSu27(): THREE.Group {
+function buildSu27(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x998866  // blue-grey camouflage
+  const C = 0x998866
   const Cw = C - 0x101010
   const Cd = C - 0x1c1c1c
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 12.0, fH = 1.1, fW = 1.5
 
-  // Long fuselage
-  addBox(g, fm, 12.0, 1.1, 1.5, 0, 0, 0)
-  // Avionics/spine hump (the Flanker's distinctive dorsal hump)
-  addBox(g, bm(C - 0x0a0a0a), 5.5, 0.5, 0.85, -0.5, 0.65, 0)
-  // Long sharp nose
-  addCylX(g, fm, 0, 0.55, 3.2, 7.6, 0, 0, 6)
+  addFuselage(g, fm, fLen, fH, fW)
+  addBox(g, bm(C - 0x0a0a0a), 5.5, 0.5, 0.85, -0.5, fH / 2 + 0.10, 0)
+  const noseTip = addNoseCone(g, fm, 7.6, 3.2, 0.55)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.55))
 
-  addCanopy(g, 4.0, 0.57)
+  addCanopy(g, 4.0, fH / 2 + 0.02, 0.50, 0.50)
 
-  // Very prominent LEX (leading-edge root extensions — defining Flanker feature)
-  addBox(g, bm(C - 0x080808), 5.5, 0.20, 2.0, 1.5, -0.05, 2.05, -0.10)
-  addBox(g, bm(C - 0x080808), 5.5, 0.20, 2.0, 1.5, -0.05, -2.05, 0.10)
+  addLexPair(g, bm(C - 0x080808), fW, 1.5, -0.05, 5.5, 0.20, 2.0, 0.10)
 
-  // Underfuselage intakes (wide, between engine pods)
-  addBox(g, dm, 3.0, 0.72, 0.85, 2.0, -0.60, 1.1)
-  addBox(g, dm, 3.0, 0.72, 0.85, 2.0, -0.60, -1.1)
+  const iD = 0.85
+  addSideIntakePair(g, dm, fW, fH, 2.0, 3.0, 0.72, iD, 0.04)
 
-  // Flanker large blended wing-body with strong taper and span.
-  addWing(g, wm, 1, 2.0, -0.30, 0.82, 5.3, 1.9, 4.6, 1.05, 0.12)
-  addWing(g, wm, -1, 2.0, -0.30, 0.82, 5.3, 1.9, 4.6, 1.05, 0.12)
+  const wingY = -0.30
+  const wingRoot = sideZ(fW, 0.10)
+  addWing(g, wm, 1, 2.0, wingY, wingRoot, 5.3, 1.9, 4.6, 1.05, 0.12)
+  addWing(g, wm, -1, 2.0, wingY, wingRoot, 5.3, 1.9, 4.6, 1.05, 0.12)
+  addWingFence(g, wm, 0.2, wingY, wingRoot + 1.0, 0.38, 0.12)
+  addWingFence(g, wm, 0.2, wingY, -(wingRoot + 1.0), 0.38, 0.12)
 
-  // Twin vertical stabilizers
-  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, 1.1, 0.80, 0.06)
-  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, 1.1, -0.80, -0.06)
+  const tailZ = sideZ(fW, 0.13)
+  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, fH / 2 + 1.1, tailZ, 0.06)
+  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, fH / 2 + 1.1, -tailZ, -0.06)
 
-  // Large all-moving horizontal stabilators
-  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, -0.25, 2.3)
-  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, -0.25, -2.3)
+  const stabZ = sideZ(fW, 2.8)
+  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, wingY + 0.05, stabZ)
+  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, wingY + 0.05, -stabZ)
 
-  // Long engine nacelles (extend well beyond the tail — very distinctive)
-  addCylX(g, dm, 0.45, 0.55, 6.0, -3.5, -0.05, 0.72)
-  addCylX(g, dm, 0.45, 0.55, 6.0, -3.5, -0.05, -0.72)
+  const engZ = sideZ(fW, 0.72 * 2) * 0.88
+  const nLen = 6.0, nCx = -3.5
+  addCylX(g, dm, 0.45, 0.55, nLen, nCx, -0.05, engZ, 12)
+  addCylX(g, dm, 0.45, 0.55, nLen, nCx, -0.05, -engZ, 12)
+  const exL = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.55, 0.30)
+  const exR = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.55, 0.30)
 
-  addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, -0.30)
-  addGearGroup(g, 5.0, 0.5, 1.0, -0.55, 0.55, 0.24)
-  placeNozzle(g, [[-6.7, -0.05, 0.72], [-6.7, -0.05, -0.72]])
+  addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, wingY)
+  addGearGroup(g, 5.0, 0.5, 1.0, -fH / 2, 0.55, 0.24)
+  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── Su-35 Flanker-E ─────────────────────────────────────────────────────────
-// Su-27 derivative: wider nose chines, larger IRST, thrust-vectoring nozzle bells.
-function buildSu35(): THREE.Group {
+function buildSu35(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x778866  // olive-grey
+  const C = 0x778866
   const Cw = C - 0x101010
   const Cd = C - 0x1c1c1c
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 12.0, fH = 1.1, fW = 1.5
 
-  // Long fuselage (same as Su-27 base)
-  addBox(g, fm, 12.0, 1.1, 1.5, 0, 0, 0)
-  addBox(g, bm(C - 0x0a0a0a), 5.5, 0.5, 0.85, -0.5, 0.65, 0)
-  addCylX(g, fm, 0, 0.55, 3.2, 7.6, 0, 0, 6)
+  addFuselage(g, fm, fLen, fH, fW)
+  addBox(g, bm(C - 0x0a0a0a), 5.5, 0.5, 0.85, -0.5, fH / 2 + 0.10, 0)
+  const noseTip = addNoseCone(g, fm, 7.6, 3.2, 0.55)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.55))
 
-  // Su-35 wider nose chines (IRST sensor on the right)
-  addBox(g, bm(Cd), 3.5, 0.18, 0.55, 4.5, 0.0, 0.95)
-  addBox(g, bm(Cd), 3.5, 0.18, 0.55, 4.5, 0.0, -0.95)
-  // IRST ball (small sphere on nose-right side)
-  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.18, 6, 6), mm(0x222222))
-  irst.position.set(5.5, 0.0, 0.5)
+  // Nose chines flush with fuselage sides
+  const chineD = 0.55
+  const chineZ = sideZ(fW, chineD)
+  addBox(g, bm(Cd), 3.5, 0.18, chineD, 4.5, 0.0, chineZ)
+  addBox(g, bm(Cd), 3.5, 0.18, chineD, 4.5, 0.0, -chineZ)
+  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), mm(0x222222))
+  irst.position.set(5.5, 0.0, chineZ * 0.55)
   g.add(irst)
 
-  addCanopy(g, 4.0, 0.57)
+  addCanopy(g, 4.0, fH / 2 + 0.02, 0.50, 0.50)
 
-  // LEX
-  addBox(g, bm(C - 0x080808), 5.5, 0.20, 2.0, 1.5, -0.05, 2.05, -0.10)
-  addBox(g, bm(C - 0x080808), 5.5, 0.20, 2.0, 1.5, -0.05, -2.05, 0.10)
+  addLexPair(g, bm(C - 0x080808), fW, 1.5, -0.05, 5.5, 0.20, 2.0, 0.10)
+  addSideIntakePair(g, dm, fW, fH, 2.0, 3.0, 0.72, 0.85, 0.04)
 
-  // Intakes
-  addBox(g, dm, 3.0, 0.72, 0.85, 2.0, -0.60, 1.1)
-  addBox(g, dm, 3.0, 0.72, 0.85, 2.0, -0.60, -1.1)
+  const wingY = -0.30
+  const wingRoot = sideZ(fW, 0.10)
+  addWing(g, wm, 1, 2.0, wingY, wingRoot, 5.4, 1.8, 4.7, 1.00, 0.12)
+  addWing(g, wm, -1, 2.0, wingY, wingRoot, 5.4, 1.8, 4.7, 1.00, 0.12)
+  addWingFence(g, wm, 0.2, wingY, wingRoot + 1.05, 0.38, 0.12)
+  addWingFence(g, wm, 0.2, wingY, -(wingRoot + 1.05), 0.38, 0.12)
 
-  // Su-35 wings: similar to Su-27 but slightly refined root/tip taper.
-  addWing(g, wm, 1, 2.0, -0.30, 0.82, 5.4, 1.8, 4.7, 1.00, 0.12)
-  addWing(g, wm, -1, 2.0, -0.30, 0.82, 5.4, 1.8, 4.7, 1.00, 0.12)
+  const tailZ = sideZ(fW, 0.13)
+  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, fH / 2 + 1.1, tailZ, 0.06)
+  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, fH / 2 + 1.1, -tailZ, -0.06)
 
-  // Twin vertical stabilizers
-  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, 1.1, 0.80, 0.06)
-  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, 1.1, -0.80, -0.06)
+  const stabZ = sideZ(fW, 2.8)
+  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, wingY + 0.05, stabZ)
+  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, wingY + 0.05, -stabZ)
 
-  // Horizontal stabilators
-  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, -0.25, 2.3)
-  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, -0.25, -2.3)
+  const engZ = sideZ(fW, 0.72 * 2) * 0.88
+  const nLen = 6.0, nCx = -3.5
+  addCylX(g, dm, 0.45, 0.55, nLen, nCx, -0.05, engZ, 12)
+  addCylX(g, dm, 0.45, 0.55, nLen, nCx, -0.05, -engZ, 12)
+  const exL = addTvcAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.55, 0.48, 0.55)
+  const exR = addTvcAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.55, 0.48, 0.55)
 
-  // Engine nacelles with larger TVC nozzle bells
-  addCylX(g, dm, 0.45, 0.55, 6.0, -3.5, -0.05, 0.72)
-  addCylX(g, dm, 0.45, 0.55, 6.0, -3.5, -0.05, -0.72)
-  // TVC nozzle bells (wider at exit)
-  addCylX(g, mm(0x333333), 0.52, 0.42, 0.6, -6.8, -0.05, 0.72, 8)
-  addCylX(g, mm(0x333333), 0.52, 0.42, 0.6, -6.8, -0.05, -0.72, 8)
-
-  addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, -0.30)
-  addGearGroup(g, 5.0, 0.5, 1.0, -0.55, 0.55, 0.24)
-  placeNozzle(g, [[-7.0, -0.05, 0.72], [-7.0, -0.05, -0.72]])
+  addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, wingY)
+  addGearGroup(g, 5.0, 0.5, 1.0, -fH / 2, 0.55, 0.24)
+  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── F-22A Raptor ────────────────────────────────────────────────────────────
-// Diamond wing planform, twin outward-canted tails, DSI bumps, chined nose.
-function buildF22(): THREE.Group {
+function buildF22(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x4a5568  // low-observable blue-grey
+  const C = 0x4a5568
   const Cw = C - 0x0c0c0d
   const Cd = C - 0x181819
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 11.5, fH = 1.05, fW = 1.45
 
-  // Blended fuselage — wide, flat-sided stealth shaping
-  addBox(g, fm, 11.5, 1.05, 1.45, 0, 0, 0)
-  // Chined nose (upper/lower facet meeting at sharp edge)
-  addCylX(g, fm, 0, 0.48, 3.0, 7.25, 0.05, 0, 6)
-  addBox(g, bm(C - 0x060608), 3.5, 0.12, 0.55, 5.5, 0.18, 0.85)
-  addBox(g, bm(C - 0x060608), 3.5, 0.12, 0.55, 5.5, 0.18, -0.85)
+  addFuselage(g, fm, fLen, fH, fW)
+  const noseTip = addNoseCone(g, fm, 7.25, 3.0, 0.48)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.48))
 
-  // Bubble canopy (set back, low profile)
+  const chineD = 0.55
+  const chineZ = sideZ(fW, chineD)
+  addBox(g, bm(C - 0x060608), 3.5, 0.12, chineD, 5.5, fH / 2 - 0.34, chineZ)
+  addBox(g, bm(C - 0x060608), 3.5, 0.12, chineD, 5.5, fH / 2 - 0.34, -chineZ)
+
   const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(0.46, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    new THREE.SphereGeometry(0.46, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
     canopyMat()
   )
-  canopy.position.set(3.5, 0.48, 0)
+  canopy.position.set(3.5, fH / 2 + 0.0, 0)
+  canopy.castShadow = true
   g.add(canopy)
 
-  // DSI inlet bumps (characteristic F-22/F-35 feature)
-  addBox(g, dm, 1.8, 0.55, 0.75, 2.2, -0.12, 1.05)
-  addBox(g, dm, 1.8, 0.55, 0.75, 2.2, -0.12, -1.05)
+  const dsiD = 0.75
+  const dsiZ = sideZ(fW, dsiD)
+  addBox(g, dm, 1.8, 0.55, dsiD, 2.2, -0.12, dsiZ)
+  addBox(g, dm, 1.8, 0.55, dsiD, 2.2, -0.12, -dsiZ)
 
-  // Diamond wing — high sweep trapezoid, clipped tips
-  addWing(g, wm, 1, 1.8, -0.30, 0.70, 4.8, 1.4, 4.2, 1.35, 0.11)
-  addWing(g, wm, -1, 1.8, -0.30, 0.70, 4.8, 1.4, 4.2, 1.35, 0.11)
+  const wingY = -0.30
+  addWing(g, wm, 1, 1.8, wingY, sideZ(fW, 0.10), 4.8, 1.4, 4.2, 1.35, 0.11)
+  addWing(g, wm, -1, 1.8, wingY, sideZ(fW, 0.10), 4.8, 1.4, 4.2, 1.35, 0.11)
 
-  // Twin outward-canted vertical tails (~27° from vertical)
-  const vL = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.9, 0.12), wm)
-  vL.position.set(-4.2, 0.90, 0.62)
-  vL.rotation.x = 0.47
-  g.add(vL)
-  const vR = vL.clone()
-  vR.position.z = -0.62
-  vR.rotation.x = -0.47
-  g.add(vR)
+  const tailZ = sideZ(fW, 0.12)
+  addCantedVStab(g, wm, -4.2, fH / 2, tailZ, 2.0, 1.9, 0.12, 0.47)
+  addCantedVStab(g, wm, -4.2, fH / 2, -tailZ, 2.0, 1.9, 0.12, -0.47)
 
-  // All-moving horizontal stabilators (canted to match tails)
-  addBox(g, wm, 1.6, 0.09, 2.2, -4.8, -0.18, 1.95)
-  addBox(g, wm, 1.6, 0.09, 2.2, -4.8, -0.18, -1.95)
+  const stabZ = sideZ(fW, 2.2)
+  addBox(g, wm, 1.6, 0.09, 2.2, -4.8, wingY + 0.12, stabZ)
+  addBox(g, wm, 1.6, 0.09, 2.2, -4.8, wingY + 0.12, -stabZ)
 
-  // Twin engine nacelles (integrated, rectangular 2D TVC nozzle exits)
-  addCylX(g, dm, 0.40, 0.48, 4.2, -3.2, -0.08, 0.58)
-  addCylX(g, dm, 0.40, 0.48, 4.2, -3.2, -0.08, -0.58)
-  // Rectangular nozzle exits (F-22 2D thrust vectoring)
-  addBox(g, mm(0x333333), 0.15, 0.55, 0.55, -5.5, -0.08, 0.58)
-  addBox(g, mm(0x333333), 0.15, 0.55, 0.55, -5.5, -0.08, -0.58)
+  const engZ = sideZ(fW, 0.58 * 2) * 0.88
+  const nLen = 4.2, nCx = -3.2
+  addCylX(g, dm, 0.40, 0.48, nLen, nCx, -0.08, engZ, 12)
+  addCylX(g, dm, 0.40, 0.48, nLen, nCx, -0.08, -engZ, 12)
+  const exL = addRectNozzleAt(g, cylRearX(nCx, nLen), -0.08, engZ, 0.55, 0.55)
+  const exR = addRectNozzleAt(g, cylRearX(nCx, nLen), -0.08, -engZ, 0.55, 0.55)
 
-  addFlapsGroup(g, 0.0, 0.75, 2.0, 1.1, -0.30)
-  addGearGroup(g, 4.5, 0.8, 1.0, -0.52, 0.52, 0.22)
-  placeNozzle(g, [[-5.6, -0.08, 0.58], [-5.6, -0.08, -0.58]])
+  addFlapsGroup(g, 0.0, 0.75, 2.0, 1.1, wingY)
+  addGearGroup(g, 4.5, 0.8, 1.0, -fH / 2, 0.52, 0.22)
+  placeNozzle(g, [[exL, -0.08, engZ], [exR, -0.08, -engZ]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── F-35A Lightning II ─────────────────────────────────────────────────────
-// Single engine, thick fuselage, DSI bumps, inward-canted twin tails, wide canopy.
-function buildF35A(): THREE.Group {
+function buildF35A(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x5a6678  // medium stealth grey
+  const C = 0x5a6678
   const Cw = C - 0x0d0d0e
   const Cd = C - 0x1a1a1b
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 9.5, fH = 1.15, fW = 1.35
 
-  // Thick mid-fuselage (JSF's distinctive barrel shape)
-  addBox(g, fm, 9.5, 1.15, 1.35, 0, 0, 0)
-  // Dorsal chine running from nose (key F-35 identifier)
-  addBox(g, bm(C - 0x050507), 7.0, 0.22, 0.70, 1.5, 0.42, 0)
-  // Chined nose
-  addCylX(g, fm, 0, 0.46, 2.6, 6.05, 0.08, 0, 6)
+  addFuselage(g, fm, fLen, fH, fW)
+  addBox(g, bm(C - 0x050507), 7.0, 0.22, 0.70, 1.5, fH / 2 - 0.15, 0)
+  const noseTip = addNoseCone(g, fm, 6.05, 2.6, 0.46)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.46))
 
-  // Large single-piece visor canopy (very prominent on F-35)
   const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(0.55, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.58),
+    new THREE.SphereGeometry(0.55, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.58),
     canopyMat()
   )
-  canopy.position.set(2.8, 0.52, 0)
+  canopy.position.set(2.8, fH / 2 + 0.0, 0)
+  canopy.castShadow = true
   g.add(canopy)
 
-  // DSI inlet bumps
-  addBox(g, dm, 1.6, 0.50, 0.70, 1.8, -0.15, 0.95)
-  addBox(g, dm, 1.6, 0.50, 0.70, 1.8, -0.15, -0.95)
+  const dsiD = 0.70
+  const dsiZ = sideZ(fW, dsiD)
+  addBox(g, dm, 1.6, 0.50, dsiD, 1.8, -0.15, dsiZ)
+  addBox(g, dm, 1.6, 0.50, dsiD, 1.8, -0.15, -dsiZ)
 
-  // Moderate sweep trapezoidal wings (smaller than F-22)
-  addWing(g, wm, 1, 1.4, -0.26, 0.58, 3.5, 1.2, 3.0, 0.90, 0.10)
-  addWing(g, wm, -1, 1.4, -0.26, 0.58, 3.5, 1.2, 3.0, 0.90, 0.10)
+  const wingY = -0.26
+  addWing(g, wm, 1, 1.4, wingY, sideZ(fW, 0.10), 3.5, 1.2, 3.0, 0.90, 0.10)
+  addWing(g, wm, -1, 1.4, wingY, sideZ(fW, 0.10), 3.5, 1.2, 3.0, 0.90, 0.10)
 
-  // Twin outward-canted tails (smaller, closer together than F-22)
-  const vL = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.5, 0.11), wm)
-  vL.position.set(-3.8, 0.78, 0.52)
-  vL.rotation.x = 0.40
-  g.add(vL)
-  const vR = vL.clone()
-  vR.position.z = -0.52
-  vR.rotation.x = -0.40
-  g.add(vR)
+  const tailZ = sideZ(fW, 0.11)
+  addCantedVStab(g, wm, -3.8, fH / 2, tailZ, 1.6, 1.5, 0.11, 0.40)
+  addCantedVStab(g, wm, -3.8, fH / 2, -tailZ, 1.6, 1.5, 0.11, -0.40)
 
-  // Horizontal stabilators
-  addBox(g, wm, 1.4, 0.08, 1.8, -4.3, -0.20, 1.65)
-  addBox(g, wm, 1.4, 0.08, 1.8, -4.3, -0.20, -1.65)
+  const stabZ = sideZ(fW, 1.8)
+  addBox(g, wm, 1.4, 0.08, 1.8, -4.3, wingY + 0.06, stabZ)
+  addBox(g, wm, 1.4, 0.08, 1.8, -4.3, wingY + 0.06, -stabZ)
 
-  // Single engine nacelle with stealthy serrated nozzle
-  addCylX(g, dm, 0.38, 0.46, 3.8, -2.8, -0.05, 0)
-  addBox(g, mm(0x333333), 0.12, 0.50, 0.50, -4.9, -0.05, 0)
+  const nLen = 3.8, nCx = -2.8
+  addCylX(g, dm, 0.38, 0.46, nLen, nCx, -0.05, 0, 12)
+  const ex = addRectNozzleAt(g, cylRearX(nCx, nLen), -0.05, 0, 0.50, 0.50)
 
-  addFlapsGroup(g, 0.2, 0.62, 1.6, 0.95, -0.26)
-  addGearGroup(g, 3.8, 0.6, 0.85, -0.57, 0.50, 0.21)
-  placeNozzle(g, [[-5.0, -0.05, 0]])
+  addFlapsGroup(g, 0.2, 0.62, 1.6, 0.95, wingY)
+  addGearGroup(g, 3.8, 0.6, 0.85, -fH / 2, 0.50, 0.21)
+  placeNozzle(g, [[ex, -0.05, 0]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── Su-57 Felon ─────────────────────────────────────────────────────────────
-// Wide-spaced twin engines, angular stealth facets, S-duct intakes, LERX, IRST ball.
-function buildSu57(): THREE.Group {
+function buildSu57(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x6a7068  // blue-grey camouflage
+  const C = 0x6a7068
   const Cw = C - 0x101010
   const Cd = C - 0x1c1c1c
   const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
+  const fLen = 12.5, fH = 1.05, fW = 1.40
 
-  // Long angular fuselage with flat facet sides
-  addBox(g, fm, 12.5, 1.05, 1.40, 0, 0, 0)
-  // Flat upper fuselage facet (stealth shaping)
-  addBox(g, bm(C - 0x080808), 8.0, 0.35, 1.20, 0.5, 0.55, 0)
-  // Sharp chined nose
-  addCylX(g, fm, 0, 0.50, 3.0, 7.75, 0.05, 0, 6)
-  // Nose chines (angular stealth edges)
-  addBox(g, bm(Cd), 3.8, 0.16, 0.50, 5.0, 0.05, 0.90)
-  addBox(g, bm(Cd), 3.8, 0.16, 0.50, 5.0, 0.05, -0.90)
-  // IRST ball (offset to starboard — Su-57 signature)
-  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 6), mm(0x222222))
-  irst.position.set(5.8, 0.05, 0.45)
+  addFuselage(g, fm, fLen, fH, fW)
+  addBox(g, bm(C - 0x080808), 8.0, 0.35, 1.20, 0.5, fH / 2 + 0.02, 0)
+  const noseTip = addNoseCone(g, fm, 7.75, 3.0, 0.50)
+  addPitotAt(g, addRadomeCap(g, noseTip, 0.50))
+
+  const chineD = 0.50
+  const chineZ = sideZ(fW, chineD)
+  addBox(g, bm(Cd), 3.8, 0.16, chineD, 5.0, 0.05, chineZ)
+  addBox(g, bm(Cd), 3.8, 0.16, chineD, 5.0, 0.05, -chineZ)
+  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 10), mm(0x222222))
+  irst.position.set(5.8, 0.05, chineZ * 0.55)
   g.add(irst)
 
-  addCanopy(g, 4.2, 0.56)
+  addCanopy(g, 4.2, fH / 2 + 0.035, 0.48, 0.48)
 
-  // Large LERX blending into wing roots
-  addBox(g, bm(C - 0x070707), 5.0, 0.18, 1.85, 1.5, -0.02, 1.90, -0.12)
-  addBox(g, bm(C - 0x070707), 5.0, 0.18, 1.85, 1.5, -0.02, -1.90, 0.12)
+  addLexPair(g, bm(C - 0x070707), fW, 1.5, -0.02, 5.0, 0.18, 1.85, 0.12)
 
-  // S-duct intake openings (under wing root, angled)
-  addBox(g, dm, 2.5, 0.65, 0.80, 2.2, -0.55, 1.15)
-  addBox(g, dm, 2.5, 0.65, 0.80, 2.2, -0.55, -1.15)
+  const iD = 0.80
+  addSideIntakePair(g, dm, fW, fH, 2.2, 2.5, 0.65, iD, 0.04)
 
-  // Large trapezoidal wings with moderate sweep
-  addWing(g, wm, 1, 2.0, -0.28, 0.80, 5.2, 1.7, 4.5, 1.05, 0.11)
-  addWing(g, wm, -1, 2.0, -0.28, 0.80, 5.2, 1.7, 4.5, 1.05, 0.11)
+  const wingY = -0.28
+  const wingRoot = sideZ(fW, 0.10)
+  addWing(g, wm, 1, 2.0, wingY, wingRoot, 5.2, 1.7, 4.5, 1.05, 0.11)
+  addWing(g, wm, -1, 2.0, wingY, wingRoot, 5.2, 1.7, 4.5, 1.05, 0.11)
 
-  // Smaller canted vertical tails (vs Su-27 — stealth-optimised)
-  addBox(g, wm, 2.0, 1.8, 0.12, -4.8, 0.95, 0.68, 0.08)
-  addBox(g, wm, 2.0, 1.8, 0.12, -4.8, 0.95, -0.68, -0.08)
+  const tailZ = sideZ(fW, 0.12)
+  addBox(g, wm, 2.0, 1.8, 0.12, -4.8, fH / 2 + 0.90, tailZ, 0.08)
+  addBox(g, wm, 2.0, 1.8, 0.12, -4.8, fH / 2 + 0.90, -tailZ, -0.08)
 
-  // All-moving horizontal stabilators
-  addBox(g, wm, 2.0, 0.09, 2.5, -5.3, -0.22, 2.15)
-  addBox(g, wm, 2.0, 0.09, 2.5, -5.3, -0.22, -2.15)
+  const stabZ = sideZ(fW, 2.5)
+  addBox(g, wm, 2.0, 0.09, 2.5, -5.3, wingY + 0.06, stabZ)
+  addBox(g, wm, 2.0, 0.09, 2.5, -5.3, wingY + 0.06, -stabZ)
 
-  // Widely spaced engine nacelles — visible gap between them (Su-57 signature)
-  addCylX(g, dm, 0.42, 0.50, 5.5, -3.3, -0.05, 0.85)
-  addCylX(g, dm, 0.42, 0.50, 5.5, -3.3, -0.05, -0.85)
-  // 3D thrust-vectoring nozzle bells
-  addCylX(g, mm(0x333333), 0.50, 0.40, 0.55, -6.2, -0.05, 0.85, 8)
-  addCylX(g, mm(0x333333), 0.50, 0.40, 0.55, -6.2, -0.05, -0.85, 8)
+  const engZ = sideZ(fW, 0.85 * 2) * 0.92
+  const nLen = 5.5, nCx = -3.3
+  addCylX(g, dm, 0.42, 0.50, nLen, nCx, -0.05, engZ, 12)
+  addCylX(g, dm, 0.42, 0.50, nLen, nCx, -0.05, -engZ, 12)
+  const exL = addTvcAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.50, 0.42, 0.50)
+  const exR = addTvcAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.50, 0.42, 0.50)
 
-  addFlapsGroup(g, -0.1, 1.0, 2.2, 1.3, -0.28)
-  addGearGroup(g, 5.2, 0.5, 1.05, -0.52, 0.55, 0.23)
-  placeNozzle(g, [[-6.4, -0.05, 0.85], [-6.4, -0.05, -0.85]])
+  addFlapsGroup(g, -0.1, 1.0, 2.2, 1.3, wingY)
+  addGearGroup(g, 5.2, 0.5, 1.05, -fH / 2, 0.55, 0.23)
+  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
 // ── Fallback generic jet ────────────────────────────────────────────────────
 
-function buildGeneric(nation: 'USA' | 'RUS'): THREE.Group {
+function buildGeneric(_nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-  const C = nation === 'USA' ? 0x6688aa : 0x887766
+  const C = _nation === 'USA' ? 0x6688aa : 0x887766
   const fm = bm(C), wm = bm(C - 0x111111)
+  const fLen = 8.0, fH = 1.0, fW = 1.2
 
-  addBox(g, fm, 8.0, 1.0, 1.2)
-  addCylX(g, fm, 0, 0.5, 2.0, 5.0)
-  addCanopy(g, 2.8, 0.55)
-  addWing(g, wm, 1, 1.5, -0.20, 0.62, 2.4, 1.0, 2.6, 0.8, 0.13)
-  addWing(g, wm, -1, 1.5, -0.20, 0.62, 2.4, 1.0, 2.6, 0.8, 0.13)
-  addBox(g, wm, 0.9, 0.12, 3.2, -3.5, 0.0)
-  addBox(g, wm, 0.9, 1.4, 0.13, -3.5, 0.6)
+  addFuselage(g, fm, fLen, fH, fW)
+  const noseTip = addNoseCone(g, fm, 5.0, 2.0, 0.5)
+  addRadomeCap(g, noseTip, 0.5)
+  addCanopy(g, 2.8, fH / 2 + 0.05)
 
-  addFlapsGroup(g, 0.0, 0.65, 1.4, 0.9, -0.20)
-  addGearGroup(g, 3.0, 0.5, 0.8, -0.50, 0.5, 0.20)
-  placeNozzle(g, [[-4.1, 0.0, 0.0]])
+  const wingY = -0.20
+  addWing(g, wm, 1, 1.5, wingY, sideZ(fW, 0.10), 2.4, 1.0, 2.6, 0.8, 0.13)
+  addWing(g, wm, -1, 1.5, wingY, sideZ(fW, 0.10), 2.4, 1.0, 2.6, 0.8, 0.13)
+
+  const stabZ = sideZ(fW, 3.2)
+  addBox(g, wm, 0.9, 0.12, 3.2, -3.5, wingY + 0.20, 0)
+  addBox(g, wm, 0.9, 1.4, 0.13, -3.5, fH / 2 + 0.70, 0)
+
+  const nLen = 3.5, nCx = -2.5
+  addCylX(g, fm, 0.35, 0.42, nLen, nCx, 0, 0, 12)
+  const ex = addNozzleAt(g, cylRearX(nCx, nLen), 0, 0, 0.42, 0.24)
+
+  addFlapsGroup(g, 0.0, 0.65, 1.4, 0.9, wingY)
+  addGearGroup(g, 3.0, 0.5, 0.8, -fH / 2, 0.5, 0.20)
+  placeNozzle(g, [[ex, 0.0, 0]])
   g.rotation.y = Math.PI / 2
   return g
 }
@@ -702,21 +817,39 @@ function buildGeneric(nation: 'USA' | 'RUS'): THREE.Group {
 
 export function createPlaceholderAircraftMesh(aircraftId: string, nation: 'USA' | 'RUS'): THREE.Group {
   switch (aircraftId) {
-    case 'f15c':  return buildF15C()
-    case 'f16c':  return buildF16C()
-    case 'fa18c': return buildFA18C()
-    case 'mig29': return buildMiG29()
-    case 'su27':  return buildSu27()
-    case 'su35':  return buildSu35()
-    case 'f22':   return buildF22()
-    case 'f35a':  return buildF35A()
-    case 'su57':  return buildSu57()
+    case 'f15c':  return buildF15C(nation)
+    case 'f16c':  return buildF16C(nation)
+    case 'fa18c': return buildFA18C(nation)
+    case 'mig29': return buildMiG29(nation)
+    case 'su27':  return buildSu27(nation)
+    case 'su35':  return buildSu35(nation)
+    case 'f22':   return buildF22(nation)
+    case 'f35a':  return buildF35A(nation)
+    case 'su57':  return buildSu57(nation)
     default:      return buildGeneric(nation)
   }
 }
 
+/** All engine nozzle anchor points on an aircraft mesh (1 or 2). */
+export function createNozzlePoints(group: THREE.Group): THREE.Object3D[] {
+  const points: THREE.Object3D[] = []
+  group.traverse(obj => {
+    if (obj.name === 'nozzle' || /^nozzle-\d+$/.test(obj.name)) {
+      points.push(obj)
+    }
+  })
+  points.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+  return points.length > 0 ? points : [group]
+}
+
+/** First nozzle point — convenience for single-engine callers. */
 export function createNozzlePoint(group: THREE.Group): THREE.Object3D {
-  return group.getObjectByName('nozzle') ?? group
+  return createNozzlePoints(group)[0] ?? group
+}
+
+/** Per-engine thruster scale: twin jets use two slightly smaller plumes. */
+export function getThrusterScale(engineCount: number): number {
+  return engineCount > 1 ? 1.45 : 1.8
 }
 
 const GEAR_CLEARANCE: Record<string, { gearUp: number; gearDown: number }> = {
@@ -760,8 +893,8 @@ export function applyDamageTint(group: THREE.Group, damageLevel: number, onFire:
     if (!(obj instanceof THREE.Mesh)) return
     const mat = obj.material
     if (Array.isArray(mat)) return
-    const m = mat as { emissive?: THREE.Color }
-    if (!m.emissive) return
+    const m = mat as THREE.MeshStandardMaterial
+    if (!(m instanceof THREE.MeshStandardMaterial)) return
     if (onFire) {
       m.emissive.copy(fireEmissive)
     } else if (damageLevel > 0.3) {
@@ -903,33 +1036,50 @@ export function buildStoreMesh(category: WeaponCategory): THREE.Group | null {
 // ── Distant LOD mesh ────────────────────────────────────────────────────────
 
 /**
- * Simplified 3-shape aircraft silhouette for LOD beyond ~4 km.
- * Much lower poly count than the full mesh.
+ * Simplified aircraft silhouette for LOD beyond ~5 km.
+ * Per-type shapes preserve twin-tail, single-tail, and wide-body distinctions.
  */
 export function buildDistantAircraftMesh(aircraftId: string, nation: 'USA' | 'RUS'): THREE.Group {
   const g = new THREE.Group()
-
   const baseColor = nation === 'USA' ? 0x5a6678 : 0x778866
-  const mat = new THREE.MeshStandardMaterial({ color: baseColor, metalness: 0.2, roughness: 0.8 })
+  const mat = new THREE.MeshStandardMaterial({
+    color: baseColor, metalness: 0.2, roughness: 0.8, emissive: 0x000000,
+  })
 
-  // Fuselage
-  const fuseLen = aircraftId === 'su27' || aircraftId === 'su35' || aircraftId === 'su57' ? 11 : 9
-  const fuse = new THREE.Mesh(new THREE.BoxGeometry(fuseLen, 0.7, 0.9), mat)
+  const isFlanker = aircraftId === 'su27' || aircraftId === 'su35' || aircraftId === 'su57'
+  const isStealth = aircraftId === 'f22' || aircraftId === 'f35a' || aircraftId === 'su57'
+  const isSingleTail = aircraftId === 'f16c'
+  const isWideTwin = aircraftId === 'mig29' || aircraftId === 'su57'
+
+  const fuseLen = isFlanker ? 11 : isStealth && aircraftId !== 'f35a' ? 10.5 : 9
+  const fuse = new THREE.Mesh(new THREE.BoxGeometry(fuseLen, 0.7, isWideTwin ? 1.1 : 0.9), mat)
   fuse.castShadow = true
   g.add(fuse)
 
-  // Wings (single flat box representing both wings)
-  const wingSpan = aircraftId === 'su27' || aircraftId === 'su35' || aircraftId === 'su57' ? 9.0 : 7.5
+  const wingSpan = isFlanker ? 9.0 : aircraftId === 'f22' ? 8.5 : 7.5
+  const wingSweep = isStealth ? 1.2 : 0.5
   const wing = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.12, wingSpan), mat)
-  wing.position.x = 0.5
+  wing.position.set(wingSweep, -0.05, 0)
   wing.castShadow = true
   g.add(wing)
 
-  // Tail assembly
-  const tail = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 0.5), mat)
-  tail.position.set(-fuseLen / 2 + 1.0, 0.6, 0)
-  tail.castShadow = true
-  g.add(tail)
+  if (isSingleTail) {
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.4, 0.12), mat)
+    tail.position.set(-fuseLen / 2 + 0.8, 0.65, 0)
+    tail.castShadow = true
+    g.add(tail)
+  } else {
+    const tailSpacing = isWideTwin ? 0.55 : 0.35
+    for (const side of [1, -1] as const) {
+      const tail = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 0.12), mat)
+      tail.position.set(-fuseLen / 2 + 0.8, 0.55, side * tailSpacing)
+      if (aircraftId === 'fa18c' || aircraftId === 'f22' || aircraftId === 'f35a') {
+        tail.rotation.x = side * 0.3
+      }
+      tail.castShadow = true
+      g.add(tail)
+    }
+  }
 
   g.rotation.y = Math.PI / 2
   return g

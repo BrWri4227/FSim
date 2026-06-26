@@ -98,8 +98,9 @@ export class ThrusterEffect {
   private time = 0
   private readonly usesSharedAssets: boolean
 
-  constructor(parent: THREE.Object3D, baseScale = 1.0) {
+  constructor(parent: THREE.Object3D, baseScale = 1.0, phaseOffset = 0) {
     this.baseScale = baseScale
+    this.time = phaseOffset
     this.usesSharedAssets = baseScale <= 1.5
 
     if (this.usesSharedAssets) {
