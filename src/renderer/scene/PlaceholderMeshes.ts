@@ -6,13 +6,18 @@ import * as THREE from 'three'
 
 // ── Material helpers ────────────────────────────────────────────────────────
 
-function bm(color: number, shininess = 30): THREE.MeshPhongMaterial {
-  return new THREE.MeshPhongMaterial({ color, specular: 0x555555, shininess })
+/** Standard aircraft skin — low-to-medium metalness for a painted-metal look. */
+function bm(color: number): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color, metalness: 0.30, roughness: 0.70 })
 }
-function canopyMat(): THREE.MeshPhongMaterial {
-  return new THREE.MeshPhongMaterial({
-    color: 0x1a2f3a, specular: 0x88aacc, shininess: 80,
-    transparent: true, opacity: 0.65
+/** Metallic / dark-metal parts: nozzles, IRST balls, TVC bells. */
+function mm(color: number): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color, metalness: 0.85, roughness: 0.25 })
+}
+function canopyMat(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0x1a2f3a, metalness: 0.85, roughness: 0.10,
+    transparent: true, opacity: 0.65,
   })
 }
 
@@ -27,6 +32,7 @@ function addBox(
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m)
   mesh.position.set(x, y, z)
   mesh.rotation.set(rx, 0, rz)
+  mesh.castShadow = true
   g.add(mesh)
   return mesh
 }
@@ -41,6 +47,7 @@ function addCylX(
   // Rotate so the cylinder "top" points toward +X (nose-forward).
   mesh.rotation.z = -Math.PI / 2
   mesh.position.set(x, y, z)
+  mesh.castShadow = true
   g.add(mesh)
   return mesh
 }
@@ -83,10 +90,8 @@ function addWing(
   sweepBack: number,
   thickness = 0.10
 ): THREE.Mesh {
-  const baseMat = (m instanceof THREE.MeshPhongMaterial)
-    ? m.clone()
-    : new THREE.MeshPhongMaterial({ color: 0x777777, side: THREE.DoubleSide })
-  if (baseMat instanceof THREE.MeshPhongMaterial) baseMat.side = THREE.DoubleSide
+  const baseMat = m.clone() as THREE.MeshStandardMaterial
+  baseMat.side = THREE.DoubleSide
 
   const mesh = new THREE.Mesh(
     wingGeom(rootChord, tipChord, semiSpan, sweepBack, thickness),
@@ -94,6 +99,7 @@ function addWing(
   )
   mesh.position.set(x, y, side > 0 ? rootOffsetZ : -rootOffsetZ)
   if (side < 0) mesh.scale.z = -1
+  mesh.castShadow = true
   g.add(mesh)
   return mesh
 }
@@ -104,6 +110,7 @@ function addCanopy(g: THREE.Group, x: number, y: number): void {
     canopyMat()
   )
   mesh.position.set(x, y, 0)
+  mesh.castShadow = true
   g.add(mesh)
 }
 
@@ -120,7 +127,7 @@ function addFlapsGroup(
   flapChord: number,
   wingY: number
 ): void {
-  const fm = new THREE.MeshPhongMaterial({ color: 0x556677, shininess: 20, side: THREE.DoubleSide })
+  const fm = new THREE.MeshStandardMaterial({ color: 0x556677, metalness: 0.2, roughness: 0.75, side: THREE.DoubleSide })
   const flaps = new THREE.Group()
   flaps.name = 'flaps-group'
 
@@ -151,7 +158,7 @@ function addGearGroup(
   strutH: number,
   wheelR: number
 ): void {
-  const gm = new THREE.MeshPhongMaterial({ color: 0x2a2a2a, shininess: 20 })
+  const gm = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.7, roughness: 0.4 })
   const gear = new THREE.Group()
   gear.name = 'gear-group'
 
@@ -453,7 +460,7 @@ function buildSu35(): THREE.Group {
   addBox(g, bm(Cd), 3.5, 0.18, 0.55, 4.5, 0.0, 0.95)
   addBox(g, bm(Cd), 3.5, 0.18, 0.55, 4.5, 0.0, -0.95)
   // IRST ball (small sphere on nose-right side)
-  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.18, 6, 6), bm(0x222222, 60))
+  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.18, 6, 6), mm(0x222222))
   irst.position.set(5.5, 0.0, 0.5)
   g.add(irst)
 
@@ -483,8 +490,8 @@ function buildSu35(): THREE.Group {
   addCylX(g, dm, 0.45, 0.55, 6.0, -3.5, -0.05, 0.72)
   addCylX(g, dm, 0.45, 0.55, 6.0, -3.5, -0.05, -0.72)
   // TVC nozzle bells (wider at exit)
-  addCylX(g, bm(0x333333, 60), 0.52, 0.42, 0.6, -6.8, -0.05, 0.72, 8)
-  addCylX(g, bm(0x333333, 60), 0.52, 0.42, 0.6, -6.8, -0.05, -0.72, 8)
+  addCylX(g, mm(0x333333), 0.52, 0.42, 0.6, -6.8, -0.05, 0.72, 8)
+  addCylX(g, mm(0x333333), 0.52, 0.42, 0.6, -6.8, -0.05, -0.72, 8)
 
   addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, -0.30)
   addGearGroup(g, 5.0, 0.5, 1.0, -0.55, 0.55, 0.24)
@@ -543,8 +550,8 @@ function buildF22(): THREE.Group {
   addCylX(g, dm, 0.40, 0.48, 4.2, -3.2, -0.08, 0.58)
   addCylX(g, dm, 0.40, 0.48, 4.2, -3.2, -0.08, -0.58)
   // Rectangular nozzle exits (F-22 2D thrust vectoring)
-  addBox(g, bm(0x333333, 60), 0.15, 0.55, 0.55, -5.5, -0.08, 0.58)
-  addBox(g, bm(0x333333, 60), 0.15, 0.55, 0.55, -5.5, -0.08, -0.58)
+  addBox(g, mm(0x333333), 0.15, 0.55, 0.55, -5.5, -0.08, 0.58)
+  addBox(g, mm(0x333333), 0.15, 0.55, 0.55, -5.5, -0.08, -0.58)
 
   addFlapsGroup(g, 0.0, 0.75, 2.0, 1.1, -0.30)
   addGearGroup(g, 4.5, 0.8, 1.0, -0.52, 0.52, 0.22)
@@ -601,7 +608,7 @@ function buildF35A(): THREE.Group {
 
   // Single engine nacelle with stealthy serrated nozzle
   addCylX(g, dm, 0.38, 0.46, 3.8, -2.8, -0.05, 0)
-  addBox(g, bm(0x333333, 60), 0.12, 0.50, 0.50, -4.9, -0.05, 0)
+  addBox(g, mm(0x333333), 0.12, 0.50, 0.50, -4.9, -0.05, 0)
 
   addFlapsGroup(g, 0.2, 0.62, 1.6, 0.95, -0.26)
   addGearGroup(g, 3.8, 0.6, 0.85, -0.57, 0.50, 0.21)
@@ -629,7 +636,7 @@ function buildSu57(): THREE.Group {
   addBox(g, bm(Cd), 3.8, 0.16, 0.50, 5.0, 0.05, 0.90)
   addBox(g, bm(Cd), 3.8, 0.16, 0.50, 5.0, 0.05, -0.90)
   // IRST ball (offset to starboard — Su-57 signature)
-  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 6), bm(0x222222, 60))
+  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 6), mm(0x222222))
   irst.position.set(5.8, 0.05, 0.45)
   g.add(irst)
 
@@ -659,8 +666,8 @@ function buildSu57(): THREE.Group {
   addCylX(g, dm, 0.42, 0.50, 5.5, -3.3, -0.05, 0.85)
   addCylX(g, dm, 0.42, 0.50, 5.5, -3.3, -0.05, -0.85)
   // 3D thrust-vectoring nozzle bells
-  addCylX(g, bm(0x333333, 60), 0.50, 0.40, 0.55, -6.2, -0.05, 0.85, 8)
-  addCylX(g, bm(0x333333, 60), 0.50, 0.40, 0.55, -6.2, -0.05, -0.85, 8)
+  addCylX(g, mm(0x333333), 0.50, 0.40, 0.55, -6.2, -0.05, 0.85, 8)
+  addCylX(g, mm(0x333333), 0.50, 0.40, 0.55, -6.2, -0.05, -0.85, 8)
 
   addFlapsGroup(g, -0.1, 1.0, 2.2, 1.3, -0.28)
   addGearGroup(g, 5.2, 0.5, 1.05, -0.52, 0.55, 0.23)
@@ -745,7 +752,7 @@ export function setFlapsVisible(group: THREE.Group, visible: boolean): void {
  * onFire: adds orange emissive glow.
  */
 export function applyDamageTint(group: THREE.Group, damageLevel: number, onFire: boolean): void {
-  const fireEmissive = new THREE.Color(0.6, 0.15, 0.0)
+  const fireEmissive   = new THREE.Color(0.6, 0.15, 0.0)
   const damageEmissive = new THREE.Color(0.25, 0.05, 0.0)
   const zero = new THREE.Color(0, 0, 0)
 
@@ -753,8 +760,8 @@ export function applyDamageTint(group: THREE.Group, damageLevel: number, onFire:
     if (!(obj instanceof THREE.Mesh)) return
     const mat = obj.material
     if (Array.isArray(mat)) return
-    const m = mat as THREE.MeshPhongMaterial
-    if (!('emissive' in m)) return
+    const m = mat as { emissive?: THREE.Color }
+    if (!m.emissive) return
     if (onFire) {
       m.emissive.copy(fireEmissive)
     } else if (damageLevel > 0.3) {
@@ -763,4 +770,167 @@ export function applyDamageTint(group: THREE.Group, damageLevel: number, onFire:
       m.emissive.copy(zero)
     }
   })
+}
+
+// ── Gear animation ──────────────────────────────────────────────────────────
+
+/**
+ * Animate landing gear retraction/deployment.
+ * t = 0 → fully retracted (hidden), t = 1 → fully deployed (normal position).
+ * Call each frame with a smoothly changing t value.
+ */
+export function setGearAnimT(group: THREE.Group, t: number): void {
+  const gear = group.getObjectByName('gear-group')
+  if (!gear) return
+  gear.visible = t > 0.02
+  // Raise the gear group upward when retracting so it disappears into the fuselage.
+  gear.position.y = (1 - t) * 1.8
+}
+
+// ── Store mesh builder ──────────────────────────────────────────────────────
+
+import type { WeaponCategory } from '../types/aircraft'
+
+/**
+ * Build a simple recognisable store mesh for the given weapon category.
+ * The long axis of the store runs along +X (forward), same as aircraft fuselage.
+ * Returns null for EMPTY / GUN_POD (gun pod stays internal for now).
+ */
+export function buildStoreMesh(category: WeaponCategory): THREE.Group | null {
+  const g = new THREE.Group()
+  switch (category) {
+    case 'IR_MISSILE': {
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.5, roughness: 0.5 })
+      const noseMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.7, roughness: 0.3 })
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 2.2, 8), bodyMat)
+      body.rotation.z = -Math.PI / 2
+      body.castShadow = true
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.5, 8), noseMat)
+      nose.rotation.z = -Math.PI / 2
+      nose.position.x = 1.35
+      nose.castShadow = true
+      // Tail fins
+      const finMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.4, roughness: 0.6 })
+      for (let i = 0; i < 4; i++) {
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.016, 0.28), finMat)
+        fin.rotation.x = i * (Math.PI / 2)
+        fin.position.x = -0.85
+        g.add(fin)
+      }
+      g.add(body, nose)
+      break
+    }
+    case 'ARH_MISSILE': {
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0xbbbbcc, metalness: 0.5, roughness: 0.5 })
+      const noseMat = new THREE.MeshStandardMaterial({ color: 0x334488, metalness: 0.6, roughness: 0.4 })
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.12, 2.8, 8), bodyMat)
+      body.rotation.z = -Math.PI / 2
+      body.castShadow = true
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.10, 0.55, 8), noseMat)
+      nose.rotation.z = -Math.PI / 2
+      nose.position.x = 1.68
+      nose.castShadow = true
+      const finMat = new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.4, roughness: 0.6 })
+      for (let i = 0; i < 4; i++) {
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.018, 0.32), finMat)
+        fin.rotation.x = i * (Math.PI / 2)
+        fin.position.x = -1.1
+        g.add(fin)
+      }
+      g.add(body, nose)
+      break
+    }
+    case 'AGM_MISSILE': {
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0x556644, metalness: 0.35, roughness: 0.7 })
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.20, 3.5, 8), bodyMat)
+      body.rotation.z = -Math.PI / 2
+      body.castShadow = true
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.7, 8),
+        new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7, roughness: 0.3 }))
+      nose.rotation.z = -Math.PI / 2
+      nose.position.x = 2.1
+      nose.castShadow = true
+      g.add(body, nose)
+      break
+    }
+    case 'LGB':
+    case 'BOMB': {
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0x334433, metalness: 0.3, roughness: 0.75 })
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.8, 8), bodyMat)
+      body.rotation.z = -Math.PI / 2
+      body.castShadow = true
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.6, 8), bodyMat)
+      nose.rotation.z = -Math.PI / 2
+      nose.position.x = 1.7
+      nose.castShadow = true
+      // Tail fin group
+      const finMat = new THREE.MeshStandardMaterial({ color: 0x556655, metalness: 0.3, roughness: 0.7 })
+      for (let i = 0; i < 4; i++) {
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.015, 0.35), finMat)
+        fin.rotation.x = i * (Math.PI / 2)
+        fin.position.x = -1.1
+        g.add(fin)
+      }
+      g.add(body, nose)
+      break
+    }
+    case 'FUEL_TANK': {
+      const mat = new THREE.MeshStandardMaterial({ color: 0x999988, metalness: 0.4, roughness: 0.6 })
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 4.5, 10), mat)
+      body.rotation.z = -Math.PI / 2
+      body.castShadow = true
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.8, 10), mat)
+      nose.rotation.z = -Math.PI / 2
+      nose.position.x = 2.65
+      nose.castShadow = true
+      g.add(body, nose)
+      break
+    }
+    case 'GUN_POD': {
+      const mat = new THREE.MeshStandardMaterial({ color: 0x445544, metalness: 0.4, roughness: 0.65 })
+      const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.35, 0.35), mat)
+      body.castShadow = true
+      g.add(body)
+      break
+    }
+    case 'EMPTY':
+    default:
+      return null
+  }
+  return g
+}
+
+// ── Distant LOD mesh ────────────────────────────────────────────────────────
+
+/**
+ * Simplified 3-shape aircraft silhouette for LOD beyond ~4 km.
+ * Much lower poly count than the full mesh.
+ */
+export function buildDistantAircraftMesh(aircraftId: string, nation: 'USA' | 'RUS'): THREE.Group {
+  const g = new THREE.Group()
+
+  const baseColor = nation === 'USA' ? 0x5a6678 : 0x778866
+  const mat = new THREE.MeshStandardMaterial({ color: baseColor, metalness: 0.2, roughness: 0.8 })
+
+  // Fuselage
+  const fuseLen = aircraftId === 'su27' || aircraftId === 'su35' || aircraftId === 'su57' ? 11 : 9
+  const fuse = new THREE.Mesh(new THREE.BoxGeometry(fuseLen, 0.7, 0.9), mat)
+  fuse.castShadow = true
+  g.add(fuse)
+
+  // Wings (single flat box representing both wings)
+  const wingSpan = aircraftId === 'su27' || aircraftId === 'su35' || aircraftId === 'su57' ? 9.0 : 7.5
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.12, wingSpan), mat)
+  wing.position.x = 0.5
+  wing.castShadow = true
+  g.add(wing)
+
+  // Tail assembly
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 0.5), mat)
+  tail.position.set(-fuseLen / 2 + 1.0, 0.6, 0)
+  tail.castShadow = true
+  g.add(tail)
+
+  g.rotation.y = Math.PI / 2
+  return g
 }

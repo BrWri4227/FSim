@@ -5,25 +5,21 @@ import { Aircraft } from './Aircraft'
 import { nedToThree } from '../utils/MathUtils'
 import type { ChaffCloud } from '../avionics/CMDS'
 import type { FlareContact } from '../types/ir'
+import { buildMissileMesh } from '../weapons/MissileSystem'
 
 // Reusable temporaries for mesh orientation — avoids per-frame Vector3 allocations
 const _netMissileDir    = new THREE.Vector3()
 const _netMissileLookAt = new THREE.Vector3()
 
-// Shared missile geometry: cylinder with long axis along +Z so lookAt() aligns with velocity.
-const REMOTE_MISSILE_GEO = (() => {
-  const g = new THREE.CylinderGeometry(0.07, 0.09, 1.8, 6)
-  g.rotateX(Math.PI / 2)
-  return g
-})()
-const REMOTE_MISSILE_MAT = new THREE.MeshPhongMaterial({ color: 0xdddddd, emissive: 0x333333, shininess: 40 })
+const REMOTE_MISSILE_BODY_MAT = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.5, roughness: 0.5 })
+const REMOTE_MISSILE_FIN_MAT  = new THREE.MeshStandardMaterial({ color: 0xbbbbbb, metalness: 0.4, roughness: 0.6 })
 
 export class NetworkAircraft extends Aircraft {
   private _netRadarState: NetRadarState | null = null
   private _netMissiles: NetMissileState[] = []
   private _netFlares: FlareContact[] = []
   private _netChaffClouds: ChaffCloud[] = []
-  private _missileMeshes = new Map<string, THREE.Mesh>()
+  private _missileMeshes = new Map<string, THREE.Group>()
   readonly cmds = {
     getActiveFlares: (): ReadonlyArray<FlareContact> => this._netFlares,
     getActiveChaffClouds: (): ReadonlyArray<ChaffCloud> => this._netChaffClouds,
@@ -68,7 +64,7 @@ export class NetworkAircraft extends Aircraft {
       seen.add(m.id)
       let mesh = this._missileMeshes.get(m.id)
       if (!mesh) {
-        mesh = new THREE.Mesh(REMOTE_MISSILE_GEO, REMOTE_MISSILE_MAT)
+        mesh = buildMissileMesh(REMOTE_MISSILE_BODY_MAT, REMOTE_MISSILE_FIN_MAT)
         this.scene.add(mesh)
         this._missileMeshes.set(m.id, mesh)
       }

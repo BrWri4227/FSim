@@ -9,6 +9,20 @@ import { applyHit } from '../systems/DamageModel'
 
 const HIT_RADIUS = 5  // meters for gun kill
 
+function makeMuzzleFlashTex(): THREE.Texture {
+  const c = document.createElement('canvas')
+  c.width = c.height = 64
+  const ctx = c.getContext('2d')!
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
+  g.addColorStop(0,   'rgba(255,255,220,1)')
+  g.addColorStop(0.3, 'rgba(255,180,60,0.8)')
+  g.addColorStop(0.7, 'rgba(255,100,20,0.3)')
+  g.addColorStop(1,   'rgba(0,0,0,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, 64, 64)
+  return new THREE.CanvasTexture(c)
+}
+
 export class GunSystem {
   private spec: GunSpec | null
   private rounds: GunRoundState[] = []
@@ -18,13 +32,28 @@ export class GunSystem {
   private scene: THREE.Scene
   private onTargetHit: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null = null
 
-  private roundMat = new THREE.MeshBasicMaterial({ color: 0xffff00 })
+  private roundMat = new THREE.MeshBasicMaterial({ color: 0xffdd00 })
   private roundGeo = new THREE.SphereGeometry(0.15, 4, 4)
+
+  private muzzleFlash: THREE.Sprite
+  private muzzleFlashTimer = 0
+  private static readonly MUZZLE_FLASH_DURATION = 0.04  // seconds
 
   constructor(spec: GunSpec | null, scene: THREE.Scene) {
     this.spec = spec
     this.scene = scene
     this.remainingRounds = spec?.totalRounds ?? 0
+
+    const flashSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: makeMuzzleFlashTex(),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+    }))
+    flashSprite.scale.setScalar(3.5)
+    flashSprite.visible = false
+    scene.add(flashSprite)
+    this.muzzleFlash = flashSprite
   }
 
   setOnTargetHit(cb: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null): void {
@@ -53,9 +82,15 @@ export class GunSystem {
     }
     this.rounds.push(round)
 
-    // Mesh
+    // Muzzle flash at firing position
+    const flashPos = nedToThree(round.positionNED)
+    this.muzzleFlash.position.copy(flashPos)
+    this.muzzleFlash.visible = true
+    this.muzzleFlashTimer = GunSystem.MUZZLE_FLASH_DURATION
+
+    // Round mesh
     const mesh = new THREE.Mesh(this.roundGeo, this.roundMat)
-    mesh.position.copy(nedToThree(round.positionNED))
+    mesh.position.copy(flashPos)
     this.scene.add(mesh)
     this.roundMeshes.push(mesh)
 
@@ -64,6 +99,12 @@ export class GunSystem {
 
   update(dt: number, enemies: Aircraft[]): void {
     if (this.fireTimer > 0) this.fireTimer -= dt
+
+    // Fade out muzzle flash
+    if (this.muzzleFlashTimer > 0) {
+      this.muzzleFlashTimer -= dt
+      if (this.muzzleFlashTimer <= 0) this.muzzleFlash.visible = false
+    }
 
     for (let i = this.rounds.length - 1; i >= 0; i--) {
       const round = this.rounds[i]!
@@ -105,6 +146,9 @@ export class GunSystem {
 
   dispose(): void {
     for (const m of this.roundMeshes) this.scene.remove(m)
+    this.scene.remove(this.muzzleFlash)
+    ;(this.muzzleFlash.material as THREE.SpriteMaterial).map?.dispose()
+    ;(this.muzzleFlash.material as THREE.SpriteMaterial).dispose()
     this.roundGeo.dispose()
     this.roundMat.dispose()
   }

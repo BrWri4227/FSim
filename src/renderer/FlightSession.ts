@@ -19,6 +19,7 @@ import { getAircraftById } from './data/aircraft/catalog'
 import type { FlightResult } from './App'
 import { FlareEffect } from './scene/FlareEffect'
 import { ChaffEffect } from './scene/ChaffEffect'
+import { setLODCamera } from './entities/Aircraft'
 
 const FIXED_DT = 1 / 60
 
@@ -116,6 +117,7 @@ export class FlightSession {
 
     this.postFX = new PostFXManager(this.sceneManager.renderer, this.sceneManager.scene, this.sceneManager.camera)
     this.postFX.setSize(window.innerWidth, window.innerHeight)
+    setLODCamera(this.sceneManager.camera)
 
     this.flareEffect = new FlareEffect(this.sceneManager.scene)
     this.chaffEffect = new ChaffEffect(this.sceneManager.scene)
@@ -338,8 +340,9 @@ export class FlightSession {
     this.flareEffect.update([...this.player.cmds.getActiveFlares(), ...this.entityManager.getAllAIFlares()])
     this.chaffEffect.update([...this.player.cmds.getActiveChaffClouds(), ...this.entityManager.getAllAIChaff()])
 
-    // Keep sky centred on camera before rendering
+    // Keep sky centred on camera and shadow frustum centred on player
     this.sceneManager.updateSky(this.sceneManager.camera)
+    this.sceneManager.updateSunFollow(this.sceneManager.camera.position)
 
     // G-effect post processing (use smoothed value so vignette ramps gradually)
     this.postFX.setGLoad(this.glocEnabled ? this.gSmoothed : 1.0)

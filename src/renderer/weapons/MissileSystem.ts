@@ -32,7 +32,7 @@ interface CountermeasureProvider {
 // Build a detailed missile Group: body + nose cone + 4 tail fins + 4 canards
 // The long axis runs along +Z so mesh.lookAt() aligns it with velocity.
 // ---------------------------------------------------------------------------
-function buildMissileMesh(bodyMat: THREE.Material, finMat: THREE.Material): THREE.Group {
+export function buildMissileMesh(bodyMat: THREE.Material, finMat: THREE.Material): THREE.Group {
   const group = new THREE.Group()
 
   // Body cylinder (tapered slightly at tail)
@@ -78,8 +78,8 @@ export class MissileSystem {
   private onTargetHit: ((target: Aircraft, zone: DamageZone, severity: number) => void) | null = null
   private onDecoySuccess: ((type: 'FLARE' | 'CHAFF') => void) | null = null
 
-  private bodyMat = new THREE.MeshPhongMaterial({ color: 0xf5f5f5, emissive: 0x303030, shininess: 90 })
-  private finMat  = new THREE.MeshPhongMaterial({ color: 0xa8a8a8, emissive: 0x1a1a1a, side: THREE.DoubleSide })
+  private bodyMat = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, metalness: 0.55, roughness: 0.45, emissive: new THREE.Color(0.04, 0.04, 0.04) })
+  private finMat  = new THREE.MeshStandardMaterial({ color: 0xa8a8a8, metalness: 0.45, roughness: 0.55, side: THREE.DoubleSide })
 
   constructor(scene: THREE.Scene) {
     this.scene = scene
