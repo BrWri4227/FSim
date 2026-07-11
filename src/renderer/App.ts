@@ -1,3 +1,4 @@
+import { MissionSelectScreen } from './ui/MissionSelectScreen'
 import { LoadoutScreen } from './ui/LoadoutScreen'
 import { FlightSession, type LobbyRestoreBundle } from './FlightSession'
 import { DebriefScreen } from './ui/DebriefScreen'
@@ -5,21 +6,19 @@ import type { MultiplayerConfig } from './network/MultiplayerTypes'
 import type { MultiplayerClient } from './network/MultiplayerClient'
 import type { AircraftSpec } from './types/aircraft'
 import type { LoadedStore } from './types/weapons'
+import type { FlightResult, ScenarioDescriptor } from './types/mission'
+import { DEFAULT_SCENARIO } from './mission/scenarios'
 
-export type AppState = 'LOADOUT' | 'FLIGHT' | 'DEBRIEF'
-
-export interface FlightResult {
-  kills: number
-  deaths: number
-  flightTimeSec: number
-  aircraftName: string
-}
+export type { FlightResult } from './types/mission'
+export type AppState = 'MISSION_SELECT' | 'LOADOUT' | 'FLIGHT' | 'DEBRIEF'
 
 export class App {
-  private state: AppState = 'LOADOUT'
+  private state: AppState = 'MISSION_SELECT'
+  private missionSelectScreen: MissionSelectScreen | null = null
   private loadoutScreen: LoadoutScreen | null = null
   private flightSession: FlightSession | null = null
   private debriefScreen: DebriefScreen | null = null
+  private selectedScenario: ScenarioDescriptor = DEFAULT_SCENARIO
   /** LAN bundle preserved when leaving flight so debrief → loadout keeps the lobby session. */
   private lobbyRestore: LobbyRestoreBundle | null = null
   private uiOverlay: HTMLElement
@@ -29,11 +28,29 @@ export class App {
   }
 
   start(): void {
-    this.enterLoadout()
+    this.enterMissionSelect()
+  }
+
+  private enterMissionSelect(): void {
+    this.state = 'MISSION_SELECT'
+    this.loadoutScreen?.dispose()
+    this.loadoutScreen = null
+    this.flightSession?.dispose()
+    this.flightSession = null
+    this.debriefScreen?.dispose()
+    this.debriefScreen = null
+    this.lobbyRestore = null
+
+    this.missionSelectScreen = new MissionSelectScreen(this.uiOverlay, scenario => {
+      this.selectedScenario = scenario
+      this.enterLoadout()
+    })
   }
 
   private enterLoadout(): void {
     this.state = 'LOADOUT'
+    this.missionSelectScreen?.dispose()
+    this.missionSelectScreen = null
     this.flightSession?.dispose()
     this.flightSession = null
     this.debriefScreen?.dispose()
@@ -47,7 +64,11 @@ export class App {
       (spec, stores, multiplayer, client, glocEnabled, autoRudder) => {
         this.enterFlight(spec, stores, multiplayer, client, glocEnabled, autoRudder)
       },
-      restore ?? undefined
+      {
+        scenario: this.selectedScenario,
+        onBack: () => this.enterMissionSelect(),
+        lobbyRestore: restore ?? undefined,
+      }
     )
   }
 
@@ -63,9 +84,18 @@ export class App {
     this.loadoutScreen?.dispose()
     this.loadoutScreen = null
 
-    this.flightSession = new FlightSession(spec, stores, multiplayer, multiplayerClient, (result) => {
-      this.enterDebrief(result)
-    }, glocEnabled, autoRudder)
+    this.flightSession = new FlightSession(
+      spec,
+      stores,
+      this.selectedScenario,
+      multiplayer,
+      multiplayerClient,
+      result => {
+        this.enterDebrief(result)
+      },
+      glocEnabled,
+      autoRudder
+    )
     this.flightSession.start()
   }
 

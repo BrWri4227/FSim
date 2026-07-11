@@ -4,12 +4,13 @@ import type { LoadedStore } from '../types/weapons'
 import { Aircraft } from '../entities/Aircraft'
 import { Radar } from '../avionics/Radar'
 import { CMDS } from '../avionics/CMDS'
+import { GunSystem } from '../weapons/GunSystem'
 import { MissileSystem } from '../weapons/MissileSystem'
 import { getMissileSpec, getStoreDragPenalty } from '../data/weapons/catalog'
 import { makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
 import type * as THREE from 'three'
 
-export type AIBehavior = 'FOLLOW_BEHIND' | 'FOLLOW_IN_FRONT' | 'FLY_STRAIGHT' | 'TURN_CONSTANTLY' | 'BVR_ENGAGE' | 'AVOIDANCE'
+export type AIBehavior = 'FOLLOW_BEHIND' | 'FOLLOW_IN_FRONT' | 'FLY_STRAIGHT' | 'TURN_CONSTANTLY' | 'BVR_ENGAGE' | 'WINGMAN_COVER' | 'AVOIDANCE'
 export type AISide = 'HOSTILE' | 'WINGMAN'
 
 export class AIAircraft extends Aircraft {
@@ -17,14 +18,20 @@ export class AIAircraft extends Aircraft {
   side: AISide = 'HOSTILE'
   initPositionNED: Vec3
   declare radar: Radar
+  readonly gun: GunSystem
   readonly cmds: CMDS
   readonly missiles: MissileSystem
   /** Cooldown (sec) until next BVR shot is allowed. Decremented in update. */
   bvrFireCooldownSec = 0
+  /** Cooldown (sec) until next WVR IR shot is allowed. */
+  wvrFireCooldownSec = 0
+  /** Skips physics/AI when the player is beyond sim cull range. */
+  simCulled = false
 
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, behavior: AIBehavior, spawnPos: Vec3, spawnVel: Vec3) {
     super(spec, stores, scene)
     this.radar = new Radar(spec)
+    this.gun = new GunSystem(spec.gunSpec, scene)
     this.cmds = new CMDS(spec.cmdsFlareCount, spec.cmdsChaffCount)
     this.missiles = new MissileSystem(scene)
     this.behavior = behavior
@@ -52,6 +59,24 @@ export class AIAircraft extends Aircraft {
       }
     }
 
+    if (!stores.some(s => s.category === 'IR_MISSILE')) {
+      const irId = spec.nation === 'USA' ? 'aim9x' : 'r73'
+      const irSpec = getMissileSpec(irId)
+      if (irSpec) {
+        const hps = spec.hardpoints.filter(h => h.compatibleTypes.includes('IR_MISSILE')).slice(0, 2)
+        for (const hp of hps) {
+          this.state.loadedStores.push({
+            hardpointId: hp.id,
+            weaponId: irId,
+            category: 'IR_MISSILE',
+            massKg: irSpec.massKg,
+            dragPenalty: getStoreDragPenalty(irSpec),
+            remainingRounds: 1,
+          })
+        }
+      }
+    }
+
     // Derive initial heading from spawn velocity so the mesh faces the right direction.
     const yawRad = Math.atan2(spawnVel[1], spawnVel[0])   // NED: atan2(East, North)
     // Spawn with a small nose-up pitch so the aircraft has positive AoA from frame 1.
@@ -63,11 +88,15 @@ export class AIAircraft extends Aircraft {
     this.state.attitudeQuat = [...q]
   }
 
-  update(controls: ControlInputs, dt: number): void {
+  update(controls: ControlInputs, dt: number, gunTargets: Aircraft[] = []): void {
     if (this.state.ejected) return
     this.integrate(controls, dt)
     this.cmds.update(dt)
     if (this.bvrFireCooldownSec > 0) this.bvrFireCooldownSec = Math.max(0, this.bvrFireCooldownSec - dt)
+    if (this.wvrFireCooldownSec > 0) this.wvrFireCooldownSec = Math.max(0, this.wvrFireCooldownSec - dt)
+
+    if (controls.fireGun) this.gun.fire(this.state, this.spec)
+    this.gun.update(dt, gunTargets)
 
     // Honour CMDS dispense flags from the brain. Spawn from the aircraft body offset
     // (rear of the fuselage); velocity matches aircraft so flares "fall away".
@@ -90,6 +119,15 @@ export class AIAircraft extends Aircraft {
     let n = 0
     for (const s of this.state.loadedStores) {
       if (s.category === 'ARH_MISSILE' && s.remainingRounds > 0) n++
+    }
+    return n
+  }
+
+  /** Number of unfired IR missiles still on rails. Read by WVR brain. */
+  getRemainingIR(): number {
+    let n = 0
+    for (const s of this.state.loadedStores) {
+      if (s.category === 'IR_MISSILE' && s.remainingRounds > 0) n++
     }
     return n
   }
@@ -117,12 +155,41 @@ export class AIAircraft extends Aircraft {
     return true
   }
 
-  /** Step AI missiles forward each tick. Caller passes the player + ground targets list. */
-  updateMissiles(dt: number, player: Aircraft, groundTargets: import('../entities/GroundTarget').GroundTarget[] = []): void {
-    this.missiles.update(dt, this.state, [player], player, undefined, undefined, groundTargets)
+  /** Launch one IR missile at the supplied target. */
+  fireIRMissile(target: Aircraft): boolean {
+    const store = this.state.loadedStores.find(s => s.category === 'IR_MISSILE' && s.remainingRounds > 0)
+    if (!store) return false
+    const hpDef = this.spec.hardpoints.find(h => h.id === store.hardpointId)
+    const hpBody = hpDef?.posBodyM as [number, number, number] | undefined
+    this.missiles.launch(
+      store.weaponId,
+      this.state,
+      target.entityId,
+      this.entityId,
+      [...target.state.positionNED] as [number, number, number],
+      [...target.state.velocityNED] as [number, number, number],
+      hpBody,
+    )
+    store.remainingRounds = 0
+    return true
+  }
+
+  /** Step AI missiles forward each tick. Caller passes full target list + radar datalink. */
+  updateMissiles(
+    dt: number,
+    targets: Aircraft[],
+    playerAircraft?: Aircraft,
+    groundTargets: import('../entities/GroundTarget').GroundTarget[] = [],
+  ): void {
+    const trackId = this.radar.getSttTargetId() ?? this.radar.state.selectedTrackId
+    const track = trackId ? this.radar.getTrack(trackId) : undefined
+    const radarTgtPos = track?.positionNED as [number, number, number] | undefined
+    const radarTgtVel = track?.velocityNED as [number, number, number] | undefined
+    this.missiles.update(dt, this.state, targets, playerAircraft, radarTgtPos, radarTgtVel, groundTargets)
   }
 
   override dispose(): void {
+    this.gun.dispose()
     this.missiles.dispose()
     super.dispose()
   }

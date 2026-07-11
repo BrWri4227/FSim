@@ -55,6 +55,7 @@ export class CockpitCamera {
     const headPitch = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), this.pitch)
     camera.quaternion.copy(aircraftQuat).multiply(headYaw).multiply(headPitch)
 
+    camera.near = 0.05
     camera.fov = spec.cockpitFovDeg
     camera.updateProjectionMatrix()
   }

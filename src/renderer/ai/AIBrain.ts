@@ -6,6 +6,7 @@ import { followInFront }  from './behaviors/FollowInFront'
 import { flyStraight }    from './behaviors/FlyStraight'
 import { turnConstantly } from './behaviors/TurnConstantly'
 import { bvrEngage }      from './behaviors/BVREngage'
+import { coverLeader }    from './behaviors/CoverLeader'
 import { evadeMissile, type MissileThreat } from './behaviors/EvadeMissile'
 import { avoidance }      from './behaviors/Avoidance'
 
@@ -53,6 +54,7 @@ export function runAIBrain(self: AIAircraft, player: Aircraft, dt: number, inbou
     case 'FLY_STRAIGHT':   return flyStraight(self, dt)
     case 'TURN_CONSTANTLY': return turnConstantly(self, dt)
     case 'BVR_ENGAGE':     return bvrEngage(self, player, dt)
+    case 'WINGMAN_COVER':  return coverLeader(self, player, dt)
     case 'AVOIDANCE':      return avoidance(self, dt)
   }
 }

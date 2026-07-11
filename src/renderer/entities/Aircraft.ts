@@ -4,8 +4,9 @@ import type { LoadedStore, MissileState, GunRoundState } from '../types/weapons'
 import type { DamageState } from '../types/damage'
 import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
-import { stepRK4, computeDerivedState, computeActualThrustN } from '../physics/FlightModel'
-import { computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
+import { stepRK4, computeDerivedState, computeActualThrustN, updateEngineDynamics, type EngineDynamicsState } from '../physics/FlightModel'
+import { computeMassProperties, computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
+import { getTerrainHeightAtNED } from '../scene/Terrain'
 import { createPlaceholderAircraftMesh, buildDistantAircraftMesh, buildStoreMesh, createNozzlePoints, getThrusterScale, applyDamageTint, setGearAnimT, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp, MESH_BIAS_QUAT, RAD2DEG } from '../utils/MathUtils'
 import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
@@ -29,19 +30,23 @@ export class Aircraft {
   radar: Radar | null = null
 
   mesh: THREE.Group
-  private lodMesh: THREE.Group
+  protected lodMesh: THREE.Group
   private usingLOD = false
   protected scene: THREE.Scene
+  /** When true the external mesh is hidden (first-person cockpit view). */
+  private hideForCockpitView = false
   private thrusterEffects: ThrusterEffect[] = []
   private contrailEffect: ContrailEffect
   private storeMeshes = new Map<string, THREE.Group>()  // hardpointId → store mesh
   private gearAnimT = 0   // 0 = retracted, 1 = deployed
   private shapedAxes = { pitch: 0, roll: 0, yaw: 0 }
+  private engine: EngineDynamicsState = { thrustN: 5000, abLightOffSec: 0 }
 
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, entityId?: string) {
     this.entityId = entityId ?? `aircraft_${++_entityCounter}`
     this.spec = spec
     this.scene = scene
+    this.engine.thrustN = spec.engine.idleThrustN
 
     // Initial state
     const q = quatFromEulerZYX(0, 0, 0) // level, north
@@ -120,10 +125,16 @@ export class Aircraft {
     const limitedControls = applyFCSLimits(controls, this.state, this.spec)
     const fcsControls = this.shapeFlightControls(limitedControls, dt)
     const groundClearM = getGroundClearance(this.spec.id, this.state.gearDown)
+    const terrainElevM = getTerrainHeightAtNED(this.state.positionNED)
+    const minAltM = terrainElevM + groundClearM
+    const massProps = computeMassProperties(this.spec, this.state.fuelKg, this.state.loadedStores)
+    const commandedThrust = this.state.fuelKg > 0
+      ? updateEngineDynamics(this.spec, fcsControls.throttle, this.engine, dt)
+      : 0
     const newSV = stepRK4(
       this.state.sv, this.spec, fcsControls, massKg, penalties,
-      storeDrag + gearDrag + speedBrakeDrag, dt, flapCL, flapCD, groundClearM,
-      this.state.fuelKg,
+      storeDrag + gearDrag + speedBrakeDrag + penalties.asymmetricDragCD, dt, flapCL, flapCD, minAltM,
+      this.state.fuelKg, massProps, commandedThrust,
     )
 
     // Update state from SV
@@ -164,9 +175,10 @@ export class Aircraft {
       this.state.headingRateDegPerSec = 0
     }
 
-    // Ground state — detect transition for touchdown event
+    // Ground state — AGL relative to terrain heightfield
     const wasOnGround = this.state.onGround
-    this.state.onGround = this.state.altitudeM <= groundClearM + 0.1
+    const aglM = this.state.altitudeM - getTerrainHeightAtNED(this.state.positionNED)
+    this.state.onGround = aglM <= groundClearM + 0.1
     this.state.brakeHeld = controls.brakeHeld
 
     if (!wasOnGround && this.state.onGround) {
@@ -234,9 +246,11 @@ export class Aircraft {
     const sfc  = isAB ? this.spec.engine.sfcWet : this.spec.engine.sfcDry
     const actualThrustN = computeActualThrustN(
       this.spec, controls.throttle, this.state.altitudeM, penalties.thrustMultiplier,
+      this.state.fuelKg, commandedThrust,
     )
     const burn = sfc * actualThrustN * dt * penalties.fuelLeakMultiplier
     this.state.fuelKg = Math.max(0, this.state.fuelKg - burn)
+    if (this.state.fuelKg <= 0) this.damage.engineFailed = true
   }
 
   private shapeFlightControls(controls: ControlInputs, dt: number): ControlInputs {
@@ -282,10 +296,47 @@ export class Aircraft {
     this.shapedAxes.yaw = 0
   }
 
+  /**
+   * Smoothed flight-control command axes (−1..1) after rate-limiting/shaping.
+   * Consumed by the detailed cockpit to animate the stick and rudder pedals so
+   * the visible controls track what the pilot (or FCS) is actually commanding.
+   */
+  get controlAxes(): { pitch: number; roll: number; yaw: number } {
+    return { pitch: this.shapedAxes.pitch, roll: this.shapedAxes.roll, yaw: this.shapedAxes.yaw }
+  }
+
+  setCockpitViewActive(active: boolean): void {
+    this.hideForCockpitView = active
+  }
+
+  setCockpitViewHidden(hidden: boolean): void {
+    this.hideForCockpitView = hidden
+  }
+
+  setMeshesVisible(visible: boolean): void {
+    this.setExternalMeshesVisible(visible)
+  }
+
+  /** Hide/show the external placeholder mesh (children follow parent visibility in Three.js). */
+  protected setExternalMeshesVisible(visible: boolean): void {
+    this.mesh.visible = visible
+    this.lodMesh.visible = visible
+  }
+
+  protected setExternalMeshLayer(layer: number): void {
+    this.mesh.traverse(obj => { obj.layers.set(layer) })
+    this.lodMesh.traverse(obj => { obj.layers.set(layer) })
+  }
+
   updateMesh(dt = 0.016): void {
     if (this.state.ejected) {
       this.mesh.visible = false
       this.lodMesh.visible = false
+      return
+    }
+
+    if (this.hideForCockpitView) {
+      this.setExternalMeshesVisible(false)
       return
     }
 
@@ -298,11 +349,11 @@ export class Aircraft {
     if (_lodCamera) {
       useLOD = pos.distanceTo(_lodCamera.position) > LOD_DIST
     }
-    if (useLOD !== this.usingLOD) {
-      this.mesh.visible    = !useLOD
-      this.lodMesh.visible =  useLOD
-      this.usingLOD = useLOD
-    }
+    // Always sync visibility — early-return from cockpit view leaves both meshes hidden
+    // even when useLOD === usingLOD, so we cannot gate this on a LOD transition.
+    this.mesh.visible    = !useLOD
+    this.lodMesh.visible =  useLOD
+    this.usingLOD = useLOD
 
     // PlaceholderMesh fuselage runs along local +X; we need it to face Three.js -Z (NED North).
     // nedQuatToThree(identity) = identity, so add a +90° Y-bias to rotate +X → -Z.

@@ -1,8 +1,9 @@
 import type { AircraftState } from '../types/aircraft'
+import { getAGLM } from '../scene/Terrain'
 import { mToFt } from '../utils/Units'
 
 export class GPWS {
-  private lastAltFt = 0
+  private lastAglFt = 0
   private warningCooldown = 0
   private readonly WARN_INTERVAL = 3.0
 
@@ -11,17 +12,17 @@ export class GPWS {
       this.warningCooldown -= dt
     }
 
-    const altFt = mToFt(-state.positionNED[2])
-    const climbRateFtMin = (altFt - this.lastAltFt) / dt * 60
-    this.lastAltFt = altFt
+    const aglFt = mToFt(getAGLM(state.positionNED))
+    const climbRateFtMin = (aglFt - this.lastAglFt) / dt * 60
+    this.lastAglFt = aglFt
 
     const descending = climbRateFtMin < -200
 
     if (this.warningCooldown <= 0) {
-      if (altFt < 200 && descending) {
+      if (aglFt < 200 && descending) {
         audioCallback('PULL_UP_URGENT')
         this.warningCooldown = 1.5
-      } else if (altFt < 500 && descending) {
+      } else if (aglFt < 500 && descending) {
         audioCallback('PULL_UP')
         this.warningCooldown = this.WARN_INTERVAL
       }

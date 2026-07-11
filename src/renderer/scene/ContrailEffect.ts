@@ -16,17 +16,15 @@ interface PoolSlot {
 
 /**
  * Pooled contrail effect.  All geometry and materials are pre-allocated at
- * construction — no per-spawn allocations during flight.
+ * construction — segments stay parented to the scene for their lifetime.
  */
 export class ContrailEffect {
   private readonly pool: PoolSlot[] = []
-  private readonly scene: THREE.Scene
   private readonly freeStack: number[] = []   // indices of inactive pool slots
   private readonly liveStack: number[] = []   // indices of active  pool slots
   private timeSinceLast = 0
 
   constructor(scene: THREE.Scene, maxSegments = 80) {
-    this.scene = scene
     for (let i = 0; i < maxSegments; i++) {
       const mat = new THREE.MeshBasicMaterial({
         color: 0xddeeff,
@@ -37,6 +35,7 @@ export class ContrailEffect {
       })
       const mesh = new THREE.Mesh(_contrailGeo, mat)
       mesh.visible = false
+      scene.add(mesh)
       this.pool.push({ mesh, mat, age: 0, live: false })
       this.freeStack.push(i)
     }
@@ -57,7 +56,6 @@ export class ContrailEffect {
         seg.mesh.position.copy(worldPos)
         seg.mesh.scale.setScalar(0.8)
         seg.mesh.visible = true
-        this.scene.add(seg.mesh)
         this.liveStack.push(idx)
       }
     }
@@ -71,7 +69,6 @@ export class ContrailEffect {
       if (seg.age >= SEGMENT_LIFETIME) {
         seg.live = false
         seg.mesh.visible = false
-        this.scene.remove(seg.mesh)
         this.liveStack.splice(i, 1)
         this.freeStack.push(idx)
       } else {
@@ -89,7 +86,7 @@ export class ContrailEffect {
 
   dispose(): void {
     for (const seg of this.pool) {
-      if (seg.live) this.scene.remove(seg.mesh)
+      seg.mesh.removeFromParent()
       seg.mat.dispose()
     }
     this.pool.length = 0

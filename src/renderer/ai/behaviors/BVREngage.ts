@@ -2,6 +2,7 @@ import type { ControlInputs } from '../../types/aircraft'
 import type { AIAircraft } from '../AIAircraft'
 import type { Aircraft } from '../../entities/Aircraft'
 import { v3sub, v3len, quatRotateVec, quatConjugate, RAD2DEG, clamp } from '../../utils/MathUtils'
+import { wvrEngage, WVR_MERGE_RANGE_M } from './WVREngage'
 
 const MAX_RANGE_FIRE_M = 50000        // Rmax — outer launch limit
 const NO_ESCAPE_RANGE_M = 22000       // Rne — fire if inside this range no matter the aspect
@@ -16,9 +17,10 @@ const MIN_FIRE_INTERVAL_S = 5         // throttle missile launches
  *   3. CRANK      — turn ~35° off the bandit to drag the missile, watch for return
  *   4. DEFEND     — defensive override is handled by AIBrain (notch + CMDS)
  */
-export function bvrEngage(self: AIAircraft, target: Aircraft, _dt: number): ControlInputs {
+export function bvrEngage(self: AIAircraft, target: Aircraft, dt: number): ControlInputs {
   const toTarget = v3sub(target.state.positionNED, self.state.positionNED)
   const range = v3len(toTarget)
+  if (range < WVR_MERGE_RANGE_M) return wvrEngage(self, target, dt)
   const bodyDir = quatRotateVec(quatConjugate(self.state.attitudeQuat), toTarget)
   const azDeg = Math.atan2(bodyDir[1], bodyDir[0]) * RAD2DEG
   const elDeg = Math.atan2(-bodyDir[2], Math.max(0.1, bodyDir[0])) * RAD2DEG

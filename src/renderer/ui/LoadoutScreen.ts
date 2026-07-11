@@ -8,6 +8,7 @@ import { MISSILE_SPECS, getStoreDragPenalty } from '../data/weapons/catalog'
 import { msToKts } from '../utils/Units'
 
 import type { LobbyRestoreBundle } from '../FlightSession'
+import type { ScenarioDescriptor } from '../types/mission'
 
 const WEAPON_OPTIONS: Record<string, { label: string; count: number }> = {
   'aim9x':   { label: 'AIM-9X Sidewinder', count: 1 },
@@ -46,6 +47,8 @@ export class LoadoutScreen {
   private lobbyStatusTone: 'ok' | 'warn' | 'error' = 'warn'
   private launchError = ''
   private preserveLobbyClientOnDispose = false
+  private scenario: ScenarioDescriptor
+  private onBack: (() => void) | null
 
   constructor(
     _container: HTMLElement,
@@ -57,9 +60,27 @@ export class LoadoutScreen {
       glocEnabled: boolean,
       autoRudder: boolean
     ) => void,
-    lobbyRestore?: LobbyRestoreBundle | null
+    options?: {
+      scenario?: ScenarioDescriptor
+      onBack?: () => void
+      lobbyRestore?: LobbyRestoreBundle | null
+    }
   ) {
     this.onLaunch = onLaunch
+    this.scenario = options?.scenario ?? {
+      id: 'free_flight',
+      name: 'Free Flight',
+      description: '',
+      briefing: '',
+      playerSpawn: {},
+      enemies: [],
+      wingmen: [],
+      groundTargets: [],
+      objectives: [],
+      winConditions: [],
+      loseConditions: [],
+    }
+    this.onBack = options?.onBack ?? null
     this.el = document.createElement('div')
     Object.assign(this.el.style, {
       position: 'fixed', inset: '0',
@@ -92,6 +113,7 @@ export class LoadoutScreen {
         this.render()
       })
     }
+    const lobbyRestore = options?.lobbyRestore
     if (lobbyRestore?.client?.isConnected()) {
       this.lobbyClient = lobbyRestore.client
       this.lobbyConnected = true
@@ -133,6 +155,23 @@ export class LoadoutScreen {
     title.textContent = 'FSIM — SELECT AIRCRAFT'
     title.style.cssText = 'color:#00ff88;letter-spacing:clamp(2px,0.5vw,4px);font-size:clamp(16px,2.5vw,22px);margin:0;text-align:center'
     this.contentEl.appendChild(title)
+
+    const missionBanner = document.createElement('div')
+    missionBanner.style.cssText =
+      'border:1px solid #226644;padding:10px 12px;width:100%;box-sizing:border-box;text-align:center'
+    missionBanner.innerHTML =
+      `<div style="font-size:11px;color:#aaffcc;letter-spacing:1px">MISSION</div>` +
+      `<div style="font-size:14px;color:#00ff88;margin-top:4px">${this.scenario.name}</div>`
+    this.contentEl.appendChild(missionBanner)
+
+    if (this.onBack) {
+      const backBtn = document.createElement('button')
+      backBtn.textContent = '← CHANGE MISSION'
+      backBtn.style.cssText =
+        'padding:8px 16px;font:11px monospace;background:#0a150a;color:#88bb88;border:1px solid #226644;cursor:pointer;letter-spacing:1px'
+      backBtn.onclick = () => this.onBack!()
+      this.contentEl.appendChild(backBtn)
+    }
 
     // Aircraft cards
     const grid = document.createElement('div')
@@ -402,6 +441,7 @@ export class LoadoutScreen {
         bindings: [
           ['Tab',         'Toggle cockpit / external camera'],
           ['F12',         'Toggle debug overlay'],
+          ['Esc',         'Abort mission (RTB)'],
           ['` (backtick)','Eject'],
         ],
       },

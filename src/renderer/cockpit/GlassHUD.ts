@@ -29,11 +29,13 @@ export class GlassHUD {
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide
     })
-    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.28), mat)
+    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.2), mat)
     this.mesh.name = 'glass_hud'
-    // Positioned at HUD combiner: ~0.68m forward of pilot eye, tilted
-    this.mesh.position.set(0.68, 0, -0.05)
-    this.mesh.rotation.x = THREE.MathUtils.degToRad(30)
+    // HUD combiner sits on the glareshield ahead of the eye (−Z forward), just
+    // below the sightline and tilted back toward the pilot. PlaneGeometry's +Z
+    // normal already faces the pilot (origin is on the +Z side).
+    this.mesh.position.set(0, -0.14, -0.58)
+    this.mesh.rotation.set(THREE.MathUtils.degToRad(26), 0, 0)
   }
 
   update(state: AircraftState, spec: AircraftSpec, radar: RadarState, rwr: RWRState, _hmsCursorAz: number, _hmsCursorEl: number): void {

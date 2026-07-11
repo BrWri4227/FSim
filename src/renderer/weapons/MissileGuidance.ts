@@ -180,6 +180,23 @@ export function guideMissile(missile: MissileState, targetPos: Vec3, targetVel: 
   missile.prevLOSUnit = newLOS
   missile.prevTargetVel = [...tgtVel]
 
+  // ARH loft / midcourse profile: climb during midcourse, dive in terminal ACTIVE
+  if (missile.spec.category === 'ARH_MISSILE') {
+    const altM = Math.max(0, -missile.positionNED[2])
+    const range = v3len(v3sub(tgtPos, missile.positionNED))
+    const loftAltM = Math.min(14000, 2500 + range * 0.12)
+
+    if (missile.guidanceMode !== 'ACTIVE' && altM < loftAltM) {
+      const loftStrength = Math.min(1, (loftAltM - altM) / 2000)
+      accel[2] -= 12 * loftStrength  // NED z negative = climb
+    } else if (missile.guidanceMode === 'ACTIVE') {
+      const tgtAltM = Math.max(0, -tgtPos[2])
+      if (altM > tgtAltM + 800) {
+        accel[2] += 8  // terminal dive bias
+      }
+    }
+  }
+
   // Clamp to structural G limit
   const maxAccel = missile.spec.maxGOverload * G0
   const mag = v3len(accel)

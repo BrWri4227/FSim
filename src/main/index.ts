@@ -7,94 +7,14 @@ import { getPrimaryLanIp as _getPrimaryLanIp } from './lanIp'
 import type { WebSocket as WS, RawData } from 'ws'
 import type { IncomingMessage } from 'http'
 import { pathToFileURL } from 'url'
-
-type DamageZone = 'ENGINE' | 'WING_LEFT' | 'WING_RIGHT' | 'FUSELAGE' | 'TAIL' | 'COCKPIT'
-
-interface NetPlayerProfile {
-  aircraftId: string
-}
-
-interface NetRadarState {
-  mode: 'OFF' | 'RWS' | 'TWS' | 'STT'
-  sttTargetId: string | null
-}
-
-interface NetMissileState {
-  id: string
-  positionNED: [number, number, number]
-  velocityNED: [number, number, number]
-  targetEntityId: string
-  active: boolean
-}
-
-interface NetFlareState {
-  positionNED: [number, number, number]
-  heatSignatureKW: number
-  ageSec: number
-}
-
-interface NetChaffState {
-  positionNED: [number, number, number]
-  velocityNED: [number, number, number]
-  rcsM2: number
-  ageSec: number
-}
-
-interface NetCountermeasureState {
-  flares: NetFlareState[]
-  chaffClouds: NetChaffState[]
-}
-
-interface NetPlayerState {
-  positionNED: [number, number, number]
-  velocityNED: [number, number, number]
-  attitudeQuat: [number, number, number, number]
-  throttle: number
-  ejected: boolean
-  structuralFailure: boolean
-  radar: NetRadarState
-  missiles: NetMissileState[]
-  countermeasures: NetCountermeasureState
-}
-
-interface HitEvent {
-  sourceId: string
-  targetId: string
-  zone: DamageZone
-  severity: number
-  weapon: 'GUN' | 'MISSILE'
-}
-
-type ServerMessage =
-  | {
-      type: 'welcome'
-      playerId: string
-      peers: Array<{ playerId: string; profile: NetPlayerProfile; state: NetPlayerState | null }>
-    }
-  | {
-      type: 'peer-join'
-      playerId: string
-      profile: NetPlayerProfile
-    }
-  | {
-      type: 'peer-leave'
-      playerId: string
-    }
-  | {
-      type: 'peer-profile-update'
-      playerId: string
-      profile: NetPlayerProfile
-    }
-  | {
-      type: 'state'
-      playerId: string
-      profile: NetPlayerProfile
-      state: NetPlayerState | null
-    }
-  | {
-      type: 'hit'
-      hit: HitEvent
-    }
+import type { HitEvent, NetPlayerProfile, NetPlayerState, ServerMessage } from '../shared/network/MultiplayerTypes'
+import {
+  MAX_MESSAGE_BYTES,
+  isPlausibleHit,
+  isValidHitEvent,
+  isValidPlayerState,
+  isValidProfile,
+} from '../shared/network/validation'
 
 interface PeerRecord {
   id: string
@@ -103,67 +23,11 @@ interface PeerRecord {
   state: NetPlayerState | null
 }
 
-const MAX_MESSAGE_BYTES = 64 * 1024  // 64 KB hard cap per frame
-const MAX_INBOUND_DAMAGE_SEVERITY = 1.0
-const VALID_DAMAGE_ZONES = new Set<string>(['ENGINE', 'WING_LEFT', 'WING_RIGHT', 'FUSELAGE', 'TAIL', 'COCKPIT'])
-const VALID_RADAR_MODES = new Set<string>(['OFF', 'RWS', 'TWS', 'STT'])
-
 let lanServer: WebSocketServer | null = null
 let lanServerListening = false
 const peers = new Map<string, PeerRecord>()
 let peerCounter = 0
 let lanServerPort = 0
-
-function isVec3(v: unknown): v is [number, number, number] {
-  return Array.isArray(v) && v.length === 3 && v.every(x => typeof x === 'number' && isFinite(x))
-}
-
-function isVec4(v: unknown): v is [number, number, number, number] {
-  return Array.isArray(v) && v.length === 4 && v.every(x => typeof x === 'number' && isFinite(x))
-}
-
-function isValidProfile(p: unknown): p is NetPlayerProfile {
-  if (typeof p !== 'object' || p === null) return false
-  const o = p as Record<string, unknown>
-  return typeof o['aircraftId'] === 'string' && o['aircraftId'].length > 0 && o['aircraftId'].length <= 64
-}
-
-function isValidHitEvent(h: unknown, senderId: string): h is HitEvent {
-  if (typeof h !== 'object' || h === null) return false
-  const o = h as Record<string, unknown>
-  return (
-    o['sourceId'] === senderId &&
-    typeof o['targetId'] === 'string' && o['targetId'].length > 0 &&
-    VALID_DAMAGE_ZONES.has(String(o['zone'])) &&
-    typeof o['severity'] === 'number' && o['severity'] >= 0 && o['severity'] <= MAX_INBOUND_DAMAGE_SEVERITY &&
-    (o['weapon'] === 'GUN' || o['weapon'] === 'MISSILE')
-  )
-}
-
-function isValidRadarState(r: unknown): r is NetRadarState {
-  if (typeof r !== 'object' || r === null) return false
-  const o = r as Record<string, unknown>
-  return (
-    VALID_RADAR_MODES.has(String(o['mode'])) &&
-    (o['sttTargetId'] === null || typeof o['sttTargetId'] === 'string')
-  )
-}
-
-function isValidPlayerState(s: unknown): s is NetPlayerState {
-  if (typeof s !== 'object' || s === null) return false
-  const o = s as Record<string, unknown>
-  return (
-    isVec3(o['positionNED']) &&
-    isVec3(o['velocityNED']) &&
-    isVec4(o['attitudeQuat']) &&
-    typeof o['throttle'] === 'number' && o['throttle'] >= 0 && o['throttle'] <= 1 &&
-    typeof o['ejected'] === 'boolean' &&
-    typeof o['structuralFailure'] === 'boolean' &&
-    isValidRadarState(o['radar']) &&
-    Array.isArray(o['missiles']) &&
-    typeof o['countermeasures'] === 'object' && o['countermeasures'] !== null
-  )
-}
 
 function emitLobbyEvent(message: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -289,7 +153,12 @@ async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; p
 
       if (msg['type'] === 'hit') {
         if (!isValidHitEvent(msg['hit'], peerId)) return
-        broadcast({ type: 'hit', hit: msg['hit'] }, peerId)
+        const hit = msg['hit'] as HitEvent
+        const sourcePeer = peers.get(hit.sourceId)
+        const targetPeer = peers.get(hit.targetId)
+        if (!sourcePeer?.state || !targetPeer?.state) return
+        if (!isPlausibleHit(hit, sourcePeer.state, targetPeer.state)) return
+        broadcast({ type: 'hit', hit }, peerId)
       }
     })
 
@@ -339,7 +208,7 @@ function createWindow(): void {
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true,
     }
   })
 

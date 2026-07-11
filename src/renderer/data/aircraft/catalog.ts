@@ -1,6 +1,7 @@
 import { F16C } from './f16c'
 import { F15C } from './f15c'
 import { FA18C } from './fa18c'
+import { FA18E } from './fa18e'
 import { F22 } from './f22'
 import { F35A } from './f35a'
 import { MIG29 } from './mig29'
@@ -12,7 +13,7 @@ import type { AircraftSpec } from '../../types/aircraft'
 export { sustainedTurnRateRefDegS } from './turnPerformance'
 
 export const AIRCRAFT_ROSTER: AircraftSpec[] = [
-  F22, F35A, F16C, F15C, FA18C, MIG29, SU57, SU27, SU35,
+  F22, F35A, F16C, F15C, FA18C, FA18E, MIG29, SU57, SU27, SU35,
 ]
 
 export function getAircraftById(id: string): AircraftSpec | null {

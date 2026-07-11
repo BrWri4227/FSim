@@ -21,7 +21,9 @@ export const AIM120B: MissileSpec = {
     peakPowerW: 150,
     antennaGainDB: 28,
     frequencyGHz: 10.0,
-    terminalActivationRangeM: 10000
+    terminalActivationRangeM: 10000,
+    fovDeg: 45,
+    snrThreshold: 8,
   },
   dataLinkUpdateHz: 2,
   eccmResistance: 0.55,

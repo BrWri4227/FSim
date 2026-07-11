@@ -5,6 +5,8 @@ import type { PlayerAircraft } from '../entities/PlayerAircraft'
 
 export type CameraMode = 'COCKPIT' | 'EXTERNAL'
 
+import { COCKPIT_VIEW_LAYER, PLAYER_EXTERNAL_LAYER } from './CameraLayers'
+
 export class CameraManager {
   private mode: CameraMode = 'COCKPIT'
   private cockpit: CockpitCamera
@@ -15,19 +17,31 @@ export class CameraManager {
     this.camera = camera
     this.cockpit = new CockpitCamera()
     this.external = new ExternalCamera()
+    this.applyLayerMask()
     window.addEventListener('keydown', this.onKey)
+  }
+
+  private applyLayerMask(): void {
+    if (this.mode === 'COCKPIT') {
+      this.camera.layers.set(COCKPIT_VIEW_LAYER)
+    } else {
+      this.camera.layers.enable(COCKPIT_VIEW_LAYER)
+      this.camera.layers.enable(PLAYER_EXTERNAL_LAYER)
+    }
   }
 
   private onKey = (e: KeyboardEvent) => {
     if (e.code === 'Tab') {
       e.preventDefault()
       this.mode = this.mode === 'COCKPIT' ? 'EXTERNAL' : 'COCKPIT'
+      this.applyLayerMask()
       // Exit pointer lock when switching to external
       if (this.mode === 'EXTERNAL') document.exitPointerLock()
     }
   }
 
   update(player: PlayerAircraft): void {
+    player.setCockpitViewActive(this.mode === 'COCKPIT')
     if (this.mode === 'COCKPIT') {
       this.cockpit.update(this.camera, player)
     } else {

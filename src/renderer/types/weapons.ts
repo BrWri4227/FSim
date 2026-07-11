@@ -24,6 +24,10 @@ export interface ActiveRadarSeekerSpec {
   antennaGainDB: number
   frequencyGHz: number
   terminalActivationRangeM: number
+  /** Seeker field-of-view half-angle (deg). Defaults to 45. */
+  fovDeg?: number
+  /** Minimum linear SNR for a valid lock. Defaults to 8. */
+  snrThreshold?: number
 }
 
 export interface MissileSpec {
@@ -75,6 +79,8 @@ export interface MissileState {
   lastKnownTargetVel: Vec3
   active: boolean
   shooterEntityId: string
+  /** Previous-frame miss distance for closest-approach proximity fuse. */
+  prevMissDistanceM: number | null
 }
 
 export interface GunRoundState {

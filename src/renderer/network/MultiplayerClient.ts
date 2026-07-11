@@ -2,6 +2,8 @@ import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage
 
 const CONNECT_TIMEOUT_MS = 8000
 const MAX_INBOUND_HITS = 256
+/** Outbound state snapshots — 20 Hz instead of sim rate (60 Hz). */
+const STATE_SEND_INTERVAL_SEC = 1 / 20
 
 interface RemoteSnapshot {
   playerId: string
@@ -17,6 +19,9 @@ export class MultiplayerClient {
   private localPlayerId: string | null = null
   private profile: NetPlayerProfile
   private rosterListeners: Array<() => void> = []
+  private stateSendAccumSec = 0
+  private pendingState: NetPlayerState | null = null
+  private lastSentRadarMode: string | null = null
 
   constructor(profile: NetPlayerProfile) {
     this.profile = profile
@@ -161,8 +166,23 @@ export class MultiplayerClient {
     this.send({ type: 'profile-update', profile })
   }
 
-  sendState(state: NetPlayerState): void {
-    if (!this.isConnected()) return
+  /** Queue state for throttled send — call flushStateSend each sim tick. */
+  queueState(state: NetPlayerState): void {
+    this.pendingState = state
+  }
+
+  flushStateSend(dtSec: number): void {
+    if (!this.isConnected() || !this.pendingState) return
+
+    const state = this.pendingState
+    const critical = state.ejected || state.structuralFailure
+    const radarChanged = state.radar.mode !== this.lastSentRadarMode
+
+    this.stateSendAccumSec += dtSec
+    if (!critical && !radarChanged && this.stateSendAccumSec < STATE_SEND_INTERVAL_SEC) return
+
+    this.stateSendAccumSec = 0
+    this.lastSentRadarMode = state.radar.mode
     this.send({ type: 'state', state })
   }
 
@@ -190,6 +210,9 @@ export class MultiplayerClient {
     this.remotePlayers.clear()
     this.localPlayerId = null
     this.inboundHits.length = 0
+    this.stateSendAccumSec = 0
+    this.pendingState = null
+    this.lastSentRadarMode = null
     this.notifyRosterChanged()
   }
 

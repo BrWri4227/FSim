@@ -16,12 +16,15 @@ import type { AircraftSpec } from './types/aircraft'
 import type { LoadedStore } from './types/weapons'
 import { applyHit } from './systems/DamageModel'
 import { getAircraftById } from './data/aircraft/catalog'
-import type { FlightResult } from './App'
+import type { FlightResult, MissionOutcome, ScenarioDescriptor } from './types/mission'
+import { MissionTracker } from './mission/MissionTracker'
+import { applyPlayerSpawn, spawnScenario } from './mission/ScenarioSpawner'
 import { FlareEffect } from './scene/FlareEffect'
 import { ChaffEffect } from './scene/ChaffEffect'
 import { setLODCamera } from './entities/Aircraft'
 import { warmupMissileVisuals } from './weapons/MissileSystem'
 import { warmupExplosionVisuals } from './scene/ExplosionEffect'
+import { CockpitController } from './cockpit/CockpitController'
 
 const FIXED_DT = 1 / 60
 
@@ -51,6 +54,7 @@ export class FlightSession {
 
   private flareEffect: FlareEffect
   private chaffEffect: ChaffEffect
+  private cockpit: CockpitController
 
   private rafId = 0
   private lastTime = 0
@@ -60,15 +64,20 @@ export class FlightSession {
   private completionScheduled = false
   private completionTimer: ReturnType<typeof setTimeout> | null = null
   private gSmoothed = 1.0   // low-pass filtered G for visual effects
+  private frameDt = FIXED_DT
   private glocEnabled: boolean
   private autoRudder: boolean
   private wasRadarShootCueActive = false
+  private scenario: ScenarioDescriptor
+  private missionTracker: MissionTracker | null = null
+  private missionAbortRequested = false
 
   private onComplete: (result: FlightResult) => void
 
   constructor(
     spec: AircraftSpec,
     stores: LoadedStore[],
+    scenario: ScenarioDescriptor,
     multiplayer: MultiplayerConfig,
     existingMultiplayerClient: MultiplayerClient | null,
     onComplete: (result: FlightResult) => void,
@@ -76,6 +85,7 @@ export class FlightSession {
     autoRudder = true
   ) {
     this.onComplete = onComplete
+    this.scenario = scenario
     this.glocEnabled = glocEnabled
     this.autoRudder = autoRudder
     this.multiplayerConfig = multiplayer
@@ -137,6 +147,8 @@ export class FlightSession {
     this.flareEffect = new FlareEffect(this.sceneManager.scene)
     this.chaffEffect = new ChaffEffect(this.sceneManager.scene)
 
+    this.cockpit = new CockpitController(this.sceneManager.scene, spec)
+
     this.hud = new HUD(hudCanvas, this.player, this.entityManager)
     this.debugOverlay = new DebugOverlay(this.player, this.entityManager, this.sceneManager.scene)
     this.debugVisuals = new DebugVisuals(this.sceneManager.scene)
@@ -154,9 +166,8 @@ export class FlightSession {
     // F12 toggles debug overlay
     window.addEventListener('keydown', this.onKeyDown)
 
-    // Position spawn at 5000m altitude, flying north
-    this.player.state.positionNED = [0, 0, -5000]
-    this.player.state.velocityNED = [250, 0, 0] // ~250 m/s north
+    // Position spawn from scenario (peer offset applied in startInternal)
+    applyPlayerSpawn(this.player, scenario)
   }
 
   private onResize = (): void => {
@@ -168,6 +179,21 @@ export class FlightSession {
     if (e.code === 'F12') {
       e.preventDefault()
       this.debugOverlay.toggle()
+      return
+    }
+    if (e.code === 'F1') {
+      e.preventDefault()
+      this.cockpit.cycleLeftMFD()
+      return
+    }
+    if (e.code === 'F2') {
+      e.preventDefault()
+      this.cockpit.cycleRightMFD()
+      return
+    }
+    if (e.code === 'Escape' && !this.completionScheduled) {
+      e.preventDefault()
+      this.missionAbortRequested = true
     }
   }
 
@@ -178,6 +204,8 @@ export class FlightSession {
   private async startInternal(): Promise<void> {
     await this.initMultiplayer()
     this.applyPeerSpawnOffset()
+    const spawnCounts = spawnScenario(this.scenario, this.entityManager, this.player)
+    this.missionTracker = new MissionTracker(this.scenario, spawnCounts)
     this.sessionStartTime = performance.now()
     this.lastTime = this.sessionStartTime
     this.loop(this.sessionStartTime)
@@ -226,6 +254,7 @@ export class FlightSession {
     this.rafId = requestAnimationFrame(this.loop)
 
     const dt = Math.min((timestamp - this.lastTime) / 1000, 0.1)
+    this.frameDt = dt
     this.lastTime = timestamp
     this.accumulator += dt
 
@@ -239,13 +268,13 @@ export class FlightSession {
 
   private tick(dt: number): void {
     const controls = this.inputManager.getControls(dt)
-    this.syncMultiplayer()
     // Wingman radio commands — issued before update so the wingman responds this tick.
     if (controls.wingmanEngage) this.entityManager.commandWingmen('ENGAGE')
     if (controls.wingmanCover)  this.entityManager.commandWingmen('COVER')
     if (controls.wingmanRTB)    this.entityManager.commandWingmen('RTB')
     if (controls.wingmanRejoin) this.entityManager.commandWingmen('REJOIN')
     this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined, this.entityManager.getGroundTargets())
+    this.syncMultiplayer(dt)
     this.entityManager.update(dt, this.player)
     this.awacs.update(dt, this.entityManager.getEnemies(), 'player', this.player.state.positionNED, this.player.spec.nation)
     const targetIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
@@ -262,27 +291,101 @@ export class FlightSession {
     const tau = 0.4
     this.gSmoothed += (this.player.state.gCurrent - this.gSmoothed) * Math.min(1, dt / tau)
 
-    if (this.player.state.ejected && !this.completionScheduled) {
-      this.completionScheduled = true
-      const elapsed = (performance.now() - this.sessionStartTime) / 1000
-      this.completionTimer = setTimeout(() => {
-        if (this.disposed) return
-        this.onComplete({
-          kills: this.entityManager.killCount,
-          deaths: 1,
-          flightTimeSec: elapsed,
-          aircraftName: this.player.spec.displayName
-        })
-      }, 4000)
+    this.updateMissionEnd(dt)
+  }
+
+  private updateMissionEnd(_dt: number): void {
+    if (this.completionScheduled) return
+
+    const elapsed = (performance.now() - this.sessionStartTime) / 1000
+    const playerKilled = this.player.state.ejected && !this.player.voluntaryEject
+    const playerEjected = this.player.state.ejected && this.player.voluntaryEject
+
+    if (this.missionAbortRequested) {
+      this.scheduleMissionEnd('aborted', 0.5)
+      return
+    }
+
+    if (this.missionTracker) {
+      const evaluation = this.missionTracker.evaluate({
+        elapsedSec: elapsed,
+        enemyKills: this.entityManager.killCount,
+        groundKills: this.entityManager.groundKillCount,
+        enemiesRemaining: this.entityManager.getEnemyCount(),
+        groundRemaining: this.entityManager.getGroundTargetCount(),
+        playerEjected,
+        playerKilled,
+      })
+
+      if (evaluation.outcome === 'success') {
+        this.scheduleMissionEnd('success', 2)
+        return
+      }
+      if (evaluation.outcome === 'failure') {
+        this.scheduleMissionEnd('failure', 2)
+        return
+      }
+      if (evaluation.outcome === 'killed') {
+        this.scheduleMissionEnd('killed', 4)
+        return
+      }
+      if (evaluation.outcome === 'ejected') {
+        this.scheduleMissionEnd('ejected', 4)
+        return
+      }
+    } else if (this.player.state.ejected) {
+      this.scheduleMissionEnd(playerKilled ? 'killed' : 'ejected', 4)
     }
   }
 
-  private syncMultiplayer(): void {
+  private scheduleMissionEnd(outcome: MissionOutcome, delaySec: number): void {
+    if (this.completionScheduled) return
+    this.completionScheduled = true
+    this.completionTimer = setTimeout(() => {
+      if (this.disposed) return
+      this.finishMission(outcome)
+    }, delaySec * 1000)
+  }
+
+  private finishMission(outcome: MissionOutcome): void {
+    if (this.disposed) return
+    const elapsed = (performance.now() - this.sessionStartTime) / 1000
+    const tracker = this.missionTracker
+    const tickState = {
+      elapsedSec: elapsed,
+      enemyKills: this.entityManager.killCount,
+      groundKills: this.entityManager.groundKillCount,
+      enemiesRemaining: this.entityManager.getEnemyCount(),
+      groundRemaining: this.entityManager.getGroundTargetCount(),
+      playerEjected: outcome === 'ejected',
+      playerKilled: outcome === 'killed',
+    }
+    const completedIds = tracker?.evaluate(tickState).completedObjectiveIds ?? []
+    const objectivesTotal = tracker?.primaryObjectiveCount ?? 0
+    const deaths = outcome === 'killed' || outcome === 'ejected' ? 1 : 0
+
+    this.onComplete({
+      kills: this.entityManager.killCount,
+      groundKills: this.entityManager.groundKillCount,
+      deaths,
+      flightTimeSec: elapsed,
+      aircraftName: this.player.spec.displayName,
+      missionName: this.scenario.name,
+      outcome,
+      objectivesCompleted: completedIds.filter(id =>
+        this.scenario.objectives.some(o => o.id === id && !o.optional)
+      ).length,
+      objectivesTotal,
+      objectiveLabels: tracker?.getObjectiveLabels(completedIds) ?? [],
+    })
+  }
+
+  private syncMultiplayer(dt: number): void {
     if (!this.multiplayer || !this.multiplayer.isConnected()) return
 
     this.localNetworkId = this.multiplayer.getLocalPlayerId() ?? this.localNetworkId
     const radarState = this.player.radar.state
-    this.multiplayer.sendState({
+    this.multiplayer.queueState({
       positionNED: [...this.player.state.positionNED] as [number, number, number],
       velocityNED: [...this.player.state.velocityNED] as [number, number, number],
       attitudeQuat: [...this.player.state.attitudeQuat] as [number, number, number, number],
@@ -316,6 +419,7 @@ export class FlightSession {
         })),
       },
     })
+    this.multiplayer.flushStateSend(dt)
 
     const snapshots = this.multiplayer.getRemoteSnapshots()
 
@@ -345,11 +449,17 @@ export class FlightSession {
 
   private render(): void {
     const playerState = this.player.state
+    const cockpitView = this.cameraManager.getMode() === 'COCKPIT'
+    this.player.setCockpitViewActive(cockpitView)
     this.cameraManager.update(this.player)
+    this.player.hms.setHeadDir(this.cameraManager.getHeadAzDeg(), this.cameraManager.getHeadElDeg())
 
     // Sync mesh transforms
     this.player.updateMesh()
-    this.entityManager.updateMeshes()
+    this.entityManager.updateMeshes(playerState.positionNED, this.frameDt)
+
+    // In-cockpit 3D HUD / MFD pages
+    this.cockpit.update(this.player, this.entityManager, this.awacs.picture, cockpitView)
 
     // Countermeasure visual effects — player + all AI aircraft
     this.flareEffect.update([...this.player.cmds.getActiveFlares(), ...this.entityManager.getAllAIFlares()])
@@ -395,6 +505,7 @@ export class FlightSession {
     this.debugVisuals.dispose()
     this.flareEffect.dispose()
     this.chaffEffect.dispose()
+    this.cockpit.dispose()
     this.postFX.dispose()
     this.sceneManager.dispose()
     this.audioManager.dispose()
