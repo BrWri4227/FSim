@@ -1,4 +1,15 @@
 import * as THREE from 'three'
+import { FA18Exterior } from './FA18Exterior'
+import { ProceduralFighterExterior } from '../aircraftmodels/core/ProceduralFighterExterior'
+import type { FighterExteriorConfig } from '../aircraftmodels/core/types'
+import { F15CExterior, F15CExteriorConfig } from '../aircraftmodels/f15c/F15CExterior'
+import { F16CExterior, F16CExteriorConfig } from '../aircraftmodels/f16c/F16CExterior'
+import { F22ARaptorExterior, F22ARaptorExteriorConfig } from '../aircraftmodels/f22a-raptor/F22ARaptorExterior'
+import { F35AExterior, F35AExteriorConfig } from '../aircraftmodels/f35a/F35AExterior'
+import { MiG29AExterior, MiG29AExteriorConfig } from '../aircraftmodels/mig29a/MiG29AExterior'
+import { Su27Exterior, Su27ExteriorConfig } from '../aircraftmodels/su27/Su27Exterior'
+import { Su35SExterior, Su35SExteriorConfig } from '../aircraftmodels/su35s/Su35SExterior'
+import { Su57Exterior, Su57ExteriorConfig } from '../aircraftmodels/su57/Su57Exterior'
 
 // Per-aircraft procedural geometry. Fuselage nose points along local +X.
 // Aircraft.ts updateMesh applies a +90° Y quaternion bias to align with world -Z (NED North).
@@ -327,95 +338,51 @@ function placeNozzle(g: THREE.Group, positions: [number, number, number][]): voi
   }
 }
 
-// ── F-15C Eagle ─────────────────────────────────────────────────────────────
-function buildF15C(_nation: 'USA' | 'RUS'): THREE.Group {
+/**
+ * Wrap a shared ProceduralFighterExterior so it plugs into the roster the same
+ * way the hand-built meshes do.
+ *
+ * The core model is authored nose-along-−Z; every roster mesh here is nose-along-+X
+ * so the shared MESH_BIAS_QUAT (+90° Y) rotates +X → world −Z (NED North). Rotating
+ * the exterior −90° about Y maps its −Z nose onto +X — Ry(−90°)·(0,0,−1) = (1,0,0) —
+ * keeping wings level and the correct left/right sides (+X stays +X).
+ *
+ * Gear meshes are reparented into a hideable 'gear-group' for the retract animation,
+ * and nozzle anchors are placed at the engine exhausts (transformed through the same
+ * −90° Y wrap: model (x,y,z) → g-local (−z, y, x)) for thruster plumes.
+ */
+function buildProceduralJet(ext: ProceduralFighterExterior, config: FighterExteriorConfig): THREE.Group {
   const g = new THREE.Group()
-  const C = 0x7799bb
-  const Cw = C - 0x0f0f10
-  const Cd = C - 0x1f1f20
-  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
-  const fLen = 10.0, fH = 1.1, fW = 1.3
+  ext.rotation.y = -Math.PI / 2
+  g.add(ext)
 
-  addFuselage(g, fm, fLen, fH, fW)
-  const noseTip = addNoseCone(g, fm, 6.4, 2.8, 0.55)
-  addPitotAt(g, addRadomeCap(g, noseTip, 0.55))
+  const gearGroup = new THREE.Group()
+  gearGroup.name = 'gear-group'
+  ext.add(gearGroup)
+  for (const child of [...ext.children]) {
+    if (child !== gearGroup && /Gear|Wheel/.test(child.name)) gearGroup.add(child)
+  }
+  gearGroup.visible = true
 
-  addCanopy(g, 3.3, fH / 2 + 0.02, 0.50, 0.52)
+  const exhaustY = config.fuselageY - 0.12
+  const exhaustZ = config.engineZ + config.bodyLength * 0.31
+  const nozzles: [number, number, number][] = config.twinEngine
+    ? [[-exhaustZ, exhaustY, -config.engineSpacing], [-exhaustZ, exhaustY, config.engineSpacing]]
+    : [[-exhaustZ, exhaustY, 0]]
+  placeNozzle(g, nozzles)
 
-  // Cheek intakes — flush with fuselage sides
-  const iD = 0.7, iZ = sideZ(fW, iD)
-  addBox(g, dm, 3.0, 0.65, iD, 1.5, -0.18, iZ)
-  addBox(g, dm, 3.0, 0.65, iD, 1.5, -0.18, -iZ)
-
-  const wingY = -0.28
-  addWing(g, wm, 1, 2.0, wingY, sideZ(fW, 0.10), 4.4, 1.7, 3.7, 1.0, 0.12)
-  addWing(g, wm, -1, 2.0, wingY, sideZ(fW, 0.10), 4.4, 1.7, 3.7, 1.0, 0.12)
-
-  const tailZ = sideZ(fW, 0.13)
-  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, fH / 2 + 1.0, tailZ, 0.05)
-  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, fH / 2 + 1.0, -tailZ, -0.05)
-
-  const stabZ = sideZ(fW, 2.5)
-  addBox(g, wm, 2.0, 0.10, 2.5, -4.5, wingY + 0.06, stabZ)
-  addBox(g, wm, 2.0, 0.10, 2.5, -4.5, wingY + 0.06, -stabZ)
-
-  const engZ = sideZ(fW * 0.85, 0.52 * 2)
-  const nLen = 4.5, nCx = -3.0
-  addCylX(g, dm, 0.42, 0.52, nLen, nCx, -0.05, engZ, 12)
-  addCylX(g, dm, 0.42, 0.52, nLen, nCx, -0.05, -engZ, 12)
-  const exL = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.52, 0.28)
-  const exR = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.52, 0.28)
-
-  addFlapsGroup(g, 0.0, 0.8, 2.0, 1.2, wingY)
-  addGearGroup(g, 4.0, 1.0, 1.0, -fH / 2, 0.5, 0.22)
-  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
   g.rotation.y = Math.PI / 2
   return g
 }
 
+// ── F-15C Eagle ─────────────────────────────────────────────────────────────
+function buildF15C(_nation: 'USA' | 'RUS'): THREE.Group {
+  return buildProceduralJet(new F15CExterior({ landingGearDown: true }), F15CExteriorConfig)
+}
+
 // ── F-16C Fighting Falcon ───────────────────────────────────────────────────
 function buildF16C(_nation: 'USA' | 'RUS'): THREE.Group {
-  const g = new THREE.Group()
-  const C = 0x6688aa
-  const Cw = C - 0x101010
-  const Cd = C - 0x1a1a1a
-  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
-  const fLen = 9.0, fH = 0.9, fW = 1.05
-
-  addFuselage(g, fm, fLen, fH, fW)
-  const noseTip = addNoseCone(g, fm, 6.1, 3.2, 0.45)
-  addPitotAt(g, addRadomeCap(g, noseTip, 0.45))
-
-  const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(0.50, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.62),
-    canopyMat()
-  )
-  canopy.position.set(2.9, fH / 2 + 0.0, 0)
-  canopy.castShadow = true
-  g.add(canopy)
-
-  // Chin intake — centered under fuselage belly
-  addBox(g, dm, 2.2, 0.52, 0.85, 1.2, -fH / 2 - 0.52 / 2 + 0.04, 0)
-
-  const wingY = -0.26
-  addWing(g, wm, 1, 1.6, wingY, sideZ(fW, 0.10), 4.0, 1.0, 3.2, 1.25, 0.11)
-  addWing(g, wm, -1, 1.6, wingY, sideZ(fW, 0.10), 4.0, 1.0, 3.2, 1.25, 0.11)
-
-  addBox(g, wm, 2.4, 2.1, 0.13, -3.6, fH / 2 + 1.05, 0)
-
-  const stabZ = sideZ(fW, 1.8)
-  addBox(g, wm, 1.5, 0.09, 1.8, -4.2, wingY + 0.04, stabZ)
-  addBox(g, wm, 1.5, 0.09, 1.8, -4.2, wingY + 0.04, -stabZ)
-
-  const nLen = 4.0, nCx = -2.8
-  addCylX(g, dm, 0.38, 0.48, nLen, nCx, 0.0, 0, 12)
-  const ex = addNozzleAt(g, cylRearX(nCx, nLen), 0.0, 0, 0.48, 0.26)
-
-  addFlapsGroup(g, 0.2, 0.65, 1.8, 1.0, wingY)
-  addGearGroup(g, 3.5, 1.0, 0.9, -fH / 2, 0.5, 0.20)
-  placeNozzle(g, [[ex, 0.0, 0]])
-  g.rotation.y = Math.PI / 2
-  return g
+  return buildProceduralJet(new F16CExterior({ landingGearDown: true }), F16CExteriorConfig)
 }
 
 // ── F/A-18C Hornet ──────────────────────────────────────────────────────────
@@ -458,6 +425,37 @@ function buildFA18C(_nation: 'USA' | 'RUS'): THREE.Group {
   addFlapsGroup(g, 0.0, 0.7, 1.9, 1.1, wingY)
   addGearGroup(g, 3.5, 0.5, 0.9, -fH / 2, 0.5, 0.21)
   placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
+  g.rotation.y = Math.PI / 2
+  return g
+}
+
+// ── F/A-18E Super Hornet (detailed procedural exterior) ──────────────────────
+function buildFA18E(_nation: 'USA' | 'RUS'): THREE.Group {
+  const g = new THREE.Group()
+
+  // FA18Exterior is authored nose-along-−Z. Every other builder here uses
+  // nose-along-+X so the shared MESH_BIAS_QUAT (+90° Y) rotates +X → world −Z
+  // (NED North). Rotating the exterior −90° about Y maps its −Z nose onto +X,
+  // making it behave identically: Ry(−90°)·(0,0,−1) = (1,0,0).
+  const ext = new FA18Exterior({ landingGearDown: true, showWeapons: false })
+  ext.rotation.y = -Math.PI / 2
+  g.add(ext)
+
+  // Reparent the gear parts into a hideable 'gear-group' so the existing
+  // retract animation (setGearAnimT / setGearVisible) works. They stay children
+  // of `ext`, so their local transforms are preserved by the move.
+  const gearGroup = new THREE.Group()
+  gearGroup.name = 'gear-group'
+  ext.add(gearGroup)
+  for (const child of [...ext.children]) {
+    if (child !== gearGroup && /Gear|Wheel/.test(child.name)) gearGroup.add(child)
+  }
+  gearGroup.visible = true
+
+  // Engine exhausts sit at model (±0.78, 0.55, 4.15); after the −90° Y wrap that
+  // maps to g-local (−4.15, 0.55, ±0.78) (model (x,y,z) → (−z, y, x)).
+  placeNozzle(g, [[-4.15, 0.55, 0.78], [-4.15, 0.55, -0.78]])
+
   g.rotation.y = Math.PI / 2
   return g
 }
@@ -820,6 +818,7 @@ export function createPlaceholderAircraftMesh(aircraftId: string, nation: 'USA' 
     case 'f15c':  return buildF15C(nation)
     case 'f16c':  return buildF16C(nation)
     case 'fa18c': return buildFA18C(nation)
+    case 'fa18e': return buildFA18E(nation)
     case 'mig29': return buildMiG29(nation)
     case 'su27':  return buildSu27(nation)
     case 'su35':  return buildSu35(nation)
@@ -856,6 +855,7 @@ const GEAR_CLEARANCE: Record<string, { gearUp: number; gearDown: number }> = {
   f15c:  { gearUp: 0.55, gearDown: 1.27 },
   f16c:  { gearUp: 0.45, gearDown: 1.15 },
   fa18c: { gearUp: 0.50, gearDown: 1.21 },
+  fa18e: { gearUp: 0.55, gearDown: 1.60 },
   mig29: { gearUp: 0.53, gearDown: 1.30 },
   su27:  { gearUp: 0.55, gearDown: 1.34 },
   su35:  { gearUp: 0.55, gearDown: 1.34 },

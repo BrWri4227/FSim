@@ -5,6 +5,7 @@ import type { DamageZone } from '../types/damage'
 import type { Aircraft } from '../entities/Aircraft'
 import type { GroundTarget } from '../entities/GroundTarget'
 import { guideMissile, guideMissileCoast, checkIRSeekerLock } from './MissileGuidance'
+import { checkARHLock } from './ActiveRadarSeeker'
 import { evaluateFlareSeduction, selectBestFlare, computeHeatSignatureKW } from './IRSeeker'
 import { checkProximityFuse, computeLethality, hitZoneFromMissileApproach } from './Warhead'
 import { v3add, v3scale, v3norm, v3sub, v3dist, v3dot, nedToThree, v3len, quatRotateVec } from '../utils/MathUtils'
@@ -14,6 +15,7 @@ import { applyHit } from '../systems/DamageModel'
 import { ExplosionManager } from '../scene/ExplosionEffect'
 import { ThrusterEffect, RocketTrail } from '../scene/ThrusterEffect'
 import { computeAtmosphere } from '../physics/Atmosphere'
+import { getTerrainHeightAtNED } from '../scene/Terrain'
 
 // Reusable temporaries for mesh orientation — avoids per-frame Vector3 allocations
 const _missileDir    = new THREE.Vector3()
@@ -109,7 +111,7 @@ function getSharedMissileMaterials(): [THREE.MeshStandardMaterial, THREE.MeshSta
       color: 0xa8a8a8, metalness: 0.45, roughness: 0.55, side: THREE.DoubleSide,
     })
   }
-  return [sharedMissileBodyMat, sharedMissileFinMat]
+  return [sharedMissileBodyMat!, sharedMissileFinMat!]
 }
 
 export class MissileSystem {
@@ -201,6 +203,7 @@ export class MissileSystem {
       lastKnownTargetVel: knownVel,
       active: true,
       shooterEntityId,
+      prevMissDistanceM: null,
     }
     this.missiles.push(missile)
 
@@ -339,7 +342,18 @@ export class MissileSystem {
             guidanceTargetVel = [...tVel] as [number,number,number]
             m.lastKnownTargetPos = [...tPos] as [number,number,number]
             m.lastKnownTargetVel = [...tVel] as [number,number,number]
-            m.locked = true
+
+            const arSeeker = m.spec.arSeeker
+            const missileFwd = v3norm(m.velocityNED) as [number, number, number]
+            const hasLock = arSeeker && checkARHLock(
+              arSeeker, m.positionNED, m.velocityNED, missileFwd, target.state, target.spec,
+            )
+            m.locked = Boolean(hasLock)
+            if (!hasLock) {
+              m.guidanceMode = 'COAST'
+              guidanceTargetPos = undefined
+              guidanceTargetVel = undefined
+            }
           } else if (isAim120) {
             if (hasDatalinkTrack && radarTargetPos && radarTargetVel) {
               m.guidanceMode = 'DATALINK'
@@ -482,10 +496,9 @@ export class MissileSystem {
         }
       }
 
-      // Ground-impact splash — when the missile hits ground (z >= 0), damage all
-      // ground targets within lethal radius horizontally and detonate. Catches
-      // near-misses where an AGM hits the ground a few meters short of the target.
-      if (m.positionNED[2] >= 0 && m.ageSec > 0.6) {
+      // Ground-impact splash — terrain-aware collision
+      const terrainZ = getTerrainHeightAtNED(m.positionNED)
+      if (-m.positionNED[2] <= terrainZ + 0.5 && m.ageSec > 0.6) {
         for (const gt of groundTargets) {
           if (gt.state.destroyed) continue
           if (gt.entityId === m.shooterEntityId) continue
@@ -501,8 +514,9 @@ export class MissileSystem {
         continue
       }
 
-      // Expire when seeker battery is depleted or on ground impact.
-      if (m.ageSec > m.spec.batteryLifeSec || m.positionNED[2] > 50) {
+      // Expire when seeker battery is depleted or on terrain impact.
+      const terrainElev = getTerrainHeightAtNED(m.positionNED)
+      if (m.ageSec > m.spec.batteryLifeSec || -m.positionNED[2] < terrainElev + 1) {
         this.explode(i, m)
         continue
       }

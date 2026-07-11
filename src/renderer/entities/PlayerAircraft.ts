@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { Aircraft } from './Aircraft'
+import { PLAYER_EXTERNAL_LAYER } from '../camera/CameraLayers'
 import type { AircraftSpec, ControlInputs } from '../types/aircraft'
 import type { LoadedStore, MissileState, GunRoundState } from '../types/weapons'
 import { GunSystem } from '../weapons/GunSystem'
@@ -36,6 +37,8 @@ export class PlayerAircraft extends Aircraft {
   selectedWeaponIndex = 0
   autoRudderEnabled: boolean
   private ejectKeyPrev = false
+  /** True when the player initiated ejection (survived bailout); false for forced eject. */
+  voluntaryEject = false
   private onMissileLaunch: ((category: 'IR_MISSILE' | 'ARH_MISSILE') => void) | null = null
   private onMissileRadarStateChange: ((missileId: string, mode: MissileState['guidanceMode']) => void) | null = null
   private onGPWSEvent: ((event: 'PULL_UP' | 'PULL_UP_URGENT') => void) | null = null
@@ -44,6 +47,8 @@ export class PlayerAircraft extends Aircraft {
   constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, autoRudder = true) {
     super(spec, stores, scene, 'player')
     this.autoRudderEnabled = autoRudder
+    // Keep the external placeholder on a dedicated layer so the cockpit camera never renders it.
+    this.setExternalMeshLayer(PLAYER_EXTERNAL_LAYER)
 
     this.gun = new GunSystem(spec.gunSpec, scene)
     this.missiles = new MissileSystem(scene)
@@ -112,12 +117,12 @@ export class PlayerAircraft extends Aircraft {
     if (this.state.ejected) return
 
     if (this.damage.structuralFailure || this.damage.zones['COCKPIT'] >= 1.0) {
-      this.eject()
+      this.eject(false)
       return
     }
 
     // Eject check
-    if (controls.ejectRequested && !this.ejectKeyPrev) this.eject()
+    if (controls.ejectRequested && !this.ejectKeyPrev) this.eject(true)
     this.ejectKeyPrev = controls.ejectRequested
 
     this.integrate(this.autoRudderEnabled ? this.applyAutoRudder(controls) : controls, dt)
@@ -396,10 +401,11 @@ export class PlayerAircraft extends Aircraft {
     if (count > 0) this.selectedWeaponIndex = (this.selectedWeaponIndex + 1) % count
   }
 
-  eject(): void {
+  eject(voluntary = false): void {
     if (this.state.ejected) return
     this.state.ejected = true
     this.damage.ejected = true
+    this.voluntaryEject = voluntary
     console.log('EJECT EJECT EJECT')
   }
 

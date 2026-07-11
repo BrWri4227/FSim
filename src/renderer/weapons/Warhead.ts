@@ -4,9 +4,16 @@ import { v3dist } from '../utils/MathUtils'
 
 export function checkProximityFuse(missile: MissileState, targetState: AircraftState): boolean {
   const dist = v3dist(missile.positionNED, targetState.positionNED)
-  if (dist <= missile.spec.proxFuseRadiusM) return true
+  const gate = missile.spec.proxFuseRadiusM
 
-  // Also trigger on closest-approach (missile has passed the target)
+  if (dist <= gate) return true
+
+  const prev = missile.prevMissDistanceM
+  missile.prevMissDistanceM = dist
+
+  // Closest-approach: detonate when miss distance starts increasing inside the fuse gate.
+  if (prev !== null && dist > prev && prev <= gate) return true
+
   return false
 }
 

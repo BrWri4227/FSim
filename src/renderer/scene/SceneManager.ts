@@ -1,6 +1,9 @@
 import * as THREE from 'three'
 import { Terrain } from './Terrain'
 import { Sky } from './Sky'
+import { Scenery } from './Scenery'
+import { WeatherVisuals } from './WeatherVisuals'
+import { getWeather } from '../physics/WeatherState'
 
 export class SceneManager {
   readonly scene: THREE.Scene
@@ -9,6 +12,8 @@ export class SceneManager {
 
   private terrain: Terrain
   private sky: Sky
+  private scenery: Scenery
+  private weatherVisuals: WeatherVisuals
   private sun: THREE.DirectionalLight
   private readonly sunDir = new THREE.Vector3(50000, 80000, -20000).normalize()
 
@@ -54,9 +59,9 @@ export class SceneManager {
 
     this.terrain = new Terrain(this.scene)
     this.sky = new Sky(this.scene)
-
-    // Fog for depth
-    this.scene.fog = new THREE.FogExp2(0x90cce8, 0.0000055)
+    this.scenery = new Scenery(this.scene)
+    this.weatherVisuals = new WeatherVisuals(this.scene)
+    this.applyWeatherFog()
 
     window.addEventListener('resize', this.onResize)
   }
@@ -81,6 +86,19 @@ export class SceneManager {
 
   updateSky(camera: THREE.Camera): void {
     this.sky.update(camera.position)
+    this.weatherVisuals.update(camera.position, 1 / 60)
+  }
+
+  /** Sync fog density with WeatherState visibility. */
+  applyWeatherFog(): void {
+    const visM = getWeather().visibilityM
+    const density = Math.max(0.000001, 3.5 / Math.max(visM, 500))
+    this.scene.fog = new THREE.FogExp2(0x90cce8, density)
+  }
+
+  refreshWeatherVisuals(): void {
+    this.weatherVisuals.refresh()
+    this.applyWeatherFog()
   }
 
   render(camera: THREE.Camera): void {
@@ -91,6 +109,8 @@ export class SceneManager {
     window.removeEventListener('resize', this.onResize)
     this.terrain.dispose()
     this.sky.dispose()
+    this.scenery.dispose()
+    this.weatherVisuals.dispose()
     this.renderer.dispose()
   }
 }

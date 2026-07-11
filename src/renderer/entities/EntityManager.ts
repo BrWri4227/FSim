@@ -6,6 +6,8 @@ import type { FlareContact } from '../types/ir'
 import type { ChaffCloud } from '../avionics/CMDS'
 import { AIAircraft, type AIBehavior } from '../ai/AIAircraft'
 import { runAIBrain } from '../ai/AIBrain'
+import type { MissileThreat } from '../ai/behaviors/EvadeMissile'
+import { WVR_MERGE_RANGE_M } from '../ai/behaviors/WVREngage'
 import { MissileSystem } from '../weapons/MissileSystem'
 import type { Aircraft } from './Aircraft'
 import type { PlayerAircraft } from './PlayerAircraft'
@@ -13,6 +15,11 @@ import { NetworkAircraft } from './NetworkAircraft'
 import { GroundTarget } from './GroundTarget'
 import type { GroundTargetSpec } from '../types/groundTarget'
 import type { NetPlayerState } from '../network/MultiplayerTypes'
+
+/** Horizontal distance beyond which AI physics/behaviour updates are skipped. */
+const AI_SIM_CULL_RANGE_M = 80_000
+/** Horizontal distance beyond which AI meshes are hidden. */
+const AI_MESH_CULL_RANGE_M = 120_000
 
 export class EntityManager {
   private enemies: AIAircraft[] = []
@@ -64,7 +71,7 @@ export class EntityManager {
   commandWingmen(cmd: 'ENGAGE' | 'COVER' | 'RTB' | 'REJOIN'): void {
     this.lastWingmanCmd = cmd
     const next: AIBehavior = cmd === 'ENGAGE' ? 'BVR_ENGAGE'
-      : cmd === 'COVER' ? 'FOLLOW_BEHIND'
+      : cmd === 'COVER' ? 'WINGMAN_COVER'
       : cmd === 'RTB' ? 'FLY_STRAIGHT'
       : 'FOLLOW_BEHIND'
     for (const wm of this.wingmen) wm.behavior = next
@@ -82,6 +89,14 @@ export class EntityManager {
 
   getGroundTargets(): GroundTarget[] {
     return this.groundTargets
+  }
+
+  getEnemyCount(): number {
+    return this.enemies.length
+  }
+
+  getGroundTargetCount(): number {
+    return this.groundTargets.length
   }
 
   private despawn(entityId: string): void {
@@ -120,12 +135,70 @@ export class EntityManager {
     )
   }
 
+  /** Collect all active inbound missiles targeting the given entity. */
+  private collectInboundThreats(entityId: string): MissileThreat[] {
+    const threats: MissileThreat[] = []
+    const add = (m: { id: string; active: boolean; targetEntityId: string; positionNED: readonly number[]; velocityNED: readonly number[]; spec: { category: string } }) => {
+      if (!m.active || m.targetEntityId !== entityId) return
+      const guidance: 'IR' | 'RADAR' | 'UNKNOWN' =
+        m.spec.category === 'IR_MISSILE' ? 'IR' :
+        m.spec.category === 'ARH_MISSILE' ? 'RADAR' : 'UNKNOWN'
+      threats.push({
+        id: m.id,
+        positionNED: [...m.positionNED] as [number, number, number],
+        velocityNED: [...m.velocityNED] as [number, number, number],
+        guidance,
+      })
+    }
+
+    for (const m of this.player.missiles.getMissiles()) add(m)
+    for (const m of this.samMissiles.getMissiles()) add(m)
+    for (const m of this.debugMissiles.getMissiles()) add(m)
+    for (const wm of this.wingmen) {
+      for (const m of wm.missiles.getMissiles()) add(m)
+    }
+    for (const ai of this.enemies) {
+      for (const m of ai.missiles.getMissiles()) add(m)
+    }
+
+    return threats
+  }
+
+  /** Fire BVR or WVR weapons based on range and brain request. */
+  private handleAIFireRequest(ai: AIAircraft, target: Aircraft, controls: import('../types/aircraft').ControlInputs): void {
+    if (!controls.fireMissile) return
+    const dx = target.state.positionNED[0] - ai.state.positionNED[0]
+    const dy = target.state.positionNED[1] - ai.state.positionNED[1]
+    const dz = target.state.positionNED[2] - ai.state.positionNED[2]
+    const range = Math.hypot(dx, dy, dz)
+    if (range < WVR_MERGE_RANGE_M) {
+      if (ai.wvrFireCooldownSec <= 0 && ai.fireIRMissile(target)) {
+        ai.wvrFireCooldownSec = 4
+      }
+    } else if (ai.bvrFireCooldownSec <= 0 && ai.fireBVRMissile(target)) {
+      ai.bvrFireCooldownSec = 5
+    }
+  }
+
+  private horizontalDistM(
+    a: readonly [number, number, number],
+    b: readonly [number, number, number],
+  ): number {
+    const dx = a[0] - b[0]
+    const dy = a[1] - b[1]
+    return Math.hypot(dx, dy)
+  }
+
   update(dt: number, player: PlayerAircraft): void {
     // Update debug missiles — pass player aircraft so 'player' target resolves correctly
     this.debugMissiles.update(dt, player.state, this.getEnemies(), player as unknown as Aircraft, undefined, undefined, this.groundTargets)
 
-    // Pre-compute the player's active missiles for AI threat detection.
-    const playerMissiles = player.missiles.getMissiles()
+    // Pre-compute missile target lists for AI weapon systems.
+    const playerAsAircraft = player as unknown as Aircraft
+    const enemyMissileTargets = [playerAsAircraft, ...this.wingmen]
+    const wingmanGunTargets = this.enemies
+
+    const playerPos = player.state.positionNED
 
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const ai = this.enemies[i]!
@@ -140,33 +213,18 @@ export class EntityManager {
         continue
       }
 
-      // Build inbound-missile threat list — every active missile targeting this AI.
-      const threats = []
-      for (const m of playerMissiles) {
-        if (!m.active || m.targetEntityId !== ai.entityId) continue
-        const guidance: 'IR' | 'RADAR' | 'UNKNOWN' =
-          m.spec.category === 'IR_MISSILE' ? 'IR' :
-          m.spec.category === 'ARH_MISSILE' ? 'RADAR' : 'UNKNOWN'
-        threats.push({
-          id: m.id,
-          positionNED: [...m.positionNED] as [number, number, number],
-          velocityNED: [...m.velocityNED] as [number, number, number],
-          guidance,
-        })
-      }
+      const distM = this.horizontalDistM(ai.state.positionNED, playerPos)
+      ai.simCulled = distM > AI_SIM_CULL_RANGE_M
+      if (ai.simCulled) continue
 
-      const controls = runAIBrain(ai, player as unknown as Aircraft, dt, threats)
+      const threats = this.collectInboundThreats(ai.entityId)
 
-      // Honour BVR fire request → launch an ARH missile through the AI's own MissileSystem.
-      if (controls.fireMissile && ai.bvrFireCooldownSec <= 0) {
-        if (ai.fireBVRMissile(player as unknown as Aircraft)) {
-          ai.bvrFireCooldownSec = 5
-        }
-      }
+      const controls = runAIBrain(ai, playerAsAircraft, dt, threats)
+      this.handleAIFireRequest(ai, playerAsAircraft, controls)
 
-      ai.update(controls, dt)
-      ai.updateRadarVsBandit(dt, player as unknown as Aircraft)
-      ai.updateMissiles(dt, player as unknown as Aircraft, this.groundTargets)
+      ai.update(controls, dt, [playerAsAircraft])
+      ai.updateRadarVsBandit(dt, playerAsAircraft)
+      ai.updateMissiles(dt, enemyMissileTargets, playerAsAircraft, this.groundTargets)
     }
 
     // Wingmen — same update path as enemies but they target the player's locked
@@ -179,34 +237,27 @@ export class EntityManager {
         this.wingmen.splice(i, 1)
         continue
       }
+
+      const distM = this.horizontalDistM(wm.state.positionNED, playerPos)
+      wm.simCulled = distM > AI_SIM_CULL_RANGE_M
+      if (wm.simCulled) continue
+
       // Wingman primary "target" is whatever the player has locked, else nearest enemy.
       const sttId = player.radar.getSttTargetId()
       const lockedEnemy = sttId ? this.enemies.find(e => e.entityId === sttId) : null
-      const wmTarget = lockedEnemy ?? this.enemies[0] ?? (player as unknown as Aircraft)
+      const wmTarget = lockedEnemy ?? this.enemies[0] ?? playerAsAircraft
 
-      // Threats targeting the wingman come from any enemy AI that's launched at it.
-      const wmThreats = []
-      for (const enemy of this.enemies) {
-        for (const m of enemy.missiles.getMissiles()) {
-          if (!m.active || m.targetEntityId !== wm.entityId) continue
-          const guidance: 'IR' | 'RADAR' | 'UNKNOWN' =
-            m.spec.category === 'IR_MISSILE' ? 'IR' :
-            m.spec.category === 'ARH_MISSILE' ? 'RADAR' : 'UNKNOWN'
-          wmThreats.push({
-            id: m.id,
-            positionNED: [...m.positionNED] as [number, number, number],
-            velocityNED: [...m.velocityNED] as [number, number, number],
-            guidance,
-          })
-        }
-      }
+      const wmThreats = this.collectInboundThreats(wm.entityId)
 
       const controls = runAIBrain(wm, wmTarget, dt, wmThreats)
-      if (controls.fireMissile && wm.bvrFireCooldownSec <= 0 && wmTarget !== (player as unknown as Aircraft)) {
-        if (wm.fireBVRMissile(wmTarget)) wm.bvrFireCooldownSec = 5
+      if (wmTarget !== playerAsAircraft) {
+        this.handleAIFireRequest(wm, wmTarget, controls)
       }
-      wm.update(controls, dt)
-      wm.updateMissiles(dt, player as unknown as Aircraft, this.groundTargets)
+      wm.update(controls, dt, wingmanGunTargets)
+      if (wmTarget !== playerAsAircraft) {
+        wm.updateRadarVsBandit(dt, wmTarget)
+      }
+      wm.updateMissiles(dt, this.enemies, playerAsAircraft, this.groundTargets)
     }
 
     // Ground targets — update + SAM engagement
@@ -263,10 +314,22 @@ export class EntityManager {
     if (samEmitters.length > 0) player.rwr.addSAMEmitterThreats(samEmitters, player.state)
   }
 
-  updateMeshes(): void {
-    for (const ai of this.enemies) ai.updateMesh()
-    for (const wm of this.wingmen) wm.updateMesh()
-    for (const rp of this.remotePlayers.values()) rp.updateMesh()
+  updateMeshes(playerPos?: readonly [number, number, number], meshDt = 0.016): void {
+    for (const ai of this.enemies) {
+      if (playerPos && this.horizontalDistM(ai.state.positionNED, playerPos) > AI_MESH_CULL_RANGE_M) {
+        ai.mesh.visible = false
+        continue
+      }
+      ai.updateMesh(meshDt)
+    }
+    for (const wm of this.wingmen) {
+      if (playerPos && this.horizontalDistM(wm.state.positionNED, playerPos) > AI_MESH_CULL_RANGE_M) {
+        wm.mesh.visible = false
+        continue
+      }
+      wm.updateMesh(meshDt)
+    }
+    for (const rp of this.remotePlayers.values()) rp.updateMesh(meshDt)
     for (const gt of this.groundTargets) gt.updateMesh()
   }
 

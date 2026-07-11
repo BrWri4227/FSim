@@ -63,6 +63,10 @@ export class HUD {
   private wmCmdFlashRemainSec = 0
   private lastWmCmdSeen: string | null = null
   private lastRenderMs = 0
+  private lastDrawMs = 0
+  /** Minimum interval between full HUD repaints (~30 Hz). */
+  private static readonly MIN_DRAW_INTERVAL_MS = 1000 / 30
+  private forceRedraw = true
   private gunFunnelState: {
     x: number
     y: number
@@ -90,9 +94,22 @@ export class HUD {
   notifyDecoySuccess(type: 'FLARE' | 'CHAFF'): void {
     this.decoyFlashRemainSec = 2.0
     this.decoyFlashType = type
+    this.forceRedraw = true
   }
 
   render(camera?: THREE.PerspectiveCamera): void {
+    const nowMs = performance.now()
+    const needsFlash = this.decoyFlashRemainSec > 0 || this.wmCmdFlashRemainSec > 0
+    if (
+      !this.forceRedraw &&
+      !needsFlash &&
+      nowMs - this.lastDrawMs < HUD.MIN_DRAW_INTERVAL_MS
+    ) {
+      return
+    }
+    this.forceRedraw = false
+    this.lastDrawMs = nowMs
+
     const { canvas: c, ctx, player } = this
     const state = player.state
     const radar = player.radar.state
@@ -102,7 +119,6 @@ export class HUD {
     const gunRounds = player.gun.getRoundsRemaining()
 
     // Advance decoy flash timer using wall-clock delta
-    const nowMs = performance.now()
     const dtSec = Math.min((nowMs - this.lastRenderMs) / 1000, 0.1)
     this.lastRenderMs = nowMs
     if (this.decoyFlashRemainSec > 0) this.decoyFlashRemainSec = Math.max(0, this.decoyFlashRemainSec - dtSec)
@@ -1172,6 +1188,7 @@ export class HUD {
   resize(w: number, h: number): void {
     this.canvas.width  = w
     this.canvas.height = h
+    this.forceRedraw = true
   }
 
   dispose(): void { /* canvas managed externally */ }

@@ -1,11 +1,51 @@
 import * as THREE from 'three'
 
 const TERRAIN_SIZE = 300000  // 300 km
+const GRID_SEGMENTS = 64
+const RUNWAY_ELEV_M = 50
+const RUNWAY_HALF_LEN_M = 2500
+const RUNWAY_HALF_WIDTH_M = 45
+
+/** Deterministic procedural height (m MSL) at NED north/east coordinates. */
+export function sampleTerrainHeightM(northM: number, eastM: number): number {
+  const n = northM * 0.00008
+  const e = eastM * 0.00006
+  const hills =
+    Math.sin(n) * Math.cos(e) * 320 +
+    Math.sin(n * 2.4 + 1.1) * Math.sin(e * 1.9 + 0.7) * 110 +
+    Math.cos(n * 0.55 + 2.3) * Math.sin(e * 0.75) * 60
+
+  let h = RUNWAY_ELEV_M + Math.max(0, hills)
+
+  // Flatten runway / airbase pad near origin
+  const along = northM
+  const cross = Math.abs(eastM)
+  if (Math.abs(along) < RUNWAY_HALF_LEN_M && cross < RUNWAY_HALF_WIDTH_M * 4) {
+    const alongT = Math.abs(along) / RUNWAY_HALF_LEN_M
+    const crossT = cross / (RUNWAY_HALF_WIDTH_M * 4)
+    const flatBlend = Math.max(alongT, crossT)
+    h = RUNWAY_ELEV_M + (h - RUNWAY_ELEV_M) * flatBlend * flatBlend
+  }
+
+  return Math.max(0, h)
+}
 
 /**
- * Simple procedural terrain with stylised colour zones.
- * No grid lines — uses colour variation and faint texture noise to read as
- * countryside rather than a debug floor.
+ * Terrain elevation (m MSL) at an NED position.
+ */
+export function getTerrainHeightAtNED(positionNED: readonly [number, number, number]): number {
+  return sampleTerrainHeightM(positionNED[0], positionNED[1])
+}
+
+/**
+ * Height above terrain (m) — positive when airborne.
+ */
+export function getAGLM(positionNED: readonly [number, number, number]): number {
+  return getTerrainHeightAtNED(positionNED) - positionNED[2]
+}
+
+/**
+ * Simple procedural terrain with stylised colour zones and a heightfield mesh.
  */
 export class Terrain {
   private mesh: THREE.Mesh
@@ -13,8 +53,19 @@ export class Terrain {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene
-    const geo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, 64, 64)
+    const geo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, GRID_SEGMENTS, GRID_SEGMENTS)
     geo.rotateX(-Math.PI / 2)
+
+    const pos = geo.attributes.position as THREE.BufferAttribute
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i)
+      const z = pos.getZ(i)
+      // Plane local x → world east, z → world north (after rotateX)
+      const elev = sampleTerrainHeightM(z, x)
+      pos.setY(i, elev)
+    }
+    pos.needsUpdate = true
+    geo.computeVertexNormals()
 
     const tex = new THREE.CanvasTexture(buildTerrainCanvas())
     tex.wrapS = THREE.RepeatWrapping
@@ -29,7 +80,6 @@ export class Terrain {
 
     this.mesh = new THREE.Mesh(geo, mat)
     this.mesh.receiveShadow = true
-    this.mesh.position.y = 0
     scene.add(this.mesh)
   }
 
@@ -50,11 +100,9 @@ function buildTerrainCanvas(): HTMLCanvasElement {
   canvas.width = canvas.height = SIZE
   const ctx = canvas.getContext('2d')!
 
-  // Base countryside green
   ctx.fillStyle = '#3c5828'
   ctx.fillRect(0, 0, SIZE, SIZE)
 
-  // Subtle farmland patches — irregular rectangles in slightly different greens/tans
   const patches: Array<[number, number, number, number, string]> = [
     [30,  40,  120, 80,  '#4a6530'],
     [200, 20,  100, 110, '#55703a'],
@@ -67,7 +115,7 @@ function buildTerrainCanvas(): HTMLCanvasElement {
     [10,  420, 100, 70,  '#4b642a'],
     [300, 380, 130, 90,  '#5a7035'],
     [420, 420, 80,  80,  '#415c20'],
-    [210, 130, 80,  60,  '#c8b46a'],  // tan/sandy patch
+    [210, 130, 80,  60,  '#c8b46a'],
     [380, 140, 70,  55,  '#b8a855'],
     [100, 260, 80,  50,  '#c4b060'],
   ]
@@ -76,7 +124,6 @@ function buildTerrainCanvas(): HTMLCanvasElement {
     ctx.fillRect(x, y, w, h)
   }
 
-  // Faint noise grain for texture variation
   const imgData = ctx.getImageData(0, 0, SIZE, SIZE)
   const data = imgData.data
   for (let i = 0; i < data.length; i += 4) {
@@ -87,14 +134,11 @@ function buildTerrainCanvas(): HTMLCanvasElement {
   }
   ctx.putImageData(imgData, 0, 0)
 
-  // Faint track / unpaved-road lines
   ctx.strokeStyle = 'rgba(160,140,90,0.30)'
   ctx.lineWidth = 2
-  // Diagonal track
   ctx.beginPath(); ctx.moveTo(0, 200); ctx.lineTo(512, 300); ctx.stroke()
   ctx.beginPath(); ctx.moveTo(150, 0); ctx.lineTo(350, 512); ctx.stroke()
 
-  // Subtle hedge/treeline strips
   ctx.fillStyle = 'rgba(28,48,18,0.50)'
   for (let i = 0; i < 6; i++) {
     const x = (i * 89 + 20) % (SIZE - 10)

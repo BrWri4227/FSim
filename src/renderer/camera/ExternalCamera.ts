@@ -46,6 +46,7 @@ export class ExternalCamera {
 
     camera.position.copy(target).add(offset)
     camera.lookAt(target)
+    camera.near = 0.5
     camera.fov = 60
     camera.updateProjectionMatrix()
   }

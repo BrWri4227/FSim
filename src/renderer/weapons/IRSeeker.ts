@@ -31,15 +31,6 @@ export function angleBetweenVecsRad(a: Vec3, b: Vec3): number {
   return Math.acos(Math.max(-1, Math.min(1, dot)))
 }
 
-export function canSeekerLock(
-  seekerSpec: IRSeekerSpec,
-  heatKW: number,
-  offsetFromBoresightDeg: number
-): boolean {
-  return offsetFromBoresightDeg <= seekerSpec.gimbalLimitDeg &&
-         heatKW >= seekerSpec.minHeatSignatureKW
-}
-
 export function evaluateFlareSeduction(
   seekerSpec: IRSeekerSpec,
   targetHeatKW: number,
