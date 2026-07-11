@@ -1,11 +1,17 @@
-import { ProceduralFighterCockpit } from "../core/ProceduralFighterCockpit";
-import type { CockpitConfig } from "../core/types";
+import { DetailedCockpit } from "../core/DetailedCockpit";
 
-export const F16CCockpitConfig: CockpitConfig = {
-  displayName: "F-16C Fighting Falcon", className: "F16C", tubWidth: 1.2, tubLength: 2.8, panelAngle: -0.11, screenLayout: "mixed",
-  centerStick: false, sideStick: true, twinThrottle: false, hud: true, canopyBow: false, seatColor: 0x303533, accentColor: 0xffa000,
-};
+export class F16CCockpit extends DetailedCockpit {
+  constructor() {
+    super({
+      name: "F-16C Cockpit",
 
-export class F16CCockpit extends ProceduralFighterCockpit {
-  constructor() { super(F16CCockpitConfig); }
+      displays: [
+        { name: "LeftMFD", position: [-0.33, 0.98, -0.99], size: [0.35, 0.3] },
+        { name: "RightMFD", position: [0.33, 0.98, -0.99], size: [0.35, 0.3] },
+      ], gauges: [
+        { position: [-0.48, 0.70, -1.11] }, { position: [-0.36, 0.68, -1.11] },
+        { position: [0.36, 0.68, -1.11] }, { position: [0.48, 0.70, -1.11] },
+      ], sideStick: true, dualThrottle: false, canopyHeight: 1.15, canopyLength: 2.8,
+    });
+  }
 }

@@ -1,15 +1,13 @@
 import * as THREE from 'three'
 import { FA18Exterior } from './FA18Exterior'
-import { ProceduralFighterExterior } from '../aircraftmodels/core/ProceduralFighterExterior'
-import type { FighterExteriorConfig } from '../aircraftmodels/core/types'
-import { F15CExterior, F15CExteriorConfig } from '../aircraftmodels/f15c/F15CExterior'
-import { F16CExterior, F16CExteriorConfig } from '../aircraftmodels/f16c/F16CExterior'
-import { F22ARaptorExterior, F22ARaptorExteriorConfig } from '../aircraftmodels/f22a-raptor/F22ARaptorExterior'
-import { F35AExterior, F35AExteriorConfig } from '../aircraftmodels/f35a/F35AExterior'
-import { MiG29AExterior, MiG29AExteriorConfig } from '../aircraftmodels/mig29a/MiG29AExterior'
-import { Su27Exterior, Su27ExteriorConfig } from '../aircraftmodels/su27/Su27Exterior'
-import { Su35SExterior, Su35SExteriorConfig } from '../aircraftmodels/su35s/Su35SExterior'
-import { Su57Exterior, Su57ExteriorConfig } from '../aircraftmodels/su57/Su57Exterior'
+import { F15CExterior } from '../aircraftmodels/f15c/F15CExterior'
+import { F16CExterior } from '../aircraftmodels/f16c/F16CExterior'
+import { F22ARaptorExterior } from '../aircraftmodels/f22a-raptor/F22ARaptorExterior'
+import { F35AExterior } from '../aircraftmodels/f35a/F35AExterior'
+import { MiG29AExterior } from '../aircraftmodels/mig29a/MiG29AExterior'
+import { Su27Exterior } from '../aircraftmodels/su27/Su27Exterior'
+import { Su35SExterior } from '../aircraftmodels/su35s/Su35SExterior'
+import { Su57Exterior } from '../aircraftmodels/su57/Su57Exterior'
 
 // Per-aircraft procedural geometry. Fuselage nose points along local +X.
 // Aircraft.ts updateMesh applies a +90° Y quaternion bias to align with world -Z (NED North).
@@ -312,19 +310,10 @@ function placeNozzle(g: THREE.Group, positions: [number, number, number][]): voi
 }
 
 /**
- * Wrap a shared ProceduralFighterExterior so it plugs into the roster the same
- * way the hand-built meshes do.
- *
- * The core model is authored nose-along-−Z; every roster mesh here is nose-along-+X
- * so the shared MESH_BIAS_QUAT (+90° Y) rotates +X → world −Z (NED North). Rotating
- * the exterior −90° about Y maps its −Z nose onto +X — Ry(−90°)·(0,0,−1) = (1,0,0) —
- * keeping wings level and the correct left/right sides (+X stays +X).
- *
- * Gear meshes are reparented into a hideable 'gear-group' for the retract animation,
- * and nozzle anchors are placed at the engine exhausts (transformed through the same
- * −90° Y wrap: model (x,y,z) → g-local (−z, y, x)) for thruster plumes.
+ * Wrap a v2 procedural exterior (nose along −Z) for the roster mesh convention.
+ * Rotating −90° about Y maps −Z → +X so MESH_BIAS_QUAT orients the nose to NED North.
  */
-function buildProceduralJet(ext: ProceduralFighterExterior, config: FighterExteriorConfig): THREE.Group {
+function buildV2Exterior(ext: THREE.Group, nozzles: [number, number, number][]): THREE.Group {
   const g = new THREE.Group()
   ext.rotation.y = -Math.PI / 2
   g.add(ext)
@@ -333,16 +322,12 @@ function buildProceduralJet(ext: ProceduralFighterExterior, config: FighterExter
   gearGroup.name = 'gear-group'
   ext.add(gearGroup)
   for (const child of [...ext.children]) {
-    if (child !== gearGroup && /Gear|Wheel/.test(child.name)) gearGroup.add(child)
+    if (child !== gearGroup && /Strut|Wheel|Gear/.test(child.name)) gearGroup.add(child)
   }
   gearGroup.visible = true
 
-  const exhaustY = config.fuselageY - 0.12
-  const exhaustZ = config.engineZ + config.bodyLength * 0.31
-  const nozzles: [number, number, number][] = config.twinEngine
-    ? [[-exhaustZ, exhaustY, -config.engineSpacing], [-exhaustZ, exhaustY, config.engineSpacing]]
-    : [[-exhaustZ, exhaustY, 0]]
-  placeNozzle(g, nozzles)
+  // Model (x,y,z) → g-local (−z, y, x) after the −90° Y wrap.
+  placeNozzle(g, nozzles.map(([x, y, z]) => [-z, y, x] as [number, number, number]))
 
   g.rotation.y = Math.PI / 2
   return g
@@ -350,12 +335,15 @@ function buildProceduralJet(ext: ProceduralFighterExterior, config: FighterExter
 
 // ── F-15C Eagle ─────────────────────────────────────────────────────────────
 function buildF15C(_nation: 'USA' | 'RUS'): THREE.Group {
-  return buildProceduralJet(new F15CExterior({ landingGearDown: true }), F15CExteriorConfig)
+  return buildV2Exterior(
+    new F15CExterior({ landingGearDown: true }),
+    [[-0.78, 0.47, 4.55], [0.78, 0.47, 4.55]],
+  )
 }
 
 // ── F-16C Fighting Falcon ───────────────────────────────────────────────────
 function buildF16C(_nation: 'USA' | 'RUS'): THREE.Group {
-  return buildProceduralJet(new F16CExterior({ landingGearDown: true }), F16CExteriorConfig)
+  return buildV2Exterior(new F16CExterior({ landingGearDown: true }), [[0, 0.62, 4.75]])
 }
 
 // ── F/A-18C Hornet ──────────────────────────────────────────────────────────
@@ -435,32 +423,47 @@ function buildFA18E(_nation: 'USA' | 'RUS'): THREE.Group {
 
 // ── MiG-29 Fulcrum ──────────────────────────────────────────────────────────
 function buildMiG29(_nation: 'USA' | 'RUS'): THREE.Group {
-  return buildProceduralJet(new MiG29AExterior({ landingGearDown: true }), MiG29AExteriorConfig)
+  return buildV2Exterior(
+    new MiG29AExterior({ landingGearDown: true }),
+    [[-0.82, 0.4, 4.52], [0.82, 0.4, 4.52]],
+  )
 }
 
 // ── Su-27 Flanker ───────────────────────────────────────────────────────────
 function buildSu27(_nation: 'USA' | 'RUS'): THREE.Group {
-  return buildProceduralJet(new Su27Exterior({ landingGearDown: true }), Su27ExteriorConfig)
+  return buildV2Exterior(
+    new Su27Exterior({ landingGearDown: true }),
+    [[-1.0, 0.3, 5.25], [1.0, 0.3, 5.25]],
+  )
 }
 
 // ── Su-35 Flanker-E ─────────────────────────────────────────────────────────
 function buildSu35(_nation: 'USA' | 'RUS'): THREE.Group {
-  return buildProceduralJet(new Su35SExterior({ landingGearDown: true }), Su35SExteriorConfig)
+  return buildV2Exterior(
+    new Su35SExterior({ landingGearDown: true }),
+    [[-1.02, 0.29, 5.3], [1.02, 0.29, 5.3]],
+  )
 }
 
 // ── F-22A Raptor ────────────────────────────────────────────────────────────
 function buildF22(_nation: 'USA' | 'RUS'): THREE.Group {
-  return buildProceduralJet(new F22ARaptorExterior({ landingGearDown: true }), F22ARaptorExteriorConfig)
+  return buildV2Exterior(
+    new F22ARaptorExterior({ landingGearDown: true }),
+    [[-0.72, 0.66, 4.82], [0.72, 0.66, 4.82]],
+  )
 }
 
 // ── F-35A Lightning II ─────────────────────────────────────────────────────
 function buildF35A(_nation: 'USA' | 'RUS'): THREE.Group {
-  return buildProceduralJet(new F35AExterior({ landingGearDown: true }), F35AExteriorConfig)
+  return buildV2Exterior(new F35AExterior({ landingGearDown: true }), [[0, 0.61, 4.65]])
 }
 
 // ── Su-57 Felon ─────────────────────────────────────────────────────────────
 function buildSu57(_nation: 'USA' | 'RUS'): THREE.Group {
-  return buildProceduralJet(new Su57Exterior({ landingGearDown: true }), Su57ExteriorConfig)
+  return buildV2Exterior(
+    new Su57Exterior({ landingGearDown: true }),
+    [[-1.02, 0.38, 5.2], [1.02, 0.38, 5.2]],
+  )
 }
 
 // ── Fallback generic jet ────────────────────────────────────────────────────
@@ -535,20 +538,18 @@ export function getThrusterScale(engineCount: number): number {
   return engineCount > 1 ? 1.45 : 1.8
 }
 
-// Procedural-model ids (all except fa18c/fa18e) share the core landing gear:
-// main wheel bottom sits at (fuselageY − 1.81) below the model origin, so
-// gearDown ≈ 1.81 − fuselageY. gearUp is the retracted belly/fin clearance.
+// v2 procedural models: main wheel bottom ≈ y −1.02 below origin.
 const GEAR_CLEARANCE: Record<string, { gearUp: number; gearDown: number }> = {
-  f15c:  { gearUp: 0.35, gearDown: 0.96 },
-  f16c:  { gearUp: 0.32, gearDown: 1.06 },
+  f15c:  { gearUp: 0.38, gearDown: 1.55 },
+  f16c:  { gearUp: 0.35, gearDown: 1.55 },
   fa18c: { gearUp: 0.50, gearDown: 1.21 },
   fa18e: { gearUp: 0.55, gearDown: 1.60 },
-  mig29: { gearUp: 0.35, gearDown: 0.99 },
-  su27:  { gearUp: 0.35, gearDown: 0.96 },
-  su35:  { gearUp: 0.35, gearDown: 0.95 },
-  f22:   { gearUp: 0.35, gearDown: 1.01 },
-  f35a:  { gearUp: 0.35, gearDown: 1.01 },
-  su57:  { gearUp: 0.35, gearDown: 0.99 },
+  mig29: { gearUp: 0.38, gearDown: 1.55 },
+  su27:  { gearUp: 0.38, gearDown: 1.55 },
+  su35:  { gearUp: 0.38, gearDown: 1.55 },
+  f22:   { gearUp: 0.38, gearDown: 1.55 },
+  f35a:  { gearUp: 0.35, gearDown: 1.55 },
+  su57:  { gearUp: 0.38, gearDown: 1.55 },
 }
 
 export function getGroundClearance(aircraftId: string, gearDown: boolean): number {
