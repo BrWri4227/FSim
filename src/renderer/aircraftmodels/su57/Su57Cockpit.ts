@@ -1,11 +1,14 @@
-import { ProceduralFighterCockpit } from "../core/ProceduralFighterCockpit";
-import type { CockpitConfig } from "../core/types";
+import { DetailedCockpit } from "../core/DetailedCockpit";
 
-export const Su57CockpitConfig: CockpitConfig = {
-  displayName: "Su-57 Felon", className: "Su57", tubWidth: 1.38, tubLength: 3.1, panelAngle: -0.1, screenLayout: "mixed",
-  centerStick: true, sideStick: false, twinThrottle: true, hud: true, canopyBow: false, seatColor: 0x303533, accentColor: 0xffa000,
-};
+export class Su57Cockpit extends DetailedCockpit {
+  constructor() {
+    super({
+      name: "Su-57 Cockpit",
 
-export class Su57Cockpit extends ProceduralFighterCockpit {
-  constructor() { super(Su57CockpitConfig); }
+      displays: [
+        { name: "LeftLargeDisplay", position: [-0.27, 1.02, -0.99], size: [0.46, 0.42], buttons: false },
+        { name: "RightLargeDisplay", position: [0.27, 1.02, -0.99], size: [0.46, 0.42], buttons: false },
+      ], russianStyle: true, sideStick: true, dualThrottle: true, canopyGold: true, consoleRows: 7,
+    });
+  }
 }

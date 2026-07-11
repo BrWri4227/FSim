@@ -17,21 +17,19 @@ import { MiG29ACockpit } from '../aircraftmodels/mig29a/MiG29ACockpit'
 import { Su27Cockpit } from '../aircraftmodels/su27/Su27Cockpit'
 import { Su35SCockpit } from '../aircraftmodels/su35s/Su35SCockpit'
 import { Su57Cockpit } from '../aircraftmodels/su57/Su57Cockpit'
-
-/** A cockpit interior whose stick + throttle can be driven from control inputs. */
-type AnimatedCockpit = THREE.Group & { setControls(pitch: number, roll: number, throttle: number): void }
+import { prepareCockpitForSim, type AnimatedCockpit } from '../aircraftmodels/core/CockpitSimAdapter'
 
 /** Roster id → detailed animated cockpit factory. Ids not listed fall back to the placeholder. */
 const DETAILED_COCKPIT_FACTORIES: Record<string, () => AnimatedCockpit> = {
   fa18e: () => new FA18Cockpit(),
-  f15c: () => new F15CCockpit(),
-  f16c: () => new F16CCockpit(),
-  f22: () => new F22ARaptorCockpit(),
-  f35a: () => new F35ACockpit(),
-  mig29: () => new MiG29ACockpit(),
-  su27: () => new Su27Cockpit(),
-  su35: () => new Su35SCockpit(),
-  su57: () => new Su57Cockpit(),
+  f15c: () => prepareCockpitForSim('f15c', new F15CCockpit()),
+  f16c: () => prepareCockpitForSim('f16c', new F16CCockpit()),
+  f22: () => prepareCockpitForSim('f22', new F22ARaptorCockpit()),
+  f35a: () => prepareCockpitForSim('f35a', new F35ACockpit()),
+  mig29: () => prepareCockpitForSim('mig29', new MiG29ACockpit()),
+  su27: () => prepareCockpitForSim('su27', new Su27Cockpit()),
+  su35: () => prepareCockpitForSim('su35', new Su35SCockpit()),
+  su57: () => prepareCockpitForSim('su57', new Su57Cockpit()),
 }
 
 /**
