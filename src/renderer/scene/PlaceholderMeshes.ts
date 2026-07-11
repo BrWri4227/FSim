@@ -182,33 +182,6 @@ function addNozzleAt(
   return rearX - depth
 }
 
-/** TVC bell mounted at nacelle tail; returns exhaust X. */
-function addTvcAt(
-  g: THREE.Group, rearX: number, y: number, z: number,
-  rIn: number, rOut: number, depth: number
-): number {
-  addCylX(g, mm(0x333333), rIn, rOut, depth, rearX - depth / 2, y, z, 10)
-  return rearX - depth
-}
-
-/** Rectangular nozzle mounted at nacelle tail; returns exhaust X. */
-function addRectNozzleAt(
-  g: THREE.Group, rearX: number, y: number, z: number,
-  h: number, w: number, depth = 0.14
-): number {
-  addBox(g, mm(0x333333), depth, h, w, rearX - depth / 2, y, z)
-  return rearX - depth
-}
-
-/** Wing fence standing on the wing upper surface. */
-function addWingFence(
-  g: THREE.Group, m: THREE.Material,
-  x: number, wingY: number, z: number,
-  height: number, wingThick = 0.12
-): void {
-  addBox(g, m, 0.04, height, 0.28, x, wingY + wingThick / 2 + height / 2, z)
-}
-
 /** LEX pair blending from fuselage shoulders. */
 function addLexPair(
   g: THREE.Group, m: THREE.Material,
@@ -462,321 +435,32 @@ function buildFA18E(_nation: 'USA' | 'RUS'): THREE.Group {
 
 // ── MiG-29 Fulcrum ──────────────────────────────────────────────────────────
 function buildMiG29(_nation: 'USA' | 'RUS'): THREE.Group {
-  const g = new THREE.Group()
-  const C = 0x887766
-  const Cw = C - 0x0f0f0e
-  const Cd = C - 0x1a1a18
-  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
-  const fLen = 9.5, fH = 1.05, fW = 1.55
-
-  addFuselage(g, fm, fLen, fH, fW)
-  const noseTip = addNoseCone(g, fm, 6.0, 2.5, 0.52)
-  addPitotAt(g, addRadomeCap(g, noseTip, 0.52))
-
-  addCanopy(g, 3.1, fH / 2 + 0.045, 0.48, 0.50)
-
-  addLexPair(g, bm(C - 0x080808), fW, 1.5, 0.05, 5.0, 0.20, 1.7, 0.15)
-
-  const iD = 0.85
-  addSideIntakePair(g, dm, fW, fH, 1.8, 2.8, 0.7, iD, 0.06)
-
-  const wingY = -0.28
-  const wingRoot = sideZ(fW, 0.10)
-  addWing(g, wm, 1, 2.0, wingY, wingRoot, 4.2, 1.6, 3.9, 0.95, 0.12)
-  addWing(g, wm, -1, 2.0, wingY, wingRoot, 4.2, 1.6, 3.9, 0.95, 0.12)
-  addWingFence(g, wm, 0.5, wingY, wingRoot + 0.8, 0.32, 0.12)
-  addWingFence(g, wm, 0.5, wingY, -(wingRoot + 0.8), 0.32, 0.12)
-
-  const tailZ = sideZ(fW, 0.13)
-  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, fH / 2 + 1.0, tailZ, 0.07)
-  addBox(g, wm, 2.2, 2.0, 0.13, -3.8, fH / 2 + 1.0, -tailZ, -0.07)
-
-  const stabZ = sideZ(fW, 2.4)
-  addBox(g, wm, 2.0, 0.10, 2.4, -4.3, wingY + 0.06, stabZ)
-  addBox(g, wm, 2.0, 0.10, 2.4, -4.3, wingY + 0.06, -stabZ)
-
-  const engZ = sideZ(fW, 0.65 * 2) * 0.85
-  const nLen = 4.8, nCx = -3.0
-  addCylX(g, dm, 0.42, 0.52, nLen, nCx, 0.0, engZ, 12)
-  addCylX(g, dm, 0.42, 0.52, nLen, nCx, 0.0, -engZ, 12)
-  const exL = addNozzleAt(g, cylRearX(nCx, nLen), 0.0, engZ, 0.52, 0.28)
-  const exR = addNozzleAt(g, cylRearX(nCx, nLen), 0.0, -engZ, 0.52, 0.28)
-
-  addFlapsGroup(g, 0.2, 0.85, 2.0, 1.2, wingY)
-  addGearGroup(g, 3.8, 0.8, 1.0, -fH / 2, 0.55, 0.22)
-  placeNozzle(g, [[exL, 0.0, engZ], [exR, 0.0, -engZ]])
-  g.rotation.y = Math.PI / 2
-  return g
+  return buildProceduralJet(new MiG29AExterior({ landingGearDown: true }), MiG29AExteriorConfig)
 }
 
 // ── Su-27 Flanker ───────────────────────────────────────────────────────────
 function buildSu27(_nation: 'USA' | 'RUS'): THREE.Group {
-  const g = new THREE.Group()
-  const C = 0x998866
-  const Cw = C - 0x101010
-  const Cd = C - 0x1c1c1c
-  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
-  const fLen = 12.0, fH = 1.1, fW = 1.5
-
-  addFuselage(g, fm, fLen, fH, fW)
-  addBox(g, bm(C - 0x0a0a0a), 5.5, 0.5, 0.85, -0.5, fH / 2 + 0.10, 0)
-  const noseTip = addNoseCone(g, fm, 7.6, 3.2, 0.55)
-  addPitotAt(g, addRadomeCap(g, noseTip, 0.55))
-
-  addCanopy(g, 4.0, fH / 2 + 0.02, 0.50, 0.50)
-
-  addLexPair(g, bm(C - 0x080808), fW, 1.5, -0.05, 5.5, 0.20, 2.0, 0.10)
-
-  const iD = 0.85
-  addSideIntakePair(g, dm, fW, fH, 2.0, 3.0, 0.72, iD, 0.04)
-
-  const wingY = -0.30
-  const wingRoot = sideZ(fW, 0.10)
-  addWing(g, wm, 1, 2.0, wingY, wingRoot, 5.3, 1.9, 4.6, 1.05, 0.12)
-  addWing(g, wm, -1, 2.0, wingY, wingRoot, 5.3, 1.9, 4.6, 1.05, 0.12)
-  addWingFence(g, wm, 0.2, wingY, wingRoot + 1.0, 0.38, 0.12)
-  addWingFence(g, wm, 0.2, wingY, -(wingRoot + 1.0), 0.38, 0.12)
-
-  const tailZ = sideZ(fW, 0.13)
-  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, fH / 2 + 1.1, tailZ, 0.06)
-  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, fH / 2 + 1.1, -tailZ, -0.06)
-
-  const stabZ = sideZ(fW, 2.8)
-  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, wingY + 0.05, stabZ)
-  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, wingY + 0.05, -stabZ)
-
-  const engZ = sideZ(fW, 0.72 * 2) * 0.88
-  const nLen = 6.0, nCx = -3.5
-  addCylX(g, dm, 0.45, 0.55, nLen, nCx, -0.05, engZ, 12)
-  addCylX(g, dm, 0.45, 0.55, nLen, nCx, -0.05, -engZ, 12)
-  const exL = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.55, 0.30)
-  const exR = addNozzleAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.55, 0.30)
-
-  addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, wingY)
-  addGearGroup(g, 5.0, 0.5, 1.0, -fH / 2, 0.55, 0.24)
-  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
-  g.rotation.y = Math.PI / 2
-  return g
+  return buildProceduralJet(new Su27Exterior({ landingGearDown: true }), Su27ExteriorConfig)
 }
 
 // ── Su-35 Flanker-E ─────────────────────────────────────────────────────────
 function buildSu35(_nation: 'USA' | 'RUS'): THREE.Group {
-  const g = new THREE.Group()
-  const C = 0x778866
-  const Cw = C - 0x101010
-  const Cd = C - 0x1c1c1c
-  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
-  const fLen = 12.0, fH = 1.1, fW = 1.5
-
-  addFuselage(g, fm, fLen, fH, fW)
-  addBox(g, bm(C - 0x0a0a0a), 5.5, 0.5, 0.85, -0.5, fH / 2 + 0.10, 0)
-  const noseTip = addNoseCone(g, fm, 7.6, 3.2, 0.55)
-  addPitotAt(g, addRadomeCap(g, noseTip, 0.55))
-
-  // Nose chines flush with fuselage sides
-  const chineD = 0.55
-  const chineZ = sideZ(fW, chineD)
-  addBox(g, bm(Cd), 3.5, 0.18, chineD, 4.5, 0.0, chineZ)
-  addBox(g, bm(Cd), 3.5, 0.18, chineD, 4.5, 0.0, -chineZ)
-  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), mm(0x222222))
-  irst.position.set(5.5, 0.0, chineZ * 0.55)
-  g.add(irst)
-
-  addCanopy(g, 4.0, fH / 2 + 0.02, 0.50, 0.50)
-
-  addLexPair(g, bm(C - 0x080808), fW, 1.5, -0.05, 5.5, 0.20, 2.0, 0.10)
-  addSideIntakePair(g, dm, fW, fH, 2.0, 3.0, 0.72, 0.85, 0.04)
-
-  const wingY = -0.30
-  const wingRoot = sideZ(fW, 0.10)
-  addWing(g, wm, 1, 2.0, wingY, wingRoot, 5.4, 1.8, 4.7, 1.00, 0.12)
-  addWing(g, wm, -1, 2.0, wingY, wingRoot, 5.4, 1.8, 4.7, 1.00, 0.12)
-  addWingFence(g, wm, 0.2, wingY, wingRoot + 1.05, 0.38, 0.12)
-  addWingFence(g, wm, 0.2, wingY, -(wingRoot + 1.05), 0.38, 0.12)
-
-  const tailZ = sideZ(fW, 0.13)
-  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, fH / 2 + 1.1, tailZ, 0.06)
-  addBox(g, wm, 2.5, 2.2, 0.13, -5.0, fH / 2 + 1.1, -tailZ, -0.06)
-
-  const stabZ = sideZ(fW, 2.8)
-  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, wingY + 0.05, stabZ)
-  addBox(g, wm, 2.2, 0.10, 2.8, -5.5, wingY + 0.05, -stabZ)
-
-  const engZ = sideZ(fW, 0.72 * 2) * 0.88
-  const nLen = 6.0, nCx = -3.5
-  addCylX(g, dm, 0.45, 0.55, nLen, nCx, -0.05, engZ, 12)
-  addCylX(g, dm, 0.45, 0.55, nLen, nCx, -0.05, -engZ, 12)
-  const exL = addTvcAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.55, 0.48, 0.55)
-  const exR = addTvcAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.55, 0.48, 0.55)
-
-  addFlapsGroup(g, -0.2, 1.1, 2.4, 1.4, wingY)
-  addGearGroup(g, 5.0, 0.5, 1.0, -fH / 2, 0.55, 0.24)
-  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
-  g.rotation.y = Math.PI / 2
-  return g
+  return buildProceduralJet(new Su35SExterior({ landingGearDown: true }), Su35SExteriorConfig)
 }
 
 // ── F-22A Raptor ────────────────────────────────────────────────────────────
 function buildF22(_nation: 'USA' | 'RUS'): THREE.Group {
-  const g = new THREE.Group()
-  const C = 0x4a5568
-  const Cw = C - 0x0c0c0d
-  const Cd = C - 0x181819
-  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
-  const fLen = 11.5, fH = 1.05, fW = 1.45
-
-  addFuselage(g, fm, fLen, fH, fW)
-  const noseTip = addNoseCone(g, fm, 7.25, 3.0, 0.48)
-  addPitotAt(g, addRadomeCap(g, noseTip, 0.48))
-
-  const chineD = 0.55
-  const chineZ = sideZ(fW, chineD)
-  addBox(g, bm(C - 0x060608), 3.5, 0.12, chineD, 5.5, fH / 2 - 0.34, chineZ)
-  addBox(g, bm(C - 0x060608), 3.5, 0.12, chineD, 5.5, fH / 2 - 0.34, -chineZ)
-
-  const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(0.46, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    canopyMat()
-  )
-  canopy.position.set(3.5, fH / 2 + 0.0, 0)
-  canopy.castShadow = true
-  g.add(canopy)
-
-  const dsiD = 0.75
-  const dsiZ = sideZ(fW, dsiD)
-  addBox(g, dm, 1.8, 0.55, dsiD, 2.2, -0.12, dsiZ)
-  addBox(g, dm, 1.8, 0.55, dsiD, 2.2, -0.12, -dsiZ)
-
-  const wingY = -0.30
-  addWing(g, wm, 1, 1.8, wingY, sideZ(fW, 0.10), 4.8, 1.4, 4.2, 1.35, 0.11)
-  addWing(g, wm, -1, 1.8, wingY, sideZ(fW, 0.10), 4.8, 1.4, 4.2, 1.35, 0.11)
-
-  const tailZ = sideZ(fW, 0.12)
-  addCantedVStab(g, wm, -4.2, fH / 2, tailZ, 2.0, 1.9, 0.12, 0.47)
-  addCantedVStab(g, wm, -4.2, fH / 2, -tailZ, 2.0, 1.9, 0.12, -0.47)
-
-  const stabZ = sideZ(fW, 2.2)
-  addBox(g, wm, 1.6, 0.09, 2.2, -4.8, wingY + 0.12, stabZ)
-  addBox(g, wm, 1.6, 0.09, 2.2, -4.8, wingY + 0.12, -stabZ)
-
-  const engZ = sideZ(fW, 0.58 * 2) * 0.88
-  const nLen = 4.2, nCx = -3.2
-  addCylX(g, dm, 0.40, 0.48, nLen, nCx, -0.08, engZ, 12)
-  addCylX(g, dm, 0.40, 0.48, nLen, nCx, -0.08, -engZ, 12)
-  const exL = addRectNozzleAt(g, cylRearX(nCx, nLen), -0.08, engZ, 0.55, 0.55)
-  const exR = addRectNozzleAt(g, cylRearX(nCx, nLen), -0.08, -engZ, 0.55, 0.55)
-
-  addFlapsGroup(g, 0.0, 0.75, 2.0, 1.1, wingY)
-  addGearGroup(g, 4.5, 0.8, 1.0, -fH / 2, 0.52, 0.22)
-  placeNozzle(g, [[exL, -0.08, engZ], [exR, -0.08, -engZ]])
-  g.rotation.y = Math.PI / 2
-  return g
+  return buildProceduralJet(new F22ARaptorExterior({ landingGearDown: true }), F22ARaptorExteriorConfig)
 }
 
 // ── F-35A Lightning II ─────────────────────────────────────────────────────
 function buildF35A(_nation: 'USA' | 'RUS'): THREE.Group {
-  const g = new THREE.Group()
-  const C = 0x5a6678
-  const Cw = C - 0x0d0d0e
-  const Cd = C - 0x1a1a1b
-  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
-  const fLen = 9.5, fH = 1.15, fW = 1.35
-
-  addFuselage(g, fm, fLen, fH, fW)
-  addBox(g, bm(C - 0x050507), 7.0, 0.22, 0.70, 1.5, fH / 2 - 0.15, 0)
-  const noseTip = addNoseCone(g, fm, 6.05, 2.6, 0.46)
-  addPitotAt(g, addRadomeCap(g, noseTip, 0.46))
-
-  const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(0.55, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.58),
-    canopyMat()
-  )
-  canopy.position.set(2.8, fH / 2 + 0.0, 0)
-  canopy.castShadow = true
-  g.add(canopy)
-
-  const dsiD = 0.70
-  const dsiZ = sideZ(fW, dsiD)
-  addBox(g, dm, 1.6, 0.50, dsiD, 1.8, -0.15, dsiZ)
-  addBox(g, dm, 1.6, 0.50, dsiD, 1.8, -0.15, -dsiZ)
-
-  const wingY = -0.26
-  addWing(g, wm, 1, 1.4, wingY, sideZ(fW, 0.10), 3.5, 1.2, 3.0, 0.90, 0.10)
-  addWing(g, wm, -1, 1.4, wingY, sideZ(fW, 0.10), 3.5, 1.2, 3.0, 0.90, 0.10)
-
-  const tailZ = sideZ(fW, 0.11)
-  addCantedVStab(g, wm, -3.8, fH / 2, tailZ, 1.6, 1.5, 0.11, 0.40)
-  addCantedVStab(g, wm, -3.8, fH / 2, -tailZ, 1.6, 1.5, 0.11, -0.40)
-
-  const stabZ = sideZ(fW, 1.8)
-  addBox(g, wm, 1.4, 0.08, 1.8, -4.3, wingY + 0.06, stabZ)
-  addBox(g, wm, 1.4, 0.08, 1.8, -4.3, wingY + 0.06, -stabZ)
-
-  const nLen = 3.8, nCx = -2.8
-  addCylX(g, dm, 0.38, 0.46, nLen, nCx, -0.05, 0, 12)
-  const ex = addRectNozzleAt(g, cylRearX(nCx, nLen), -0.05, 0, 0.50, 0.50)
-
-  addFlapsGroup(g, 0.2, 0.62, 1.6, 0.95, wingY)
-  addGearGroup(g, 3.8, 0.6, 0.85, -fH / 2, 0.50, 0.21)
-  placeNozzle(g, [[ex, -0.05, 0]])
-  g.rotation.y = Math.PI / 2
-  return g
+  return buildProceduralJet(new F35AExterior({ landingGearDown: true }), F35AExteriorConfig)
 }
 
 // ── Su-57 Felon ─────────────────────────────────────────────────────────────
 function buildSu57(_nation: 'USA' | 'RUS'): THREE.Group {
-  const g = new THREE.Group()
-  const C = 0x6a7068
-  const Cw = C - 0x101010
-  const Cd = C - 0x1c1c1c
-  const fm = bm(C), wm = bm(Cw), dm = bm(Cd)
-  const fLen = 12.5, fH = 1.05, fW = 1.40
-
-  addFuselage(g, fm, fLen, fH, fW)
-  addBox(g, bm(C - 0x080808), 8.0, 0.35, 1.20, 0.5, fH / 2 + 0.02, 0)
-  const noseTip = addNoseCone(g, fm, 7.75, 3.0, 0.50)
-  addPitotAt(g, addRadomeCap(g, noseTip, 0.50))
-
-  const chineD = 0.50
-  const chineZ = sideZ(fW, chineD)
-  addBox(g, bm(Cd), 3.8, 0.16, chineD, 5.0, 0.05, chineZ)
-  addBox(g, bm(Cd), 3.8, 0.16, chineD, 5.0, 0.05, -chineZ)
-  const irst = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 10), mm(0x222222))
-  irst.position.set(5.8, 0.05, chineZ * 0.55)
-  g.add(irst)
-
-  addCanopy(g, 4.2, fH / 2 + 0.035, 0.48, 0.48)
-
-  addLexPair(g, bm(C - 0x070707), fW, 1.5, -0.02, 5.0, 0.18, 1.85, 0.12)
-
-  const iD = 0.80
-  addSideIntakePair(g, dm, fW, fH, 2.2, 2.5, 0.65, iD, 0.04)
-
-  const wingY = -0.28
-  const wingRoot = sideZ(fW, 0.10)
-  addWing(g, wm, 1, 2.0, wingY, wingRoot, 5.2, 1.7, 4.5, 1.05, 0.11)
-  addWing(g, wm, -1, 2.0, wingY, wingRoot, 5.2, 1.7, 4.5, 1.05, 0.11)
-
-  const tailZ = sideZ(fW, 0.12)
-  addBox(g, wm, 2.0, 1.8, 0.12, -4.8, fH / 2 + 0.90, tailZ, 0.08)
-  addBox(g, wm, 2.0, 1.8, 0.12, -4.8, fH / 2 + 0.90, -tailZ, -0.08)
-
-  const stabZ = sideZ(fW, 2.5)
-  addBox(g, wm, 2.0, 0.09, 2.5, -5.3, wingY + 0.06, stabZ)
-  addBox(g, wm, 2.0, 0.09, 2.5, -5.3, wingY + 0.06, -stabZ)
-
-  const engZ = sideZ(fW, 0.85 * 2) * 0.92
-  const nLen = 5.5, nCx = -3.3
-  addCylX(g, dm, 0.42, 0.50, nLen, nCx, -0.05, engZ, 12)
-  addCylX(g, dm, 0.42, 0.50, nLen, nCx, -0.05, -engZ, 12)
-  const exL = addTvcAt(g, cylRearX(nCx, nLen), -0.05, engZ, 0.50, 0.42, 0.50)
-  const exR = addTvcAt(g, cylRearX(nCx, nLen), -0.05, -engZ, 0.50, 0.42, 0.50)
-
-  addFlapsGroup(g, -0.1, 1.0, 2.2, 1.3, wingY)
-  addGearGroup(g, 5.2, 0.5, 1.05, -fH / 2, 0.55, 0.23)
-  placeNozzle(g, [[exL, -0.05, engZ], [exR, -0.05, -engZ]])
-  g.rotation.y = Math.PI / 2
-  return g
+  return buildProceduralJet(new Su57Exterior({ landingGearDown: true }), Su57ExteriorConfig)
 }
 
 // ── Fallback generic jet ────────────────────────────────────────────────────
@@ -851,17 +535,20 @@ export function getThrusterScale(engineCount: number): number {
   return engineCount > 1 ? 1.45 : 1.8
 }
 
+// Procedural-model ids (all except fa18c/fa18e) share the core landing gear:
+// main wheel bottom sits at (fuselageY − 1.81) below the model origin, so
+// gearDown ≈ 1.81 − fuselageY. gearUp is the retracted belly/fin clearance.
 const GEAR_CLEARANCE: Record<string, { gearUp: number; gearDown: number }> = {
-  f15c:  { gearUp: 0.55, gearDown: 1.27 },
-  f16c:  { gearUp: 0.45, gearDown: 1.15 },
+  f15c:  { gearUp: 0.35, gearDown: 0.96 },
+  f16c:  { gearUp: 0.32, gearDown: 1.06 },
   fa18c: { gearUp: 0.50, gearDown: 1.21 },
   fa18e: { gearUp: 0.55, gearDown: 1.60 },
-  mig29: { gearUp: 0.53, gearDown: 1.30 },
-  su27:  { gearUp: 0.55, gearDown: 1.34 },
-  su35:  { gearUp: 0.55, gearDown: 1.34 },
-  f22:   { gearUp: 0.52, gearDown: 1.29 },
-  f35a:  { gearUp: 0.57, gearDown: 1.32 },
-  su57:  { gearUp: 0.52, gearDown: 1.32 },
+  mig29: { gearUp: 0.35, gearDown: 0.99 },
+  su27:  { gearUp: 0.35, gearDown: 0.96 },
+  su35:  { gearUp: 0.35, gearDown: 0.95 },
+  f22:   { gearUp: 0.35, gearDown: 1.01 },
+  f35a:  { gearUp: 0.35, gearDown: 1.01 },
+  su57:  { gearUp: 0.35, gearDown: 0.99 },
 }
 
 export function getGroundClearance(aircraftId: string, gearDown: boolean): number {
