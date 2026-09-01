@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint src",
     "test": "vitest run",
+    "build:server": "tsc -p tsconfig.server.json && node -e \"require('fs').writeFileSync('dist-server/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\"",
+    "server": "npm run build:server && node dist-server/server/standalone.js",
     "ci": "npm run typecheck && npm run lint && npm run test",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win nsis --x64 --config.win.signAndEditExecutable=false",

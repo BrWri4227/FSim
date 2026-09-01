@@ -822,6 +822,18 @@ export class AudioManager {
     if (this.ctx.state === 'suspended') void this.ctx.resume()
   }
 
+  /** Suspend / resume the whole audio graph — used by the in-flight pause menu. */
+  setPaused(paused: boolean): void {
+    try {
+      if (paused) {
+        this.stopGun()
+        void this.ctx.suspend()
+      } else {
+        void this.ctx.resume()
+      }
+    } catch { /* audio context may already be closed */ }
+  }
+
   // ── Private helpers ───────────────────────────────────────────────────────
 
   private playTone(freq: number, gain: number, duration: number): void {

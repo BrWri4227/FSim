@@ -4,6 +4,7 @@ node_modules/
 # Build outputs (generated — run npm run dev or npm run build after clone)
 dist/
 dist-electron/
+dist-server/
 out/
 release/
 release-temp/

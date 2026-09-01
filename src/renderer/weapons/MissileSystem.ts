@@ -101,7 +101,7 @@ export function warmupMissileVisuals(
 let sharedMissileBodyMat: THREE.MeshStandardMaterial | undefined
 let sharedMissileFinMat: THREE.MeshStandardMaterial | undefined
 
-function getSharedMissileMaterials(): [THREE.MeshStandardMaterial, THREE.MeshStandardMaterial] {
+export function getSharedMissileMaterials(): [THREE.MeshStandardMaterial, THREE.MeshStandardMaterial] {
   if (!sharedMissileBodyMat) {
     sharedMissileBodyMat = new THREE.MeshStandardMaterial({
       color: 0xf0f0f0, metalness: 0.55, roughness: 0.45,

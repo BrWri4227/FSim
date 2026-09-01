@@ -1,9 +1,20 @@
 import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent } from './MultiplayerTypes'
+import { quantizePlayerState, missileSetKey } from '../../shared/network/serialization'
 
 const CONNECT_TIMEOUT_MS = 8000
 const MAX_INBOUND_HITS = 256
 /** Outbound state snapshots — 20 Hz instead of sim rate (60 Hz). */
 const STATE_SEND_INTERVAL_SEC = 1 / 20
+/** Full countermeasure re-sync cadence while flares/chaff are active (they age locally between). */
+const CM_RESYNC_INTERVAL_SEC = 0.5
+
+/** Build the WebSocket URL. Accepts a bare host, `host:port`, or a full `ws(s)://` URL. */
+export function resolveSessionUrl(host: string, port: number): string {
+  const trimmed = host.trim().replace(/\/+$/, '')
+  if (/^wss?:\/\//i.test(trimmed)) return trimmed
+  if (/:\d+$/.test(trimmed)) return `ws://${trimmed}`
+  return `ws://${trimmed}:${port}`
+}
 
 interface RemoteSnapshot {
   playerId: string
@@ -20,8 +31,11 @@ export class MultiplayerClient {
   private profile: NetPlayerProfile
   private rosterListeners: Array<() => void> = []
   private stateSendAccumSec = 0
+  private cmSendAccumSec = 0
   private pendingState: NetPlayerState | null = null
   private lastSentRadarMode: string | null = null
+  private lastSentMissileKey = ''
+  private lastCmSignature = '0:0'
 
   constructor(profile: NetPlayerProfile) {
     this.profile = profile
@@ -29,7 +43,7 @@ export class MultiplayerClient {
 
   async connect(config: MultiplayerConfig): Promise<void> {
     if (config.mode === 'single') return
-    const url = `ws://${config.host}:${config.port}`
+    const url = resolveSessionUrl(config.host, config.port)
     const ws = new WebSocket(url)
     this.ws = ws
 
@@ -177,13 +191,33 @@ export class MultiplayerClient {
     const state = this.pendingState
     const critical = state.ejected || state.structuralFailure
     const radarChanged = state.radar.mode !== this.lastSentRadarMode
+    const missileKey = missileSetKey(state.missiles)
+    const missilesChanged = missileKey !== this.lastSentMissileKey
 
     this.stateSendAccumSec += dtSec
-    if (!critical && !radarChanged && this.stateSendAccumSec < STATE_SEND_INTERVAL_SEC) return
+    this.cmSendAccumSec += dtSec
+    const due = this.stateSendAccumSec >= STATE_SEND_INTERVAL_SEC
+    if (!critical && !radarChanged && !missilesChanged && !due) return
+
+    // Attach the countermeasure payload only when the flare/chaff set changed
+    // (dispense or expiry) or on a periodic re-sync — the receiver ages its
+    // existing clouds locally, so 20 Hz retransmission is pure waste.
+    const cm = state.countermeasures
+    const cmSig = cm ? `${cm.flares.length}:${cm.chaffClouds.length}` : '0:0'
+    const cmChanged = cmSig !== this.lastCmSignature
+    const cmActive = !!cm && (cm.flares.length > 0 || cm.chaffClouds.length > 0)
+    const includeCm = critical || cmChanged || (cmActive && this.cmSendAccumSec >= CM_RESYNC_INTERVAL_SEC)
+
+    const outbound: NetPlayerState = includeCm ? state : { ...state, countermeasures: null }
 
     this.stateSendAccumSec = 0
     this.lastSentRadarMode = state.radar.mode
-    this.send({ type: 'state', state })
+    this.lastSentMissileKey = missileKey
+    if (includeCm) {
+      this.cmSendAccumSec = 0
+      this.lastCmSignature = cmSig
+    }
+    this.send({ type: 'state', state: quantizePlayerState(outbound) })
   }
 
   /** Tell the session server we are back in the lobby (clears flight state for roster). */
@@ -211,8 +245,11 @@ export class MultiplayerClient {
     this.localPlayerId = null
     this.inboundHits.length = 0
     this.stateSendAccumSec = 0
+    this.cmSendAccumSec = 0
     this.pendingState = null
     this.lastSentRadarMode = null
+    this.lastSentMissileKey = ''
+    this.lastCmSignature = '0:0'
     this.notifyRosterChanged()
   }
 

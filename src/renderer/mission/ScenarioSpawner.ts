@@ -8,6 +8,8 @@ import { GROUND_TARGET_SPECS } from '../data/groundTargets/catalog'
 import { R73 } from '../data/weapons/r73'
 import { getStoreDragPenalty } from '../data/weapons/catalog'
 import { RAD2DEG } from '../utils/MathUtils'
+import { getRunwaySpawnNED } from '../scene/Terrain'
+import { getGroundClearance } from '../scene/PlaceholderMeshes'
 
 const DEFAULT_IR_STORES: LoadedStore[] = [
   {
@@ -36,6 +38,12 @@ export interface SpawnCounts {
 /** Apply scenario player start position/velocity and sync the RK4 state vector. */
 export function applyPlayerSpawn(player: PlayerAircraft, scenario: ScenarioDescriptor): void {
   const spawn = scenario.playerSpawn
+
+  if (spawn.onRunway) {
+    applyRunwaySpawn(player)
+    return
+  }
+
   if (!spawn.positionNED && !spawn.velocityNED) return
 
   const pos = spawn.positionNED ?? player.state.positionNED
@@ -50,6 +58,31 @@ export function applyPlayerSpawn(player: PlayerAircraft, scenario: ScenarioDescr
     q[0], q[1], q[2], q[3],
     0, 0, 0,
   ]
+}
+
+/** Cold-and-dark on the south threshold: gear down, takeoff flaps, idle, stationary, facing north. */
+function applyRunwaySpawn(player: PlayerAircraft): void {
+  const clearanceM = getGroundClearance(player.spec.id, true)
+  const { positionNED } = getRunwaySpawnNED(clearanceM)
+  const q: [number, number, number, number] = [1, 0, 0, 0]  // level, heading north
+
+  player.state.positionNED = [...positionNED] as Vec3
+  player.state.velocityNED = [0, 0, 0]
+  player.state.attitudeQuat = q
+  player.state.angularRateBody = [0, 0, 0]
+  player.state.sv = [
+    positionNED[0], positionNED[1], positionNED[2],
+    0, 0, 0,
+    q[0], q[1], q[2], q[3],
+    0, 0, 0,
+  ]
+  player.state.onGround = true
+  player.state.gearDown = true
+  player.state.gearCollapsed = false
+  player.state.lastTouchdownSinkMS = null
+  player.state.flaps = 1
+  player.state.throttle = 0
+  player.state.speedBrake = false
 }
 
 function horizontalBasis(velocityNED: readonly [number, number, number]): {

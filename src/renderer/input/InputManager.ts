@@ -14,7 +14,7 @@ export class InputManager {
   private radarSelectPrev = false
   private radarLockPrev = false
   private radarUnlockPrev = false
-  private speedBrakeTogglePending = false
+  private speedBrakePrev = false
   private tgpTogglePrev = false
   private tgpLockPrev = false
   private tgpUnlockPrev = false
@@ -34,8 +34,6 @@ export class InputManager {
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.ctrlKey && (e.code === 'KeyW' || e.code === 'KeyS' || e.code === 'KeyR')) e.preventDefault()
     this.keys.add(e.code)
-    if (e.code === DEFAULT_BINDINGS.throttleDown && this.throttle === 0)
-      this.speedBrakeTogglePending = true
   }
 
   private onKeyUp = (e: KeyboardEvent) => { this.keys.delete(e.code) }
@@ -91,6 +89,7 @@ export class InputManager {
     const tgpToggle = this.keys.has(DEFAULT_BINDINGS.tgpToggle)
     const tgpLock = this.keys.has(DEFAULT_BINDINGS.tgpLock)
     const tgpUnlock = this.keys.has(DEFAULT_BINDINGS.tgpUnlock)
+    const speedBrake = this.keys.has(DEFAULT_BINDINGS.speedBrake)
     const wmEngage = this.keys.has(DEFAULT_BINDINGS.wingmanEngage)
     const wmCover = this.keys.has(DEFAULT_BINDINGS.wingmanCover)
     const wmRtb = this.keys.has(DEFAULT_BINDINGS.wingmanRTB)
@@ -108,6 +107,7 @@ export class InputManager {
     const tgpToggleEdge = tgpToggle && !this.tgpTogglePrev
     const tgpLockEdge = tgpLock && !this.tgpLockPrev
     const tgpUnlockEdge = tgpUnlock && !this.tgpUnlockPrev
+    const speedBrakeToggle = speedBrake && !this.speedBrakePrev
     const wmEngageEdge = wmEngage && !this.wmEngagePrev
     const wmCoverEdge = wmCover && !this.wmCoverPrev
     const wmRtbEdge = wmRtb && !this.wmRtbPrev
@@ -124,13 +124,11 @@ export class InputManager {
     this.tgpTogglePrev = tgpToggle
     this.tgpLockPrev = tgpLock
     this.tgpUnlockPrev = tgpUnlock
+    this.speedBrakePrev = speedBrake
     this.wmEngagePrev = wmEngage
     this.wmCoverPrev = wmCover
     this.wmRtbPrev = wmRtb
     this.wmRejoinPrev = wmRejoin
-
-    const speedBrakeToggle = this.speedBrakeTogglePending
-    this.speedBrakeTogglePending = false
 
     return {
       pitch,

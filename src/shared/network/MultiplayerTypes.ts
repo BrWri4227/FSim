@@ -29,6 +29,7 @@ export interface NetMissileState {
 
 export interface NetFlareState {
   positionNED: [number, number, number]
+  velocityNED: [number, number, number]
   heatSignatureKW: number
   ageSec: number
 }
@@ -54,7 +55,13 @@ export interface NetPlayerState {
   structuralFailure: boolean
   radar: NetRadarState
   missiles: NetMissileState[]
-  countermeasures: NetCountermeasureState
+  /**
+   * `null` means "unchanged since my last snapshot" — the sender omits the
+   * countermeasure payload when no flare/chaff was dispensed or expired, and
+   * the receiver ages its existing clouds locally. Cuts bandwidth sharply
+   * during heavy countermeasure use (a 30-flare salvo is ~150 numbers).
+   */
+  countermeasures: NetCountermeasureState | null
 }
 
 export interface HitEvent {
@@ -123,18 +130,21 @@ export function cloneNetPlayerState(s: NetPlayerState): NetPlayerState {
       targetEntityId: m.targetEntityId,
       active: m.active,
     })),
-    countermeasures: {
-      flares: s.countermeasures.flares.map(f => ({
-        positionNED: [...f.positionNED],
-        heatSignatureKW: f.heatSignatureKW,
-        ageSec: f.ageSec,
-      })),
-      chaffClouds: s.countermeasures.chaffClouds.map(c => ({
-        positionNED: [...c.positionNED],
-        velocityNED: [...c.velocityNED],
-        rcsM2: c.rcsM2,
-        ageSec: c.ageSec,
-      })),
-    },
+    countermeasures: s.countermeasures
+      ? {
+          flares: s.countermeasures.flares.map(f => ({
+            positionNED: [...f.positionNED],
+            velocityNED: [...f.velocityNED],
+            heatSignatureKW: f.heatSignatureKW,
+            ageSec: f.ageSec,
+          })),
+          chaffClouds: s.countermeasures.chaffClouds.map(c => ({
+            positionNED: [...c.positionNED],
+            velocityNED: [...c.velocityNED],
+            rcsM2: c.rcsM2,
+            ageSec: c.ageSec,
+          })),
+        }
+      : null,
   }
 }

@@ -12,6 +12,7 @@ import { CMDS } from '../avionics/CMDS'
 import { HMS } from '../avionics/HMS'
 import { GPWS } from '../avionics/GPWS'
 import { TargetingPod } from '../avionics/TargetingPod'
+import { GLOCModel } from '../physics/GLOCModel'
 import type { RWRState } from '../types/radar'
 import type { HMSState } from '../types/ir'
 import type { DamageZone } from '../types/damage'
@@ -33,6 +34,8 @@ export class PlayerAircraft extends Aircraft {
   readonly hms: HMS
   readonly gpws: GPWS
   readonly targetingPod: TargetingPod
+  /** Physiological G-LOC model — time-dose oxygen debt, AGSM, incapacitation. */
+  readonly gloc = new GLOCModel()
 
   selectedWeaponIndex = 0
   autoRudderEnabled: boolean
@@ -44,9 +47,10 @@ export class PlayerAircraft extends Aircraft {
   private onGPWSEvent: ((event: 'PULL_UP' | 'PULL_UP_URGENT') => void) | null = null
   private missileRadarModes = new Map<string, MissileState['guidanceMode']>()
 
-  constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, autoRudder = true) {
+  constructor(spec: AircraftSpec, stores: LoadedStore[], scene: THREE.Scene, autoRudder = true, glocEnabled = true) {
     super(spec, stores, scene, 'player')
     this.autoRudderEnabled = autoRudder
+    this.gloc.setEnabled(glocEnabled)
     // Keep the external placeholder on a dedicated layer so the cockpit camera never renders it.
     this.setExternalMeshLayer(PLAYER_EXTERNAL_LAYER)
 
@@ -79,6 +83,30 @@ export class PlayerAircraft extends Aircraft {
     const manualFrac = clamp(Math.abs(controls.yaw) / 0.3, 0, 1)
     const blendedYaw = clamp(controls.yaw + autoYaw * (1 - manualFrac), -1, 1)
     return { ...controls, yaw: blendedYaw }
+  }
+
+  /**
+   * Scale the pilot's inputs by remaining control authority. Under greyout the
+   * pilot is fine (authority 1); during absolute G-LOC incapacitation the stick
+   * goes neutral and the trigger / eject handle are unreachable; through the
+   * relative-incapacitation recovery, authority ramps back from ~0.2 to 1.
+   */
+  private applyGLOC(controls: ControlInputs): ControlInputs {
+    const g = this.gloc.state
+    if (g.controlAuthority >= 1) return controls
+
+    if (g.incapacitated) {
+      return {
+        ...controls,
+        pitch: 0, roll: 0, yaw: 0,
+        fireGun: false, fireMissile: false, cycleMissile: false,
+        dispenseFlare: false, dispenseChaff: false,
+        ejectRequested: false,
+      }
+    }
+
+    const a = g.controlAuthority
+    return { ...controls, pitch: controls.pitch * a, roll: controls.roll * a, yaw: controls.yaw * a }
   }
 
   private applyDefaultLoadout(): void {
@@ -121,7 +149,12 @@ export class PlayerAircraft extends Aircraft {
       return
     }
 
-    // Eject check
+    // G-LOC: integrate the oxygen-debt / AGSM model on last tick's G, then gate
+    // the pilot's inputs by how much authority they still have.
+    this.gloc.update(this.state.gCurrent, dt)
+    controls = this.applyGLOC(controls)
+
+    // Eject check — an unconscious pilot can't reach the handle.
     if (controls.ejectRequested && !this.ejectKeyPrev) this.eject(true)
     this.ejectKeyPrev = controls.ejectRequested
 
@@ -459,6 +492,7 @@ export class PlayerAircraft extends Aircraft {
     this.state.angularRateBody = [0, 0, 0]
     this.state.ejected = false
     this.state.fuelKg = this.spec.mass.fuelCapacityKg
+    this.gloc.reset()
     this.state.gearCollapsed = false
     this.state.lastTouchdownSinkMS = null
     this.mesh.visible = true

@@ -2,8 +2,13 @@ import * as THREE from 'three'
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
 
-/** Pilot eye — matches DetailedCockpit / FA18Cockpit floor-origin coordinates. */
-const EYE = new THREE.Vector3(0, 1.25, 0.42)
+/**
+ * Pilot eye — floor-origin coordinates, shared by every DetailedCockpit and the
+ * FA18Cockpit (identical instrument-panel geometry). Y sits just above the
+ * glareshield (MainInstrumentPanel top ≈ 1.40) so the forward view clears the
+ * coaming and the HUD symbology / reticle instead of looking into the panel.
+ */
+const EYE = new THREE.Vector3(0, 1.45, 0.42)
 
 const STICK_PITCH_RANGE = 0.22
 const STICK_ROLL_RANGE = 0.24
@@ -38,7 +43,7 @@ export function prepareCockpitForSim(aircraftId: string, cockpit: THREE.Group): 
   applyInteriorEmissive(cockpit)
 
   const stickShaft = cockpit.getObjectByName('ControlStickShaft')
-  const sideStick = stickShaft != null && Math.abs(stickShaft.position.x) > 0.1
+  const sideStick = stickShaft !== undefined && Math.abs(stickShaft.position.x) > 0.1
   const stickBase = sideStick
     ? new THREE.Vector3(0.28, 0.34, -0.2)
     : new THREE.Vector3(0.18, 0.34, -0.2)

@@ -4,6 +4,7 @@ import { Sky } from './Sky'
 import { Scenery } from './Scenery'
 import { WeatherVisuals } from './WeatherVisuals'
 import { getWeather } from '../physics/WeatherState'
+import { getTimeOfDayConfig, type TimeOfDayPreset } from './TimeOfDay'
 
 export class SceneManager {
   readonly scene: THREE.Scene
@@ -15,9 +16,13 @@ export class SceneManager {
   private scenery: Scenery
   private weatherVisuals: WeatherVisuals
   private sun: THREE.DirectionalLight
+  private ambient: THREE.AmbientLight
+  private hemi: THREE.HemisphereLight
   private readonly sunDir = new THREE.Vector3(50000, 80000, -20000).normalize()
+  private timeOfDay: TimeOfDayPreset = 'DAY'
+  private fogColor = 0x9fd0e6
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, timeOfDay: TimeOfDayPreset = 'DAY') {
     this.scene = new THREE.Scene()
 
     this.renderer = new THREE.WebGLRenderer({
@@ -51,19 +56,44 @@ export class SceneManager {
     this.scene.add(sun.target)  // target must be in scene for follow to work
     this.sun = sun
 
-    const ambient = new THREE.AmbientLight(0x8090b0, 0.6)
-    this.scene.add(ambient)
+    this.ambient = new THREE.AmbientLight(0x8090b0, 0.6)
+    this.scene.add(this.ambient)
 
-    const sky_hemi = new THREE.HemisphereLight(0x3ab8f0, 0x4a7c3f, 0.8)
-    this.scene.add(sky_hemi)
+    this.hemi = new THREE.HemisphereLight(0x3ab8f0, 0x4a7c3f, 0.8)
+    this.scene.add(this.hemi)
 
     this.terrain = new Terrain(this.scene)
     this.sky = new Sky(this.scene)
     this.scenery = new Scenery(this.scene)
     this.weatherVisuals = new WeatherVisuals(this.scene)
-    this.applyWeatherFog()
+    this.applyTimeOfDay(timeOfDay)
 
     window.addEventListener('resize', this.onResize)
+  }
+
+  /** Apply a time-of-day lighting preset to the sun, ambient, sky, fog and bloom. */
+  applyTimeOfDay(preset: TimeOfDayPreset): void {
+    this.timeOfDay = preset
+    const cfg = getTimeOfDayConfig(preset)
+
+    this.sunDir.set(cfg.sunDirThree[0], cfg.sunDirThree[1], cfg.sunDirThree[2]).normalize()
+    this.sun.color.setHex(cfg.sunColor)
+    this.sun.intensity = cfg.sunIntensity
+    this.ambient.color.setHex(cfg.ambientColor)
+    this.ambient.intensity = cfg.ambientIntensity
+    this.hemi.color.setHex(cfg.hemiSky)
+    this.hemi.groundColor.setHex(cfg.hemiGround)
+    this.hemi.intensity = cfg.hemiIntensity
+    this.renderer.toneMappingExposure = cfg.exposure
+    this.fogColor = cfg.fogColor
+
+    this.sky.applyTimeOfDay(cfg)
+    this.applyWeatherFog()
+  }
+
+  /** UnrealBloom strength — driven by the time-of-day preset. */
+  getBloomStrength(): number {
+    return getTimeOfDayConfig(this.timeOfDay).bloomStrength
   }
 
   /**
@@ -86,6 +116,7 @@ export class SceneManager {
 
   updateSky(camera: THREE.Camera): void {
     this.sky.update(camera.position)
+    this.terrain.update(camera.position)
     this.weatherVisuals.update(camera.position, 1 / 60)
   }
 
@@ -93,11 +124,12 @@ export class SceneManager {
   applyWeatherFog(): void {
     const visM = getWeather().visibilityM
     const density = Math.max(0.000001, 3.5 / Math.max(visM, 500))
-    this.scene.fog = new THREE.FogExp2(0x90cce8, density)
+    this.scene.fog = new THREE.FogExp2(this.fogColor, density)
   }
 
   refreshWeatherVisuals(): void {
     this.weatherVisuals.refresh()
+    this.sky.refresh()
     this.applyWeatherFog()
   }
 

@@ -3,20 +3,15 @@ import type { AircraftSpec } from '../types/aircraft'
 import type { NetPlayerState, NetRadarState, NetMissileState } from '../network/MultiplayerTypes'
 import { cloneNetPlayerState } from '../../shared/network/MultiplayerTypes'
 import { Aircraft } from './Aircraft'
-import { nedToThree } from '../utils/MathUtils'
 import type { ChaffCloud } from '../avionics/CMDS'
 import type { FlareContact } from '../types/ir'
-import { buildMissileMesh } from '../weapons/MissileSystem'
+import { RemoteMissileVisual } from '../weapons/RemoteMissileVisual'
+import { ExplosionManager } from '../scene/ExplosionEffect'
 
-// Reusable temporaries for mesh orientation — avoids per-frame Vector3 allocations
-const _netMissileDir    = new THREE.Vector3()
-const _netMissileLookAt = new THREE.Vector3()
-const _interpQuatA      = new THREE.Quaternion()
-const _interpQuatB      = new THREE.Quaternion()
-const _interpQuatOut    = new THREE.Quaternion()
-
-const REMOTE_MISSILE_BODY_MAT = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.5, roughness: 0.5 })
-const REMOTE_MISSILE_FIN_MAT  = new THREE.MeshStandardMaterial({ color: 0xbbbbbb, metalness: 0.4, roughness: 0.6 })
+// Reusable temporaries — avoids per-frame Quaternion allocations
+const _interpQuatA   = new THREE.Quaternion()
+const _interpQuatB   = new THREE.Quaternion()
+const _interpQuatOut = new THREE.Quaternion()
 
 interface TimedSnapshot {
   receivedAtMs: number
@@ -28,11 +23,17 @@ export class NetworkAircraft extends Aircraft {
   private _netMissiles: NetMissileState[] = []
   private _netFlares: FlareContact[] = []
   private _netChaffClouds: ChaffCloud[] = []
-  private _missileMeshes = new Map<string, THREE.Group>()
+  private _missileVisuals = new Map<string, RemoteMissileVisual>()
+  private _explosions: ExplosionManager
   private _snapshotBuffer: TimedSnapshot[] = []
-  private static readonly INTERP_DELAY_MS = 100
-  private static readonly MAX_SNAPSHOTS = 4
-  private static readonly MAX_EXTRAP_MS = 200
+  /** Last position pushed to the buffer — dedupes the 60 Hz re-delivery of a 20 Hz stream. */
+  private _lastBufferedPos: [number, number, number] | null = null
+
+  // Interpolation is tuned for internet latency/jitter, not just LAN: a deeper
+  // buffer and a slightly longer delay ride out reordered / dropped packets.
+  private static readonly INTERP_DELAY_MS = 120
+  private static readonly MAX_SNAPSHOTS = 12
+  private static readonly MAX_EXTRAP_MS = 250
 
   readonly cmds = {
     getActiveFlares: (): ReadonlyArray<FlareContact> => this._netFlares,
@@ -42,11 +43,30 @@ export class NetworkAircraft extends Aircraft {
   constructor(spec: AircraftSpec, scene: THREE.Scene, entityId: string) {
     super(spec, [], scene, entityId)
     this.state.invincible = true
+    // Spawn-only handle onto the scene-wide explosion pool. The pool is a scene
+    // singleton that the missile systems already step every frame, so this
+    // instance never calls update()/dispose() — it would double-advance shared
+    // particles or clear detonations it doesn't own.
+    this._explosions = new ExplosionManager(scene)
   }
 
   applyNetworkState(net: NetPlayerState): void {
-    const receivedAtMs = performance.now()
-    this._snapshotBuffer.push({ receivedAtMs, state: cloneNetPlayerState(net) })
+    // The session loop hands us the latest known snapshot every sim tick (~60 Hz)
+    // even though new ones only arrive at the send rate (~20 Hz). Ingesting the
+    // duplicates would pack the interpolation buffer with identical frames and
+    // collapse the interpolation window. Position equality is a reliable "same
+    // snapshot" test — two distinct updates from a moving jet never round-trip
+    // to the exact same quantised position.
+    const p = net.positionNED
+    const isDuplicate =
+      this._lastBufferedPos !== null &&
+      this._lastBufferedPos[0] === p[0] &&
+      this._lastBufferedPos[1] === p[1] &&
+      this._lastBufferedPos[2] === p[2]
+    if (isDuplicate) return
+
+    this._lastBufferedPos = [p[0], p[1], p[2]]
+    this._snapshotBuffer.push({ receivedAtMs: performance.now(), state: cloneNetPlayerState(net) })
     while (this._snapshotBuffer.length > NetworkAircraft.MAX_SNAPSHOTS) {
       this._snapshotBuffer.shift()
     }
@@ -56,24 +76,88 @@ export class NetworkAircraft extends Aircraft {
     this.damage.structuralFailure = net.structuralFailure
     this._netRadarState = net.radar ?? null
     this._netMissiles = net.missiles ?? []
-    this._netFlares = (net.countermeasures?.flares ?? []).map(f => ({
-      positionNED: [...f.positionNED] as [number, number, number],
-      velocityNED: [0, 0, 0],
-      heatSignatureKW: f.heatSignatureKW,
-      ageSec: f.ageSec,
-    }))
-    this._netChaffClouds = (net.countermeasures?.chaffClouds ?? []).map(c => ({
-      positionNED: [...c.positionNED] as [number, number, number],
-      velocityNED: [...c.velocityNED] as [number, number, number],
-      rcsM2: c.rcsM2,
-      ageSec: c.ageSec,
-    }))
+
+    for (const m of this._netMissiles) {
+      const existing = this._missileVisuals.get(m.id)
+      if (existing) {
+        existing.onNetUpdate(m.positionNED, m.velocityNED)
+      } else {
+        this._missileVisuals.set(m.id, new RemoteMissileVisual(this.scene, m.positionNED, m.velocityNED))
+      }
+    }
+    const live = new Set(this._netMissiles.map(m => m.id))
+    for (const [id, visual] of this._missileVisuals) {
+      if (!live.has(id)) {
+        visual.explode(this._explosions)
+        visual.dispose()
+        this._missileVisuals.delete(id)
+      }
+    }
+
+    // `countermeasures: null` means "unchanged" — keep aging the clouds we have.
+    if (net.countermeasures) {
+      this._netFlares = net.countermeasures.flares.map(f => ({
+        positionNED: [...f.positionNED] as [number, number, number],
+        velocityNED: [...f.velocityNED] as [number, number, number],
+        heatSignatureKW: f.heatSignatureKW,
+        ageSec: f.ageSec,
+      }))
+      this._netChaffClouds = net.countermeasures.chaffClouds.map(c => ({
+        positionNED: [...c.positionNED] as [number, number, number],
+        velocityNED: [...c.velocityNED] as [number, number, number],
+        rcsM2: c.rcsM2,
+        ageSec: c.ageSec,
+      }))
+    }
   }
 
   override updateMesh(dt?: number): void {
+    const step = dt ?? 1 / 60
     this.applySnapshotInterpolation()
     super.updateMesh(dt)
-    this.syncMissileMeshes()
+    this.ageCountermeasures(step)
+    for (const visual of this._missileVisuals.values()) visual.update(step)
+  }
+
+  /**
+   * Local decay of remote flares / chaff between the (now infrequent) full
+   * countermeasure snapshots — mirrors CMDS.update so IR/chaff seduction logic
+   * against this aircraft stays smooth instead of stepping at the re-sync rate.
+   */
+  private ageCountermeasures(dt: number): void {
+    for (let i = this._netFlares.length - 1; i >= 0; i--) {
+      const f = this._netFlares[i]!
+      f.ageSec += dt
+      const drag = Math.max(0, 1 - dt * 1.8)
+      f.velocityNED = [
+        f.velocityNED[0] * drag,
+        f.velocityNED[1] * drag,
+        f.velocityNED[2] + dt * 3.5,
+      ]
+      f.positionNED = [
+        f.positionNED[0] + f.velocityNED[0] * dt,
+        f.positionNED[1] + f.velocityNED[1] * dt,
+        f.positionNED[2] + f.velocityNED[2] * dt,
+      ]
+      f.heatSignatureKW = Math.max(0, 60 * (1 - f.ageSec / 4.0))
+      if (f.ageSec > 4.0) this._netFlares.splice(i, 1)
+    }
+    for (let i = this._netChaffClouds.length - 1; i >= 0; i--) {
+      const c = this._netChaffClouds[i]!
+      c.ageSec += dt
+      c.velocityNED = [
+        c.velocityNED[0] * (1 - dt * 0.9),
+        c.velocityNED[1] * (1 - dt * 0.9),
+        c.velocityNED[2] + dt * 2.0,
+      ]
+      c.positionNED = [
+        c.positionNED[0] + c.velocityNED[0] * dt,
+        c.positionNED[1] + c.velocityNED[1] * dt,
+        c.positionNED[2] + c.velocityNED[2] * dt,
+      ]
+      c.rcsM2 = Math.max(0.5, 25 * (1 - c.ageSec / 6.0))
+      if (c.ageSec > 6.0) this._netChaffClouds.splice(i, 1)
+    }
   }
 
   private applySnapshotInterpolation(): void {
@@ -163,34 +247,6 @@ export class NetworkAircraft extends Aircraft {
     return [_interpQuatOut.w, _interpQuatOut.x, _interpQuatOut.y, _interpQuatOut.z]
   }
 
-  private syncMissileMeshes(): void {
-    const seen = new Set<string>()
-    for (const m of this._netMissiles) {
-      seen.add(m.id)
-      let mesh = this._missileMeshes.get(m.id)
-      if (!mesh) {
-        mesh = buildMissileMesh(REMOTE_MISSILE_BODY_MAT, REMOTE_MISSILE_FIN_MAT)
-        this.scene.add(mesh)
-        this._missileMeshes.set(m.id, mesh)
-      }
-      const worldPos = nedToThree(m.positionNED)
-      mesh.position.copy(worldPos)
-      const speed = Math.sqrt(m.velocityNED[0] ** 2 + m.velocityNED[1] ** 2 + m.velocityNED[2] ** 2)
-      if (speed > 1) {
-        // Reuse module-level vectors — avoids two Vector3 allocations per active missile per frame
-        _netMissileDir.set(m.velocityNED[1], -m.velocityNED[2], -m.velocityNED[0]).normalize()
-        _netMissileLookAt.addVectors(mesh.position, _netMissileDir)
-        mesh.lookAt(_netMissileLookAt)
-      }
-    }
-    for (const [id, mesh] of this._missileMeshes) {
-      if (!seen.has(id)) {
-        this.scene.remove(mesh)
-        this._missileMeshes.delete(id)
-      }
-    }
-  }
-
   override getRadarInfo(): { mode: string; sttTargetId: string | null; tracksPlayer: (id: string) => boolean } | null {
     const s = this._netRadarState
     if (!s || s.mode === 'OFF') return null
@@ -206,8 +262,8 @@ export class NetworkAircraft extends Aircraft {
   }
 
   override dispose(): void {
-    for (const mesh of this._missileMeshes.values()) this.scene.remove(mesh)
-    this._missileMeshes.clear()
+    for (const visual of this._missileVisuals.values()) visual.dispose()
+    this._missileVisuals.clear()
     this._snapshotBuffer.length = 0
     super.dispose()
   }

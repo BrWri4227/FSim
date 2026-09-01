@@ -17,10 +17,34 @@ export const FREE_FLIGHT: ScenarioDescriptor = {
   loseConditions: [],
 }
 
+export const TRAFFIC_PATTERN: ScenarioDescriptor = {
+  id: 'traffic_pattern',
+  name: 'Traffic Pattern',
+  description: 'Runway start — take off, fly the circuit, and land. No hostiles.',
+  briefing:
+    'Cold start on RWY 36. Advance the throttle, rotate around 150 kts, gear up, ' +
+    'and climb out. Fly a left-hand circuit, then configure (gear + full flaps) and ' +
+    'land back on the runway. A gentle touchdown (under ~3 m/s sink) with the gear ' +
+    'intact completes the mission.',
+  playerSpawn: { onRunway: true },
+  enemies: [],
+  wingmen: [],
+  groundTargets: [],
+  objectives: [
+    { id: 'takeoff', description: 'Take off from the runway', type: 'takeoff' },
+    { id: 'land', description: 'Land back on the runway (gear intact)', type: 'land' },
+  ],
+  winConditions: ['primary_objectives_complete'],
+  loseConditions: ['player_killed', 'player_ejected'],
+  timeOfDay: 'DAY',
+  weather: 'CLEAR',
+}
+
 export const HEAD_ON_BVR: ScenarioDescriptor = {
   id: 'head_on_bvr',
   name: 'Head-On BVR',
   description: 'Two bandits at 15 km — merge and engage before they do.',
+  timeOfDay: 'DUSK',
   briefing:
     'Hostile MiG-29 pair inbound head-on at 15 km. Destroy both bandits. ' +
     'Wingmen: none. RTB via ESC when complete.',
@@ -144,6 +168,7 @@ export const STRIKE_PACKAGE: ScenarioDescriptor = {
 }
 
 export const SCENARIO_CATALOG: ScenarioDescriptor[] = [
+  TRAFFIC_PATTERN,
   FREE_FLIGHT,
   HEAD_ON_BVR,
   CAP_WITH_WINGMAN,

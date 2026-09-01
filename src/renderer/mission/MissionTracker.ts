@@ -14,6 +14,12 @@ export interface MissionTickState {
   groundRemaining: number
   playerEjected: boolean
   playerKilled: boolean
+  /** True when this sortie began on the runway (enables the `takeoff` objective). */
+  startedOnRunway?: boolean
+  /** Latched true once the aircraft has climbed clear of the ground. */
+  hasBeenAirborne?: boolean
+  /** True while the aircraft sits on the runway after a survivable landing. */
+  landedSafely?: boolean
 }
 
 export interface MissionEvaluation {
@@ -97,6 +103,11 @@ export class MissionTracker {
         return this.initialEnemyCount > 0 && state.enemiesRemaining === 0
       case 'all_ground_destroyed':
         return this.initialGroundCount > 0 && state.groundRemaining === 0
+      case 'takeoff':
+        return Boolean(state.startedOnRunway) && Boolean(state.hasBeenAirborne)
+      case 'land':
+        // Must have flown first, then be stopped on the runway intact.
+        return Boolean(state.hasBeenAirborne) && Boolean(state.landedSafely)
       default:
         return false
     }
