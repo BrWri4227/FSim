@@ -391,10 +391,15 @@ export class DebugOverlay {
     const sinkLine = state.lastTouchdownSinkMS !== null
       ? `\nTD sink: ${state.lastTouchdownSinkMS.toFixed(1)} m/s${state.gearCollapsed ? ' [GEAR FAIL]' : ''}`
       : ''
+    const g = this.player.gloc.state
+    const glocLine =
+      `GLOC:  ${g.phase} tol ${g.gTolerance.toFixed(1)} rsv ${Math.round(g.reserveFraction * 100)}%\n` +
+      `AGSM:  strain ${Math.round(g.agsmStrain * 100)}% fatigue ${Math.round(g.agsmFatigue * 100)}%\n`
     this.telemetry.textContent =
       `IAS:   ${kts} kt\n` +
       `AoA:   ${state.alphaDeg.toFixed(1)}°\n` +
       `G:     ${state.gCurrent.toFixed(1)} (max ${state.gMax.toFixed(1)})\n` +
+      glocLine +
       `Mach:  ${state.mach.toFixed(2)}\n` +
       `Alt:   ${ft} ft\n` +
       `${trLine}\n` +

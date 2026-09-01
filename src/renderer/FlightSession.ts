@@ -25,8 +25,28 @@ import { setLODCamera } from './entities/Aircraft'
 import { warmupMissileVisuals } from './weapons/MissileSystem'
 import { warmupExplosionVisuals } from './scene/ExplosionEffect'
 import { CockpitController } from './cockpit/CockpitController'
+import { PauseMenu } from './ui/PauseMenu'
+import { SortieStats } from './mission/SortieStats'
+import { getAGLM } from './scene/Terrain'
+import { applyWeatherPreset, type WeatherPreset } from './physics/WeatherPresets'
+import type { TimeOfDayPreset } from './scene/TimeOfDay'
 
 const FIXED_DT = 1 / 60
+
+/** Per-sortie options chosen on the Loadout screen. */
+export interface FlightOptions {
+  glocEnabled: boolean
+  autoRudder: boolean
+  timeOfDay: TimeOfDayPreset
+  weather: WeatherPreset
+}
+
+export const DEFAULT_FLIGHT_OPTIONS: FlightOptions = {
+  glocEnabled: true,
+  autoRudder: true,
+  timeOfDay: 'DAY',
+  weather: 'CLEAR',
+}
 
 /** LAN session client + connection settings for restoring the lobby after debrief. */
 export interface LobbyRestoreBundle {
@@ -63,7 +83,6 @@ export class FlightSession {
   private disposed = false
   private completionScheduled = false
   private completionTimer: ReturnType<typeof setTimeout> | null = null
-  private gSmoothed = 1.0   // low-pass filtered G for visual effects
   private frameDt = FIXED_DT
   private glocEnabled: boolean
   private autoRudder: boolean
@@ -71,6 +90,18 @@ export class FlightSession {
   private scenario: ScenarioDescriptor
   private missionTracker: MissionTracker | null = null
   private missionAbortRequested = false
+
+  // ── Pause ──────────────────────────────────────────────────────────────────
+  private paused = false
+  private pauseMenu: PauseMenu | null = null
+  private onRestart: (() => void) | null
+
+  // ── Sortie telemetry / mission progress ────────────────────────────────────
+  private sortieStats = new SortieStats()
+  private startedOnRunway = false
+  private hasBeenAirborne = false
+  private landedSafely = false
+  private seenInboundMissileIds = new Set<string>()
 
   private onComplete: (result: FlightResult) => void
 
@@ -81,27 +112,34 @@ export class FlightSession {
     multiplayer: MultiplayerConfig,
     existingMultiplayerClient: MultiplayerClient | null,
     onComplete: (result: FlightResult) => void,
-    glocEnabled = true,
-    autoRudder = true
+    options: FlightOptions = DEFAULT_FLIGHT_OPTIONS,
+    onRestart: (() => void) | null = null
   ) {
     this.onComplete = onComplete
+    this.onRestart = onRestart
     this.scenario = scenario
-    this.glocEnabled = glocEnabled
-    this.autoRudder = autoRudder
+    this.glocEnabled = options.glocEnabled
+    this.autoRudder = options.autoRudder
     this.multiplayerConfig = multiplayer
     this.multiplayer = existingMultiplayerClient
+    this.startedOnRunway = Boolean(scenario.playerSpawn.onRunway)
+
+    // `options` already carries the scenario defaults (seeded in the Loadout
+    // screen) plus any player override. Weather must be applied before the scene
+    // reads it for fog / clouds.
+    applyWeatherPreset(options.weather)
 
     const threeCanvas = document.getElementById('three-canvas') as HTMLCanvasElement
     const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement
 
-    this.sceneManager = new SceneManager(threeCanvas)
+    this.sceneManager = new SceneManager(threeCanvas, options.timeOfDay)
     this.cameraManager = new CameraManager(this.sceneManager.camera)
     this.inputManager = new InputManager()
     this.audioManager = new AudioManager()
     // Attempt to load real sound files from public/sounds/. Falls back to synthesis silently.
     void this.audioManager.loadSounds('sounds/')
 
-    this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene, this.autoRudder)
+    this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene, this.autoRudder, this.glocEnabled)
     const [bodyMat, finMat] = this.player.missiles.getWarmupMaterials()
     warmupMissileVisuals(
       this.sceneManager.renderer,
@@ -117,6 +155,7 @@ export class FlightSession {
     )
     this.player.setOnMissileLaunch(category => {
       this.audioManager.play(category === 'IR_MISSILE' ? 'MISSILE_LAUNCH_IR' : 'MISSILE_LAUNCH_ARH')
+      this.sortieStats.onMissileLaunch()
     })
     this.player.setOnMissileRadarStateChange((_missileId, mode) => {
       if (mode === 'ACTIVE') this.audioManager.play('PITBULL')
@@ -127,8 +166,10 @@ export class FlightSession {
     this.entityManager = new EntityManager(this.sceneManager.scene, this.player)
     this.player.missiles.setOnDecoySuccess(type => {
       this.hud.notifyDecoySuccess(type)
+      this.sortieStats.onDecoySuccess()
     })
     this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
+      this.sortieStats.onWeaponHit(weapon)
       if (!this.multiplayer || !this.localNetworkId) return
       if (!targetId.startsWith('peer_')) return
       this.multiplayer.sendHit({
@@ -142,6 +183,7 @@ export class FlightSession {
 
     this.postFX = new PostFXManager(this.sceneManager.renderer, this.sceneManager.scene, this.sceneManager.camera)
     this.postFX.setSize(window.innerWidth, window.innerHeight)
+    this.postFX.setBloomStrength(this.sceneManager.getBloomStrength())
     setLODCamera(this.sceneManager.camera)
 
     this.flareEffect = new FlareEffect(this.sceneManager.scene)
@@ -193,7 +235,41 @@ export class FlightSession {
     }
     if (e.code === 'Escape' && !this.completionScheduled) {
       e.preventDefault()
-      this.missionAbortRequested = true
+      this.togglePause()
+    }
+  }
+
+  /** Open/close the pause menu. Single-player freezes the sim; LAN keeps running. */
+  private togglePause(): void {
+    if (this.pauseMenu) {
+      this.resumeFromPause()
+      return
+    }
+    const isSingle = this.multiplayerConfig.mode === 'single'
+    this.paused = isSingle
+    if (isSingle) this.audioManager.setPaused(true)
+    this.pauseMenu = new PauseMenu(
+      { multiplayer: !isSingle },
+      {
+        onResume: () => this.resumeFromPause(),
+        onRestart: () => {
+          this.resumeFromPause()
+          this.onRestart?.()
+        },
+        onAbort: () => {
+          this.resumeFromPause()
+          if (!this.completionScheduled) this.missionAbortRequested = true
+        },
+      }
+    )
+  }
+
+  private resumeFromPause(): void {
+    this.pauseMenu?.dispose()
+    this.pauseMenu = null
+    if (this.paused) {
+      this.paused = false
+      this.audioManager.setPaused(false)
     }
   }
 
@@ -253,6 +329,15 @@ export class FlightSession {
     if (this.disposed) return
     this.rafId = requestAnimationFrame(this.loop)
 
+    // Single-player pause: freeze the fixed-step sim but keep painting the frozen
+    // frame so the scene stays visible behind the DOM overlay.
+    if (this.paused) {
+      this.lastTime = timestamp
+      this.accumulator = 0
+      this.render()
+      return
+    }
+
     const dt = Math.min((timestamp - this.lastTime) / 1000, 0.1)
     this.frameDt = dt
     this.lastTime = timestamp
@@ -280,6 +365,12 @@ export class FlightSession {
     const targetIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
     const inboundMissiles = this.entityManager.getInboundMissiles(targetIds)
     this.player.rwr.addMissileThreats(inboundMissiles, this.player.state)
+    for (const m of inboundMissiles) {
+      if (!this.seenInboundMissileIds.has(m.id)) {
+        this.seenInboundMissileIds.add(m.id)
+        this.sortieStats.onIncomingMissile()
+      }
+    }
     this.audioManager.update(this.player, controls, this.entityManager.getEnemies())
     const radarShootCueActive = this.hud.isRadarShootCueActive()
     if (radarShootCueActive && !this.wasRadarShootCueActive) {
@@ -287,11 +378,36 @@ export class FlightSession {
     }
     this.wasRadarShootCueActive = radarShootCueActive
 
-    // Smooth G with ~0.4 s time-constant so vignette builds gradually
-    const tau = 0.4
-    this.gSmoothed += (this.player.state.gCurrent - this.gSmoothed) * Math.min(1, dt / tau)
+    // G-LOC physiology (oxygen debt / AGSM / incapacitation) is advanced inside
+    // PlayerAircraft.update() so it can gate the pilot's control inputs.
 
+    this.sampleFlightState()
     this.updateMissionEnd(dt)
+  }
+
+  /** Per-tick sortie telemetry + takeoff/landing progress. */
+  private sampleFlightState(): void {
+    const s = this.player.state
+    const elapsed = (performance.now() - this.sessionStartTime) / 1000
+    const aglM = getAGLM(s.positionNED)
+
+    this.sortieStats.onTick(
+      { gCurrent: s.gCurrent, mach: s.mach, iasKts: s.iasKts },
+      aglM,
+      elapsed,
+      this.entityManager.killCount + this.entityManager.groundKillCount,
+    )
+
+    if (!s.onGround && aglM > 30) this.hasBeenAirborne = true
+
+    const onRunwayArea = Math.abs(s.positionNED[0]) < 2600 && Math.abs(s.positionNED[1]) < 130
+    this.landedSafely =
+      s.onGround &&
+      !s.gearCollapsed &&
+      s.iasKts < 60 &&
+      s.lastTouchdownSinkMS !== null &&
+      s.lastTouchdownSinkMS < 5 &&
+      onRunwayArea
   }
 
   private updateMissionEnd(_dt: number): void {
@@ -315,6 +431,9 @@ export class FlightSession {
         groundRemaining: this.entityManager.getGroundTargetCount(),
         playerEjected,
         playerKilled,
+        startedOnRunway: this.startedOnRunway,
+        hasBeenAirborne: this.hasBeenAirborne,
+        landedSafely: this.landedSafely,
       })
 
       if (evaluation.outcome === 'success') {
@@ -359,10 +478,25 @@ export class FlightSession {
       groundRemaining: this.entityManager.getGroundTargetCount(),
       playerEjected: outcome === 'ejected',
       playerKilled: outcome === 'killed',
+      startedOnRunway: this.startedOnRunway,
+      hasBeenAirborne: this.hasBeenAirborne,
+      landedSafely: this.landedSafely,
     }
     const completedIds = tracker?.evaluate(tickState).completedObjectiveIds ?? []
     const objectivesTotal = tracker?.primaryObjectiveCount ?? 0
     const deaths = outcome === 'killed' || outcome === 'ejected' ? 1 : 0
+
+    const spec = this.player.spec
+    const s = this.player.state
+    const stats = this.sortieStats.finalize({
+      gunRoundsFired: (spec.gunSpec?.totalRounds ?? 0) - this.player.gun.getRoundsRemaining(),
+      flaresUsed: (spec.cmdsFlareCount ?? 120) - this.player.cmds.flareCount,
+      chaffUsed: (spec.cmdsChaffCount ?? 120) - this.player.cmds.chaffCount,
+    })
+    const landing =
+      s.onGround && s.lastTouchdownSinkMS !== null
+        ? { sinkMS: s.lastTouchdownSinkMS, gearIntact: !s.gearCollapsed }
+        : undefined
 
     this.onComplete({
       kills: this.entityManager.killCount,
@@ -377,6 +511,8 @@ export class FlightSession {
       ).length,
       objectivesTotal,
       objectiveLabels: tracker?.getObjectiveLabels(completedIds) ?? [],
+      stats,
+      landing,
     })
   }
 
@@ -408,6 +544,7 @@ export class FlightSession {
       countermeasures: {
         flares: this.player.cmds.getActiveFlares().map(f => ({
           positionNED: [...f.positionNED] as [number, number, number],
+          velocityNED: [...f.velocityNED] as [number, number, number],
           heatSignatureKW: f.heatSignatureKW,
           ageSec: f.ageSec,
         })),
@@ -469,12 +606,13 @@ export class FlightSession {
     this.sceneManager.updateSky(this.sceneManager.camera)
     this.sceneManager.updateSunFollow(this.sceneManager.camera.position)
 
-    // G-effect post processing (use smoothed value so vignette ramps gradually)
-    this.postFX.setGLoad(this.glocEnabled ? this.gSmoothed : 1.0)
+    // G-effect post processing — greyout / blackout / redout from the G-LOC model
+    const gloc = this.player.gloc.state
+    this.postFX.setGEffect({ greyout: gloc.greyout, blackout: gloc.blackout, redout: gloc.redout })
     this.postFX.render()
 
     // Canvas HUD
-    this.hud.render(this.sceneManager.camera)
+    this.hud.render(this.sceneManager.camera, this.cameraManager.getMode())
 
     // Debug overlay telemetry (cheap — only updates text when visible)
     this.debugOverlay.update(playerState)
@@ -489,6 +627,9 @@ export class FlightSession {
 
   dispose(options?: { preserveMultiplayer?: boolean }): LobbyRestoreBundle | undefined {
     this.disposed = true
+    this.paused = false
+    this.pauseMenu?.dispose()
+    this.pauseMenu = null
     cancelAnimationFrame(this.rafId)
     if (this.completionTimer !== null) {
       clearTimeout(this.completionTimer)

@@ -14,8 +14,12 @@ import { clamp } from '../utils/MathUtils'
  * can be animated from live control inputs via {@link setControls}.
  */
 export class FA18Cockpit extends THREE.Group {
-  /** Pilot eye point in raw model (floor-origin) coordinates. */
-  private static readonly EYE = new THREE.Vector3(0, 1.25, 0.42)
+  /**
+   * Pilot eye point in raw model (floor-origin) coordinates. Y sits just above
+   * the glareshield (MainInstrumentPanel top ≈ 1.40) so the forward view clears
+   * the coaming and the HUD reticle rather than looking into the panel.
+   */
+  private static readonly EYE = new THREE.Vector3(0, 1.45, 0.42)
 
   private static readonly STICK_BASE = new THREE.Vector3(0.25, 0.34, -0.2)
   private static readonly THROTTLE_PIVOT = new THREE.Vector3(-0.53, 0.72, 0.2)

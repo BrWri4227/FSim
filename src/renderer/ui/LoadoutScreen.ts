@@ -5,10 +5,21 @@ import { MultiplayerClient } from '../network/MultiplayerClient'
 import { AIRCRAFT_ROSTER } from '../data/aircraft/catalog'
 import { getAircraftById } from '../data/aircraft/catalog'
 import { MISSILE_SPECS, getStoreDragPenalty } from '../data/weapons/catalog'
-import { msToKts } from '../utils/Units'
+import { renderControlsReference } from '../input/controlsReference'
+import { loadSettings, saveSettings, loadoutFor, saveLoadoutFor } from '../persistence'
+import { TIME_OF_DAY, TIME_OF_DAY_PRESETS, type TimeOfDayPreset } from '../scene/TimeOfDay'
+import { WEATHER_PRESETS, WEATHER_PRESET_LABELS, type WeatherPreset } from '../physics/WeatherPresets'
 
-import type { LobbyRestoreBundle } from '../FlightSession'
+import type { LobbyRestoreBundle, FlightOptions } from '../FlightSession'
 import type { ScenarioDescriptor } from '../types/mission'
+
+type LaunchCallback = (
+  spec: AircraftSpec,
+  stores: LoadedStore[],
+  multiplayer: MultiplayerConfig,
+  multiplayerClient: MultiplayerClient | null,
+  options: FlightOptions,
+) => void
 
 const WEAPON_OPTIONS: Record<string, { label: string; count: number }> = {
   'aim9x':   { label: 'AIM-9X Sidewinder', count: 1 },
@@ -22,16 +33,11 @@ export class LoadoutScreen {
   private el: HTMLDivElement
   private contentEl: HTMLDivElement
   private selectedSpec: AircraftSpec = AIRCRAFT_ROSTER[0]!
-  private onLaunch: (
-    spec: AircraftSpec,
-    stores: LoadedStore[],
-    multiplayer: MultiplayerConfig,
-    multiplayerClient: MultiplayerClient | null,
-    glocEnabled: boolean,
-    autoRudder: boolean
-  ) => void
+  private onLaunch: LaunchCallback
   private glocEnabled = true
   private autoRudder = true
+  private timeOfDay: TimeOfDayPreset = 'DAY'
+  private weatherPreset: WeatherPreset = 'CLEAR'
   private multiplayerMode: MultiplayerConfig['mode'] = 'single'
   private joinHost = '127.0.0.1'
   private hostLanIp = '127.0.0.1'
@@ -52,14 +58,7 @@ export class LoadoutScreen {
 
   constructor(
     _container: HTMLElement,
-    onLaunch: (
-      spec: AircraftSpec,
-      stores: LoadedStore[],
-      multiplayer: MultiplayerConfig,
-      multiplayerClient: MultiplayerClient | null,
-      glocEnabled: boolean,
-      autoRudder: boolean
-    ) => void,
+    onLaunch: LaunchCallback,
     options?: {
       scenario?: ScenarioDescriptor
       onBack?: () => void
@@ -81,6 +80,17 @@ export class LoadoutScreen {
       loseConditions: [],
     }
     this.onBack = options?.onBack ?? null
+
+    // Restore persisted preferences, then apply per-scenario environment defaults.
+    const saved = loadSettings()
+    this.glocEnabled = saved.glocEnabled
+    this.autoRudder = saved.autoRudder
+    const savedSpec = saved.lastAircraftId ? getAircraftById(saved.lastAircraftId) : null
+    if (savedSpec) this.selectedSpec = savedSpec
+    this.timeOfDay = this.scenario.timeOfDay ?? saved.lastTimeOfDay
+    this.weatherPreset = this.scenario.weather ?? saved.lastWeatherPreset
+    this.loadSavedLoadout()
+
     this.el = document.createElement('div')
     Object.assign(this.el.style, {
       position: 'fixed', inset: '0',
@@ -134,6 +144,15 @@ export class LoadoutScreen {
     }
     void this.initLanInfo()
     this.render()
+  }
+
+  /** Populate the per-hardpoint weapon map from the persisted loadout for the selected aircraft. */
+  private loadSavedLoadout(): void {
+    this.selectedWeaponByHardpoint.clear()
+    const stored = loadoutFor(this.selectedSpec.id)
+    for (const [hpId, weaponId] of Object.entries(stored)) {
+      this.selectedWeaponByHardpoint.set(hpId, weaponId)
+    }
   }
 
   private async initLanInfo(): Promise<void> {
@@ -190,6 +209,7 @@ export class LoadoutScreen {
       `
       card.onclick = () => {
         this.selectedSpec = spec
+        this.loadSavedLoadout()
         this.lobbyClient?.updateProfile({ aircraftId: spec.id })
         this.render()
       }
@@ -237,6 +257,52 @@ export class LoadoutScreen {
     }
     this.contentEl.appendChild(hpSection)
 
+    // ── Environment ─────────────────────────────────────────────────────────
+    const envSection = document.createElement('div')
+    envSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
+    envSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">ENVIRONMENT</div>'
+
+    const mkSelectRow = (
+      label: string,
+      values: readonly string[],
+      labelFor: (v: string) => string,
+      current: string,
+      onChange: (v: string) => void,
+    ): void => {
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
+      const lbl = document.createElement('span')
+      lbl.textContent = label
+      lbl.style.cssText = 'font-size:11px;color:#88bb88;min-width:96px'
+      const sel = document.createElement('select')
+      sel.style.cssText = 'flex:1;min-width:0;max-width:260px;background:#0a150a;color:#00ff88;border:1px solid #226644;font:11px monospace'
+      for (const v of values) {
+        const opt = document.createElement('option')
+        opt.value = v
+        opt.textContent = labelFor(v)
+        sel.appendChild(opt)
+      }
+      sel.value = current
+      sel.onchange = () => onChange(sel.value)
+      row.appendChild(lbl)
+      row.appendChild(sel)
+      envSection.appendChild(row)
+    }
+
+    mkSelectRow(
+      'Time of day', TIME_OF_DAY_PRESETS,
+      v => TIME_OF_DAY[v as TimeOfDayPreset].label,
+      this.timeOfDay,
+      v => { this.timeOfDay = v as TimeOfDayPreset },
+    )
+    mkSelectRow(
+      'Weather', WEATHER_PRESETS,
+      v => WEATHER_PRESET_LABELS[v as WeatherPreset],
+      this.weatherPreset,
+      v => { this.weatherPreset = v as WeatherPreset },
+    )
+    this.contentEl.appendChild(envSection)
+
     const optSection = document.createElement('div')
     optSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     optSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">FLIGHT OPTIONS</div>'
@@ -249,7 +315,7 @@ export class LoadoutScreen {
     glocChk.style.cssText = 'cursor:pointer;accent-color:#00ff88'
     glocChk.onchange = () => { this.glocEnabled = glocChk.checked }
     const glocLbl = document.createElement('span')
-    glocLbl.textContent = 'G-LOC Visual Effect'
+    glocLbl.textContent = 'G-LOC & AGSM Physiology'
     glocLbl.style.color = '#88bb88'
     glocRow.appendChild(glocChk)
     glocRow.appendChild(glocLbl)
@@ -289,7 +355,7 @@ export class LoadoutScreen {
     const hostInput = document.createElement('input')
     hostInput.type = 'text'
     hostInput.value = this.joinHost
-    hostInput.placeholder = 'Host IP (e.g. 192.168.1.25)'
+    hostInput.placeholder = 'Host IP / address (e.g. 192.168.1.25 or play.example.com:8080)'
     hostInput.style.cssText = 'flex:1;min-width:0;max-width:320px;background:#0a150a;color:#00ff88;border:1px solid #226644;font:11px monospace;padding:4px'
     hostInput.oninput = () => { this.joinHost = hostInput.value.trim() || '127.0.0.1' }
     joinRow.appendChild(hostInput)
@@ -398,70 +464,7 @@ export class LoadoutScreen {
     const ctrlSection = document.createElement('div')
     ctrlSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     ctrlSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">CONTROLS</div>'
-
-    const ctrlGroups: Array<{ label: string; bindings: Array<[string, string]> }> = [
-      {
-        label: 'FLIGHT',
-        bindings: [
-          ['W / S',       'Pitch down / up'],
-          ['A / D',       'Roll left / right'],
-          ['Q / E',       'Yaw left / right'],
-          ['Shift',       'Throttle up'],
-          ['Ctrl',        'Throttle down'],
-          ['G',           'Landing gear toggle'],
-          ['V',           'Flaps cycle (UP → TO → LDG)'],
-          ['B',           'Wheel brakes (hold)'],
-        ],
-      },
-      {
-        label: 'WEAPONS',
-        bindings: [
-          ['Space',       'Fire gun'],
-          ['F',           'Fire missile'],
-          ['C',           'Cycle missile'],
-        ],
-      },
-      {
-        label: 'COUNTERMEASURES',
-        bindings: [
-          ['Z',           'Dispense countermeasures (flare + chaff)'],
-        ],
-      },
-      {
-        label: 'RADAR / AVIONICS',
-        bindings: [
-          ['R',           'Radar mode cycle'],
-          ['T',           'Radar select next track'],
-          ['L',           'Lock selected target (STT)'],
-          ['U',           'Unlock STT'],
-        ],
-      },
-      {
-        label: 'MISC',
-        bindings: [
-          ['Tab',         'Toggle cockpit / external camera'],
-          ['F12',         'Toggle debug overlay'],
-          ['Esc',         'Abort mission (RTB)'],
-          ['` (backtick)','Eject'],
-        ],
-      },
-    ]
-
-    const ctrlGrid = document.createElement('div')
-    ctrlGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:12px'
-
-    for (const group of ctrlGroups) {
-      const col = document.createElement('div')
-      col.style.cssText = 'font-size:11px'
-      col.innerHTML = `<div style="color:#aaffcc;margin-bottom:4px;letter-spacing:1px">${group.label}</div>` +
-        group.bindings.map(([key, desc]) =>
-          `<div style="display:flex;justify-content:space-between;gap:8px;margin:2px 0">` +
-          `<span style="color:#00ff88;min-width:100px">${key}</span>` +
-          `<span style="color:#88bb88">${desc}</span></div>`
-        ).join('')
-      ctrlGrid.appendChild(col)
-    }
-    ctrlSection.appendChild(ctrlGrid)
+    ctrlSection.appendChild(renderControlsReference())
     this.contentEl.appendChild(ctrlSection)
 
     // Launch button
@@ -500,7 +503,25 @@ export class LoadoutScreen {
           this.lobbyClient = null
           this.lobbyConnected = false
         }
-        this.onLaunch(this.selectedSpec, stores, multiplayer, handoffClient, this.glocEnabled, this.autoRudder)
+        const selection: Record<string, string> = {}
+        for (const s of selects) selection[s.hpId] = s.sel.value
+        saveLoadoutFor(this.selectedSpec.id, selection)
+        saveSettings({
+          lastAircraftId: this.selectedSpec.id,
+          lastScenarioId: this.scenario.id,
+          glocEnabled: this.glocEnabled,
+          autoRudder: this.autoRudder,
+          lastTimeOfDay: this.timeOfDay,
+          lastWeatherPreset: this.weatherPreset,
+        })
+
+        const options: FlightOptions = {
+          glocEnabled: this.glocEnabled,
+          autoRudder: this.autoRudder,
+          timeOfDay: this.timeOfDay,
+          weather: this.weatherPreset,
+        }
+        this.onLaunch(this.selectedSpec, stores, multiplayer, handoffClient, options)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         this.launchError = `Launch failed: ${msg}`

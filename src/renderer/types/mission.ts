@@ -1,4 +1,7 @@
 import type { AIBehavior } from '../ai/AIAircraft'
+import type { TimeOfDayPreset } from '../scene/TimeOfDay'
+import type { WeatherPreset } from '../physics/WeatherPresets'
+import type { SortieStatsResult } from '../mission/SortieStats'
 
 export type MissionOutcome = 'success' | 'failure' | 'aborted' | 'ejected' | 'killed'
 
@@ -7,6 +10,8 @@ export type ObjectiveType =
   | 'destroy_ground'
   | 'all_enemies_destroyed'
   | 'all_ground_destroyed'
+  | 'takeoff'
+  | 'land'
 
 export interface MissionObjective {
   id: string
@@ -55,6 +60,8 @@ export interface ScenarioDescriptor {
   playerSpawn: {
     positionNED?: [number, number, number]
     velocityNED?: [number, number, number]
+    /** Start on the runway threshold: gear down, flaps takeoff, throttle idle, stationary. */
+    onRunway?: boolean
   }
   enemies: ScenarioEnemySpawn[]
   wingmen: ScenarioWingmanSpawn[]
@@ -63,6 +70,10 @@ export interface ScenarioDescriptor {
   winConditions: WinCondition[]
   loseConditions: LoseCondition[]
   timeLimitSec?: number
+  /** Default lighting preset; the player can override on the Loadout screen. */
+  timeOfDay?: TimeOfDayPreset
+  /** Default weather preset; the player can override on the Loadout screen. */
+  weather?: WeatherPreset
 }
 
 export interface FlightResult {
@@ -76,4 +87,8 @@ export interface FlightResult {
   objectivesCompleted: number
   objectivesTotal: number
   objectiveLabels: string[]
+  /** Per-sortie telemetry summary (combat + flight envelope). */
+  stats?: SortieStatsResult
+  /** Present when the sortie ended with the aircraft on the ground after a landing. */
+  landing?: { sinkMS: number; gearIntact: boolean }
 }

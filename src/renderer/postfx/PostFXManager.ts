@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
-import { GEffectPass } from './GEffectPass'
+import { GEffectPass, type GEffectInputs } from './GEffectPass'
 
 export type PostFXQuality = 'HIGH' | 'MEDIUM' | 'LOW'
 
@@ -47,8 +47,13 @@ export class PostFXManager {
     return this.quality
   }
 
-  setGLoad(g: number): void {
-    this.gPass.setGLoad(g)
+  setGEffect(e: GEffectInputs): void {
+    this.gPass.setEffect(e)
+  }
+
+  /** Override the bloom strength for the current time-of-day (day = subtle, night = punchy). */
+  setBloomStrength(strength: number): void {
+    this.bloomPass.strength = strength
   }
 
   render(): void {

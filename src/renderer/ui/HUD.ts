@@ -8,28 +8,45 @@ import { drawAirspeed }          from './HUDElements/Airspeed'
 import { drawAltimeter }         from './HUDElements/Altimeter'
 import { drawGMeter }            from './HUDElements/GMeter'
 import { drawHeadingTape }       from './HUDElements/HeadingTape'
-import { drawRadarScope }        from './HUDElements/RadarScope'
+import { drawRadarScope, type RadarDLZ } from './HUDElements/RadarScope'
 import { drawWeaponsStatus }     from './HUDElements/WeaponsStatus'
 import { drawThrottleBar }       from './HUDElements/ThrottleBar'
 import { drawFuelGauge }         from './HUDElements/FuelGauge'
-import { drawThreatDisplay }     from './HUDElements/ThreatDisplay'
+import { drawThreatDisplay, createRWRDisplayState, type RWRDisplayState } from './HUDElements/ThreatDisplay'
+import { drawLandingAids } from './HUDElements/LandingAids'
+import { getAGLM } from '../scene/Terrain'
+import {
+  computeRelativeKinematics,
+  resolveShootCue,
+  isShootCue,
+  formatAspect,
+  type ShootCue,
+} from './HUDElements/TargetGeometry'
+import type { CameraMode } from '../camera/CameraManager'
 import { drawFLIRPage } from '../cockpit/MFDPages/FLIRPage'
-import { AIM120B } from '../data/weapons/aim120b'
-import { R77 } from '../data/weapons/r77'
 import type { LoadedStore, MissileSpec } from '../types/weapons'
 import { MISSILE_SPECS } from '../data/weapons/catalog'
 import { computeAtmosphere } from '../physics/Atmosphere'
 import { quatRotateVec, v3len } from '../utils/MathUtils'
 
+/**
+ * HUD colour language (F/A-18/F-16 style):
+ *   HUD_GREEN  primary symbology, in-parameters / valid
+ *   HUD_AMBER  caution / advisory / marginal geometry
+ *   HUD_RED    warning / hostile hard lock / defensive
+ *   HUD_BLUE   friendly / own missile in mid-course
+ *   HUD_PITBULL own ARH missile gone active
+ */
+const HUD_GREEN = '#00ff44'
+const HUD_AMBER = '#ffb000'
+const HUD_RED = '#ff2020'
+const HUD_BLUE = '#66ccff'
+const HUD_PITBULL = '#ffe66d'
+
 const G0 = 9.80665
 const MIN_INTERCEPT_TIME_S = 0.05
 const MAX_INTERCEPT_TIME_S = 5
 const MAX_HUD_TTI_LINES = 3
-const ARH_MISSILE_RANGES_M: Record<string, number> = {
-  aim120b: AIM120B.maxRangeM,
-  r77: R77.maxRangeM,
-}
-
 interface LARInfo {
   rangeM: number
   rMinM: number
@@ -67,6 +84,11 @@ export class HUD {
   /** Minimum interval between full HUD repaints (~30 Hz). */
   private static readonly MIN_DRAW_INTERVAL_MS = 1000 / 30
   private forceRedraw = true
+  /** True while the active camera is the external/chase view. */
+  private isExternal = false
+  /** Tracks the current STT lock so the acquisition animation plays once. */
+  private sttAcquire: { id: string | null; startMs: number } = { id: null, startMs: 0 }
+  private rwrDisplayState: RWRDisplayState = createRWRDisplayState()
   private gunFunnelState: {
     x: number
     y: number
@@ -97,7 +119,8 @@ export class HUD {
     this.forceRedraw = true
   }
 
-  render(camera?: THREE.PerspectiveCamera): void {
+  render(camera?: THREE.PerspectiveCamera, cameraMode: CameraMode = 'COCKPIT'): void {
+    this.isExternal = cameraMode === 'EXTERNAL'
     const nowMs = performance.now()
     const needsFlash = this.decoyFlashRemainSec > 0 || this.wmCmdFlashRemainSec > 0
     if (
@@ -172,6 +195,12 @@ export class HUD {
     const weaponsY = H - edgePadY
     const cmdsY = weaponsY - Math.round(36 * uiScale)
 
+    const fuelFrac = state.fuelKg / Math.max(player.spec.mass.fuelCapacityKg, 1)
+
+    // ── Primary flight/status overlay ────────────────────────────────────────
+    // Drawn in BOTH views: in the cockpit these mirror the flight displays; in
+    // the chase view they stay as a screen-fixed overlay so no information is
+    // lost when the camera leaves the pit.
     // Heading tape — top center
     drawHeadingTape(ctx, cx, edgePadY, state.headingDeg)
 
@@ -185,7 +214,11 @@ export class HUD {
     drawAltimeter(ctx, altimeterX, cy, state.altitudeM)
 
     // G-meter — lower left
-    drawGMeter(ctx, gMeterX, cy + 80 * uiScale, state.gCurrent, state.gMax)
+    drawGMeter(ctx, gMeterX, cy + 80 * uiScale, state.gCurrent, state.gMax, {
+      reserveFraction: player.gloc.state.reserveFraction,
+      agsmStrain: player.gloc.state.agsmStrain,
+      incapacitated: player.gloc.state.incapacitated,
+    })
 
     // Throttle bar — lower left, right of G-meter
     drawThrottleBar(
@@ -207,35 +240,34 @@ export class HUD {
       uiScale,
     )
 
-    // Fuel state warning — flashes BINGO at 20% / EMERGENCY at 10%
-    const fuelFrac = state.fuelKg / Math.max(player.spec.mass.fuelCapacityKg, 1)
-    if (fuelFrac < 0.2) {
-      const flashOn = (Math.floor(performance.now() / 400) & 1) === 0
-      if (flashOn) {
-        const emergency = fuelFrac < 0.1
-        const label = emergency ? 'FUEL EMERG' : 'BINGO FUEL'
-        ctx.font = `bold ${Math.round(13 * uiScale)}px monospace`
-        ctx.fillStyle = emergency ? '#ff2020' : '#ffaa00'
-        ctx.textAlign = 'left'
-        ctx.fillText(label, gMeterX + 106, cy + 50 * uiScale - 8)
-      }
-    }
-
     // Mach — lower right
+    ctx.fillStyle = HUD_GREEN
     ctx.fillText(`M ${state.mach.toFixed(2)}`, altimeterX + 2, cy + 80 * uiScale)
 
     // VVI
     const vvi = Math.round(state.vviMps * 196.85)
     ctx.fillText(`VVI ${vvi >= 0 ? '+' : ''}${vvi}`, vviX, cy - 80 * uiScale)
 
+    // Flight path marker — screen-fixed from alpha/beta, matches the fixed ladder.
+    const betaPx  = (state.betaDeg  / 60) * (W / 2)
+    const alphaPx = (state.alphaDeg / 40) * (H / 2)
+    this.drawFpmGlyph(ctx, cx + betaPx, cy - alphaPx)
+
+    // Chase view only: a world-anchored nose reticle so the airframe's true
+    // pointing is readable against the screen-fixed ladder.
+    if (camera && this.isExternal) this.drawNoseReticle(ctx, camera, W, H)
+
+    // Master caution / warning — consolidated advisory line under the heading tape.
+    this.drawMasterCaution(ctx, cx, edgePadY + headingBandH + 4, fuelFrac)
+
     // Weapons status — bottom left
     drawWeaponsStatus(ctx, edgePadX, weaponsY, stores, selectedWeapon, gunRounds)
 
-    // Radar B-scope — bottom center
-    drawRadarScope(ctx, radarX, radarY, radarW, radarH, radar, state.positionNED, state.attitudeQuat)
+    // Radar B-scope — bottom center (with DLZ staple for the selected missile)
+    drawRadarScope(ctx, radarX, radarY, radarW, radarH, radar, state.positionNED, state.attitudeQuat, state.velocityNED, this.computeRadarDLZ())
 
     // RWR threat ring — bottom right
-    drawThreatDisplay(ctx, threatCx, threatCy, rwr, performance.now() / 1000)
+    drawThreatDisplay(ctx, threatCx, threatCy, rwr, performance.now() / 1000, this.rwrDisplayState)
     this.drawMissileTTIPanel(ctx, ttiPanelX, ttiPanelY)
     this.drawLAR(ctx, larX, larY)
 
@@ -258,20 +290,8 @@ export class HUD {
       ctx.restore()
     }
 
-    // Flight path marker
-    const betaPx  = (state.betaDeg  / 60) * (W / 2)
-    const alphaPx = (state.alphaDeg / 40) * (H / 2)
-    const fpmX = cx + betaPx, fpmY = cy - alphaPx
-    ctx.beginPath()
-    ctx.arc(fpmX, fpmY, 5, 0, Math.PI * 2)
-    ctx.stroke()
-    ctx.beginPath()
-    ctx.moveTo(fpmX - 14, fpmY); ctx.lineTo(fpmX - 6,  fpmY)
-    ctx.moveTo(fpmX + 6,  fpmY); ctx.lineTo(fpmX + 14, fpmY)
-    ctx.moveTo(fpmX, fpmY - 6);  ctx.lineTo(fpmX, fpmY - 14)
-    ctx.stroke()
-
-    // ── Bottom-center status strip ───────────────────────────────────────────
+    // ── Bottom-center status strip (gear / flaps / brakes) ──────────────────
+    {
     ctx.font = '11px monospace'
     const stripY = H - Math.max(10, edgePadY - 2)
     const stripCX = cx
@@ -339,6 +359,7 @@ export class HUD {
       ctx.fillStyle = '#226644'
       ctx.fillText('BRK', brkX + 4, stripY - 1)
     }
+    } // end status strip
 
     // ── CMDS counters (lower left, above weapons panel) ───────────────────────
     ctx.font = '11px monospace'
@@ -406,14 +427,23 @@ export class HUD {
     if (camera && radar.mode === 'STT' && radar.sttTargetId) {
       const enemies = this.entityManager.getEnemies()
       const target = enemies.find(e => e.entityId === radar.sttTargetId)
+      // Play the lock-acquisition animation once when a new STT lock is taken.
+      if (radar.sttTargetId !== this.sttAcquire.id) {
+        this.sttAcquire = { id: radar.sttTargetId, startMs: performance.now() }
+      }
       if (target) {
         this.drawGunFunnel(ctx, camera, target, W, H)
-        this.drawLockDiamond(ctx, camera, target, W, H, this.shouldShowRadarShootCue(target))
+        this.drawTargetDesignator(ctx, camera, target, W, H)
         this.drawMissileLeadIndicator(ctx, camera, target, W, H)
       }
+    } else if (this.sttAcquire.id !== null) {
+      this.sttAcquire = { id: null, startMs: 0 }
     }
 
     if (camera) this.drawSituationalMarkers(ctx, camera, W, H)
+
+    // Landing aids — AoA indexer (gear down) + radar altitude (low)
+    drawLandingAids(ctx, cx, cy, uiScale, state, getAGLM(state.positionNED))
   }
 
   private drawGunFunnel(
@@ -570,41 +600,269 @@ export class HUD {
     return 1 - Math.exp(-dtSec / Math.max(0.001, timeConstantSec))
   }
 
-  private drawLockDiamond(
+  /** Standard "winged circle" flight-path-marker glyph at a screen point. */
+  private drawFpmGlyph(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    ctx.save()
+    ctx.strokeStyle = HUD_GREEN
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.arc(x, y, 5, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(x - 14, y); ctx.lineTo(x - 5, y)
+    ctx.moveTo(x + 5, y);  ctx.lineTo(x + 14, y)
+    ctx.moveTo(x, y - 5);  ctx.lineTo(x, y - 12)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** Where the nose is pointing — the key reference in the orbit camera. */
+  private drawNoseReticle(
+    ctx: CanvasRenderingContext2D,
+    camera: THREE.PerspectiveCamera,
+    W: number,
+    H: number,
+  ): void {
+    const s = this.player.state
+    const nose = quatRotateVec(s.attitudeQuat, [1000, 0, 0])
+    const p = this.projectNEDToScreen(camera, [
+      s.positionNED[0] + nose[0],
+      s.positionNED[1] + nose[1],
+      s.positionNED[2] + nose[2],
+    ], W, H)
+    if (!p) return
+    ctx.save()
+    ctx.strokeStyle = HUD_GREEN
+    ctx.fillStyle = HUD_GREEN
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(p.x, p.y - 11); ctx.lineTo(p.x, p.y - 7)
+    ctx.moveTo(p.x - 11, p.y); ctx.lineTo(p.x - 7, p.y)
+    ctx.moveTo(p.x + 7, p.y);  ctx.lineTo(p.x + 11, p.y)
+    ctx.stroke()
+    ctx.font = '9px monospace'
+    ctx.textAlign = 'left'
+    ctx.fillText('NOSE', p.x + 10, p.y - 8)
+    ctx.restore()
+  }
+
+  /** Single consolidated caution/warning line — highest severity wins. */
+  private drawMasterCaution(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    topY: number,
+    fuelFrac: number,
+  ): void {
+    const rwr = this.player.rwr.state
+    const s = this.player.state
+    const cues: Array<{ text: string; warn: boolean; flash: boolean }> = []
+
+    const inboundMsl = rwr.threats.filter(t => t.type === 'MISSILE')
+    if (inboundMsl.length > 0) {
+      const closest = Math.min(...inboundMsl.map(t => t.distanceM ?? Infinity))
+      if (closest < 6000) cues.push({ text: 'BREAK', warn: true, flash: true })
+      else cues.push({ text: 'MISSILE', warn: true, flash: true })
+    }
+    if (fuelFrac < 0.1) cues.push({ text: 'FUEL EMERG', warn: true, flash: true })
+    else if (fuelFrac < 0.2) cues.push({ text: 'BINGO FUEL', warn: false, flash: true })
+    if (s.alphaDeg > 25) cues.push({ text: 'AOA', warn: false, flash: false })
+    if (s.gearDown && s.iasKts > 300) cues.push({ text: 'GEAR', warn: false, flash: false })
+
+    if (cues.length === 0) return
+    cues.sort((a, b) => Number(b.warn) - Number(a.warn))
+    const top = cues[0]!
+    const flashOn = (Math.floor(performance.now() / 250) & 1) === 0
+    if (top.flash && !flashOn) return
+
+    ctx.save()
+    ctx.font = 'bold 15px monospace'
+    ctx.fillStyle = top.warn ? HUD_RED : HUD_AMBER
+    ctx.textAlign = 'center'
+    ctx.fillText(top.text, cx, topY + 12)
+    ctx.restore()
+  }
+
+  /**
+   * Target-designator box for the STT lock: a range-scaled corner-bracket box
+   * that frames the bandit, a lock-acquisition animation, a kinematics data
+   * block, the staged shoot cue, and an off-boresight locator when the bandit
+   * leaves the HUD field of view.
+   */
+  private drawTargetDesignator(
     ctx: CanvasRenderingContext2D,
     camera: THREE.PerspectiveCamera,
     target: Aircraft,
     W: number,
     H: number,
-    showShootCue: boolean
   ): void {
+    const own = this.player.state
+    const k = computeRelativeKinematics(
+      own.positionNED, own.velocityNED,
+      target.state.positionNED, target.state.velocityNED,
+    )
+    const cue = this.computeShootCue(target)
     const screen = this.projectNEDToScreen(camera, target.state.positionNED, W, H)
+
+    const margin = 56
+    const offscreen = !screen ||
+      screen.x < margin || screen.x > W - margin ||
+      screen.y < margin || screen.y > H - margin
+    if (offscreen) this.drawOffBoresightLocator(ctx, camera, target, W, H, k.rangeM)
     if (!screen) return
 
-    const r = 22
-    ctx.strokeStyle = '#ff2020'
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.moveTo(screen.x,     screen.y - r)  // top
-    ctx.lineTo(screen.x + r, screen.y)      // right
-    ctx.lineTo(screen.x,     screen.y + r)  // bottom
-    ctx.lineTo(screen.x - r, screen.y)      // left
-    ctx.closePath()
-    ctx.stroke()
+    const horizontalFovRad = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * camera.aspect)
+    const pxPerRad = W / horizontalFovRad
+    const wingspanM = Math.max(4, target.spec.mass.wingspanM)
+    const halfBox = THREE.MathUtils.clamp(Math.atan2(wingspanM, Math.max(60, k.rangeM)) * pxPerRad, 8, 46)
 
-    // Inner cross-hairs
-    ctx.beginPath()
-    ctx.moveTo(screen.x - 5, screen.y); ctx.lineTo(screen.x + 5, screen.y)
-    ctx.moveTo(screen.x, screen.y - 5); ctx.lineTo(screen.x, screen.y + 5)
-    ctx.stroke()
-    if (showShootCue) {
-      ctx.fillStyle = '#00ff44'
-      ctx.font = 'bold 13px monospace'
-      ctx.fillText('SHOOT', screen.x + r + 10, screen.y + 4)
-      ctx.font = '12px monospace'
+    // Acquisition animation — brackets converge over ~0.45 s once per new lock.
+    const acqT = THREE.MathUtils.clamp((performance.now() - this.sttAcquire.startMs) / 450, 0, 1)
+    const b = halfBox + (1 - acqT) * Math.min(W, H) * 0.13
+    const corner = Math.max(5, b * 0.42)
+    const sx = screen.x, sy = screen.y
+
+    ctx.save()
+    ctx.strokeStyle = HUD_RED
+    ctx.lineWidth = 2
+    for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
+      ctx.beginPath()
+      ctx.moveTo(sx + dx * b, sy + dy * (b - corner))
+      ctx.lineTo(sx + dx * b, sy + dy * b)
+      ctx.lineTo(sx + dx * (b - corner), sy + dy * b)
+      ctx.stroke()
     }
-    ctx.lineWidth = 1.5
-    ctx.strokeStyle = '#00ff44'
+    if (acqT >= 1) {
+      ctx.fillStyle = HUD_RED
+      ctx.beginPath()
+      ctx.arc(sx, sy, 2, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    // ── Kinematics data block, right of the box ────────────────────────────────
+    const tgtAltM = -target.state.positionNED[2]
+    const sosMS = computeAtmosphere(Math.max(0, tgtAltM), k.targetSpeedMps).speedOfSoundMS
+    const vcKts = Math.round(k.closureMps * 1.94384)
+    const altDeltaKft = (k.altDeltaM * 3.28084) / 1000
+    const lines = [
+      `${(k.rangeM / 1852).toFixed(1)}NM`,
+      `VC ${vcKts >= 0 ? '+' : ''}${vcKts}`,
+      `ASP ${formatAspect(k)}`,
+      `${altDeltaKft >= 0 ? '+' : ''}${altDeltaKft.toFixed(1)}K M${(k.targetSpeedMps / Math.max(1, sosMS)).toFixed(2)}`,
+    ]
+    ctx.font = '11px monospace'
+    ctx.textAlign = 'left'
+    ctx.fillStyle = HUD_GREEN
+    const blockX = sx + b + 8
+    let blockY = sy - 16
+    for (const line of lines) {
+      ctx.fillText(line, blockX, blockY)
+      blockY += 13
+    }
+
+    // ── Staged shoot cue, below the box ──────────────────────────────────────
+    const cueSpec: Record<Exclude<ShootCue, 'NONE'>, { text: string; color: string; flash: boolean }> = {
+      TOO_CLOSE: { text: 'TOO CLOSE', color: HUD_AMBER, flash: false },
+      IN_RNG:    { text: 'IN RNG',    color: HUD_GREEN, flash: false },
+      SHOOT:     { text: 'SHOOT',     color: HUD_GREEN, flash: false },
+      SHOOT_NEZ: { text: 'SHOOT',     color: HUD_GREEN, flash: true  },
+    }
+    if (cue !== 'NONE') {
+      const spec = cueSpec[cue]
+      const flashOn = (Math.floor(performance.now() / 125) & 1) === 0
+      if (!spec.flash || flashOn) {
+        ctx.font = 'bold 13px monospace'
+        ctx.fillStyle = spec.color
+        ctx.textAlign = 'center'
+        ctx.fillText(spec.text, sx, sy + b + 16)
+      }
+    }
+    ctx.restore()
+  }
+
+  /** Dashed steering line + arrow toward a locked bandit outside the HUD FOV. */
+  private drawOffBoresightLocator(
+    ctx: CanvasRenderingContext2D,
+    camera: THREE.PerspectiveCamera,
+    target: Aircraft,
+    W: number,
+    H: number,
+    rangeM: number,
+  ): void {
+    const p = target.state.positionNED
+    const local = new THREE.Vector3(p[1], -p[2], -p[0]).project(camera)
+    let dx = local.x, dy = -local.y
+    if (local.z > 1) { dx = -dx; dy = -dy } // behind the camera
+    if (dx === 0 && dy === 0) return
+    const ang = Math.atan2(dy, dx)
+    const cx = W / 2, cy = H / 2
+    const rad = Math.min(W, H) * 0.3
+    const ex = cx + Math.cos(ang) * rad
+    const ey = cy + Math.sin(ang) * rad
+
+    // Off-boresight angle relative to own nose.
+    const bore = quatRotateVec(this.player.state.attitudeQuat, [1, 0, 0])
+    const own = this.player.state.positionNED
+    const los: [number, number, number] = [p[0] - own[0], p[1] - own[1], p[2] - own[2]]
+    const losLen = Math.max(1e-6, v3len(los))
+    const dot = THREE.MathUtils.clamp(
+      (bore[0] * los[0] + bore[1] * los[1] + bore[2] * los[2]) / losLen,
+      -1, 1,
+    )
+    const offDeg = Math.round(THREE.MathUtils.radToDeg(Math.acos(dot)))
+
+    ctx.save()
+    ctx.strokeStyle = HUD_RED
+    ctx.fillStyle = HUD_RED
+    ctx.lineWidth = 2
+    ctx.setLineDash([6, 4])
+    ctx.beginPath()
+    ctx.moveTo(cx + Math.cos(ang) * 38, cy + Math.sin(ang) * 38)
+    ctx.lineTo(ex, ey)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.beginPath()
+    ctx.moveTo(ex, ey)
+    ctx.lineTo(ex - Math.cos(ang - 0.4) * 12, ey - Math.sin(ang - 0.4) * 12)
+    ctx.lineTo(ex - Math.cos(ang + 0.4) * 12, ey - Math.sin(ang + 0.4) * 12)
+    ctx.closePath()
+    ctx.fill()
+    ctx.font = '10px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText(`${offDeg}°  ${(rangeM / 1852).toFixed(0)}NM`, ex, ey + (Math.sin(ang) > 0 ? 16 : -10))
+    ctx.restore()
+  }
+
+  /** DLZ (Rmin/Rne/Rmax + current range) for the selected missile vs the current target. */
+  private computeRadarDLZ(): RadarDLZ | undefined {
+    const store = this.getSelectedMissileStore()
+    const target = this.getCurrentTargetForLAR()
+    if (!store || !target) return undefined
+    const spec = MISSILE_SPECS[store.weaponId]
+    if (!spec) return undefined
+    const lar = this.computeLARInfo(spec, target)
+    if (!lar) return undefined
+    return { rMinM: lar.rMinM, rNeM: lar.rNeM, rMaxM: lar.rMaxM, rangeM: lar.rangeM }
+  }
+
+  /** Resolve the staged air-to-air shoot cue for a candidate target. */
+  private computeShootCue(target: Aircraft): ShootCue {
+    const store = this.getSelectedMissileStore()
+    if (!store) return 'NONE'
+    const spec = MISSILE_SPECS[store.weaponId]
+    if (!spec) return 'NONE'
+    const lar = this.computeLARInfo(spec, target)
+    const solution = this.computeMissileLeadSolution(spec, target)
+    return resolveShootCue({
+      hasMissileSelected: true,
+      lar: lar
+        ? { rangeM: lar.rangeM, rMinM: lar.rMinM, rMaxM: lar.rMaxM, inRange: lar.inRange, inNoEscapeZone: lar.inNoEscapeZone }
+        : null,
+      offBoresightDeg: solution ? solution.offBoresightDeg : null,
+      seekerLimitDeg: this.getMissileSeekerLimitDeg(spec),
+    })
   }
 
   private drawMissileLeadIndicator(
@@ -691,29 +949,13 @@ export class HUD {
     ctx.restore()
   }
 
-  private shouldShowRadarShootCue(target: Aircraft): boolean {
-    const selectedStore = this.getSelectedMissileStore()
-    if (!selectedStore || selectedStore.category !== 'ARH_MISSILE') return false
-
-    const maxRangeM = ARH_MISSILE_RANGES_M[selectedStore.weaponId]
-    if (!maxRangeM) return false
-
-    const ownPos = this.player.state.positionNED
-    const tgtPos = target.state.positionNED
-    const rangeM = Math.hypot(
-      tgtPos[0] - ownPos[0],
-      tgtPos[1] - ownPos[1],
-      tgtPos[2] - ownPos[2]
-    )
-    return rangeM <= maxRangeM
-  }
-
+  /** True while a valid launch solution exists on the STT target (drives the SHOOT callout). */
   isRadarShootCueActive(): boolean {
     const radar = this.player.radar.state
     if (radar.mode !== 'STT' || !radar.sttTargetId) return false
     const target = this.entityManager.getEnemies().find(e => e.entityId === radar.sttTargetId)
     if (!target) return false
-    return this.shouldShowRadarShootCue(target)
+    return isShootCue(this.computeShootCue(target))
   }
 
   private drawLAR(ctx: CanvasRenderingContext2D, x: number, y: number): void {
@@ -902,8 +1144,8 @@ export class HUD {
       const screen = this.projectNEDToScreen(camera, m.positionNED, W, H)
       if (!screen) continue
       const pitbull = m.spec.category === 'ARH_MISSILE' && m.guidanceMode === 'ACTIVE'
-      ctx.strokeStyle = pitbull ? '#ffe66d' : '#66ccff'
-      ctx.fillStyle = pitbull ? '#ffe66d' : '#66ccff'
+      ctx.strokeStyle = pitbull ? HUD_PITBULL : HUD_BLUE
+      ctx.fillStyle = pitbull ? HUD_PITBULL : HUD_BLUE
       if (pitbull) {
         this.fillDiamond(ctx, screen.x, screen.y, 7)
       } else {
@@ -966,7 +1208,7 @@ export class HUD {
       const ttiTxt = entry.timeToImpactSec === null || entry.timeToImpactSec === undefined
         ? '--.-'
         : Math.max(0, Math.min(99.9, entry.timeToImpactSec)).toFixed(1)
-      ctx.fillStyle = entry.pitbull ? '#ffe66d' : '#00ff44'
+      ctx.fillStyle = entry.pitbull ? HUD_PITBULL : HUD_GREEN
       ctx.fillText(`${sym}${i + 1} ${ttiTxt}s ${mode}`, x + 6, y + 26 + i * 14)
     }
 

@@ -4,6 +4,8 @@ import {
   GUN_HIT_MAX_RANGE_M,
   HIT_RANGE_SLACK_M,
   MAX_INBOUND_DAMAGE_SEVERITY,
+  MAX_NET_FLARES,
+  MAX_NET_MISSILES,
   MISSILE_HIT_MAX_RANGE_M,
   isPlausibleHit,
   isValidHitEvent,
@@ -108,6 +110,51 @@ describe('network validation', () => {
     it('rejects invalid vectors and throttle', () => {
       expect(isValidPlayerState({ ...makeState([0, 0, -1000]), throttle: 1.5 })).toBe(false)
       expect(isValidPlayerState({ ...makeState([0, 0, -1000]), positionNED: [0, 0] })).toBe(false)
+    })
+
+    it('accepts a null countermeasure payload (the "unchanged" sentinel)', () => {
+      expect(isValidPlayerState({ ...makeState([0, 0, -1000]), countermeasures: null })).toBe(true)
+    })
+
+    it('rejects a countermeasure payload missing an array', () => {
+      expect(isValidPlayerState({
+        ...makeState([0, 0, -1000]),
+        countermeasures: { flares: [] },
+      })).toBe(false)
+    })
+
+    it('rejects oversized missile and countermeasure arrays', () => {
+      const missile = {
+        id: 'm', positionNED: [0, 0, 0], velocityNED: [0, 0, 0], targetEntityId: 't', active: true,
+      }
+      expect(isValidPlayerState({
+        ...makeState([0, 0, -1000]),
+        missiles: Array.from({ length: MAX_NET_MISSILES + 1 }, () => missile),
+      })).toBe(false)
+
+      const flare = { positionNED: [0, 0, 0], velocityNED: [0, 0, 0], heatSignatureKW: 10, ageSec: 0 }
+      expect(isValidPlayerState({
+        ...makeState([0, 0, -1000]),
+        countermeasures: { flares: Array.from({ length: MAX_NET_FLARES + 1 }, () => flare), chaffClouds: [] },
+      })).toBe(false)
+    })
+
+    it('rejects malformed missile entries', () => {
+      expect(isValidPlayerState({
+        ...makeState([0, 0, -1000]),
+        missiles: [{ id: 'm', positionNED: [0, 0], velocityNED: [0, 0, 0], targetEntityId: 't', active: true }],
+      })).toBe(false)
+    })
+
+    it('accepts well-formed missiles and flares', () => {
+      expect(isValidPlayerState({
+        ...makeState([0, 0, -1000]),
+        missiles: [{ id: 'm1', positionNED: [1, 2, 3], velocityNED: [4, 5, 6], targetEntityId: 'peer_2', active: true }],
+        countermeasures: {
+          flares: [{ positionNED: [1, 2, 3], velocityNED: [0, 0, 1], heatSignatureKW: 60, ageSec: 0.2 }],
+          chaffClouds: [{ positionNED: [1, 2, 3], velocityNED: [0, 0, 1], rcsM2: 25, ageSec: 0.1 }],
+        },
+      })).toBe(true)
     })
   })
 

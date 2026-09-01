@@ -50,6 +50,50 @@ export function isValidRadarState(r: unknown): r is NetRadarState {
   )
 }
 
+/** Upper bounds — reject absurd payloads from a buggy or hostile client. */
+export const MAX_NET_MISSILES = 32
+export const MAX_NET_FLARES = 240
+export const MAX_NET_CHAFF = 240
+
+function isNetMissile(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return (
+    typeof o['id'] === 'string' && o['id'].length > 0 && o['id'].length <= 96 &&
+    isVec3(o['positionNED']) &&
+    isVec3(o['velocityNED']) &&
+    typeof o['targetEntityId'] === 'string' && o['targetEntityId'].length <= 96 &&
+    typeof o['active'] === 'boolean'
+  )
+}
+
+function isNetCountermeasures(v: unknown): boolean {
+  // `null` is the valid "unchanged since last snapshot" sentinel.
+  if (v === null) return true
+  if (typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  const flares = o['flares']
+  const chaff = o['chaffClouds']
+  if (!Array.isArray(flares) || !Array.isArray(chaff)) return false
+  if (flares.length > MAX_NET_FLARES || chaff.length > MAX_NET_CHAFF) return false
+  return (
+    flares.every(f => {
+      if (typeof f !== 'object' || f === null) return false
+      const fo = f as Record<string, unknown>
+      return isVec3(fo['positionNED']) && isVec3(fo['velocityNED']) &&
+        typeof fo['heatSignatureKW'] === 'number' && isFinite(fo['heatSignatureKW']) &&
+        typeof fo['ageSec'] === 'number' && isFinite(fo['ageSec'])
+    }) &&
+    chaff.every(c => {
+      if (typeof c !== 'object' || c === null) return false
+      const co = c as Record<string, unknown>
+      return isVec3(co['positionNED']) && isVec3(co['velocityNED']) &&
+        typeof co['rcsM2'] === 'number' && isFinite(co['rcsM2']) &&
+        typeof co['ageSec'] === 'number' && isFinite(co['ageSec'])
+    })
+  )
+}
+
 export function isValidPlayerState(s: unknown): s is NetPlayerState {
   if (typeof s !== 'object' || s === null) return false
   const o = s as Record<string, unknown>
@@ -61,8 +105,9 @@ export function isValidPlayerState(s: unknown): s is NetPlayerState {
     typeof o['ejected'] === 'boolean' &&
     typeof o['structuralFailure'] === 'boolean' &&
     isValidRadarState(o['radar']) &&
-    Array.isArray(o['missiles']) &&
-    typeof o['countermeasures'] === 'object' && o['countermeasures'] !== null
+    Array.isArray(o['missiles']) && o['missiles'].length <= MAX_NET_MISSILES &&
+    o['missiles'].every(isNetMissile) &&
+    isNetCountermeasures(o['countermeasures'])
   )
 }
 
