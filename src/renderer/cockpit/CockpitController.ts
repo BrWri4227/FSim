@@ -120,10 +120,7 @@ export class CockpitController {
       this.detailedCockpit.setControls(axes.pitch, axes.roll, state.throttle)
     }
 
-    this.glassHUD.update(
-      state, player.spec, player.radar.state, player.rwr.state,
-      player.hms.state.cursorAzDeg, player.hms.state.cursorElDeg,
-    )
+    this.glassHUD.update(player, entityManager)
 
     const gunRounds = player.gun.getRoundsRemaining()
     const selectedWeapon = player.getSelectedWeaponName()
@@ -133,12 +130,14 @@ export class CockpitController {
       state.loadedStores, gunRounds, selectedWeapon,
       player.cmds.flareCount, player.cmds.chaffCount,
       dataLink, player.targetingPod.state, entityManager.getGroundTargets(),
+      entityManager.getEnemies(),
     )
     this.mfdRight?.update(
       state, player.radar.state, player.rwr.state,
       state.loadedStores, gunRounds, selectedWeapon,
       player.cmds.flareCount, player.cmds.chaffCount,
       dataLink, player.targetingPod.state, entityManager.getGroundTargets(),
+      entityManager.getEnemies(),
     )
   }
 
