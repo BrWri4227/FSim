@@ -618,7 +618,12 @@ export class FlightSession {
       if (!snap.state) continue
       const remoteSpec = getAircraftById(snap.profile.aircraftId)
       if (!remoteSpec) continue
-      this.entityManager.upsertRemotePlayer(snap.playerId, remoteSpec, snap.state)
+      this.entityManager.upsertRemotePlayer(
+        snap.playerId,
+        remoteSpec,
+        snap.state,
+        snap.profile.callsign,
+      )
     }
     for (const trackedId of prev) {
       if (!seen.has(trackedId)) this.entityManager.removeRemotePlayer(trackedId)

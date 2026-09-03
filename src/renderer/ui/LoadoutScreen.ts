@@ -10,6 +10,7 @@ import { loadSettings, saveSettings, loadoutFor, saveLoadoutFor } from '../persi
 import { TIME_OF_DAY, TIME_OF_DAY_PRESETS, type TimeOfDayPreset } from '../scene/TimeOfDay'
 import { WEATHER_PRESETS, WEATHER_PRESET_LABELS, type WeatherPreset } from '../physics/WeatherPresets'
 import { POSTFX_QUALITIES, POSTFX_QUALITY_LABELS, type PostFXQuality } from '../postfx/PostFXManager'
+import { MAX_CALLSIGN_LENGTH, sanitizeCallsign } from '../../shared/network/validation'
 
 import type { LobbyRestoreBundle, FlightOptions } from '../FlightSession'
 import type { ScenarioDescriptor } from '../types/mission'
@@ -390,6 +391,35 @@ export class LoadoutScreen {
     setSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     setSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">SETTINGS</div>'
 
+    const csRow = document.createElement('div')
+    csRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
+    const csLbl = document.createElement('span')
+    csLbl.textContent = 'Callsign'
+    csLbl.style.cssText = 'font-size:11px;color:#88bb88;min-width:96px'
+    const csInput = document.createElement('input')
+    csInput.type = 'text'
+    csInput.maxLength = MAX_CALLSIGN_LENGTH
+    csInput.value = this.callsign
+    csInput.placeholder = 'shown to other pilots'
+    csInput.style.cssText =
+      'flex:1;min-width:0;max-width:260px;background:#0a150a;color:#00ff88;' +
+      'border:1px solid #226644;font:11px monospace;padding:3px 5px'
+    csInput.oninput = () => {
+      this.callsign = csInput.value
+    }
+    // Push on blur rather than per keystroke — profile-update goes to every
+    // peer and the server rate-limits inbound messages.
+    csInput.onchange = () => {
+      const clean = sanitizeCallsign(this.callsign)
+      this.callsign = clean
+      csInput.value = clean
+      saveSettings({ callsign: clean })
+      this.lobbyClient?.updateProfile({ callsign: clean })
+    }
+    csRow.appendChild(csLbl)
+    csRow.appendChild(csInput)
+    setSection.appendChild(csRow)
+
     mkSliderRow(setSection, 'Master volume', this.masterVolume, v => { this.masterVolume = v })
     mkSelectRow(
       setSection,
@@ -679,7 +709,10 @@ export class LoadoutScreen {
         this.hostLanIp = hostInfo.hostIp
       }
       const connectHost = mode === 'host' ? '127.0.0.1' : this.joinHost
-      const client = new MultiplayerClient({ aircraftId: this.selectedSpec.id })
+      const client = new MultiplayerClient({
+        aircraftId: this.selectedSpec.id,
+        callsign: sanitizeCallsign(this.callsign),
+      })
       await client.connect({
         mode,
         host: connectHost,
@@ -726,12 +759,15 @@ export class LoadoutScreen {
     const rows: string[] = []
     const localSpec = getAircraftById(this.selectedSpec.id)
     const localName = localSpec?.displayName ?? this.selectedSpec.id.toUpperCase()
-    rows.push(`YOU - ${localName} - IN LOBBY`)
+    const localCallsign = sanitizeCallsign(this.callsign)
+    rows.push(`YOU${localCallsign ? ` (${localCallsign})` : ''} - ${localName} - IN LOBBY`)
     for (const peer of this.lobbyClient.getRemoteSnapshots()) {
       const spec = getAircraftById(peer.profile.aircraftId)
       const aircraftName = spec?.displayName ?? peer.profile.aircraftId.toUpperCase()
       const status = peer.state ? 'IN FLIGHT' : 'IN LOBBY'
-      rows.push(`${peer.playerId} - ${aircraftName} - ${status}`)
+      // Peer id is the fallback: a pilot who set no callsign is still listed.
+      const who = peer.profile.callsign ?? peer.playerId
+      rows.push(`${who} - ${aircraftName} - ${status}`)
     }
     return rows.length > 0 ? rows : ['(no players yet)']
   }

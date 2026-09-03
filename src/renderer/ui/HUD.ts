@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { PlayerAircraft } from '../entities/PlayerAircraft'
 import type { EntityManager } from '../entities/EntityManager'
 import type { Aircraft } from '../entities/Aircraft'
+import { NetworkAircraft } from '../entities/NetworkAircraft'
 import type { MissileState } from '../types/weapons'
 import { drawAttitudeIndicator } from './HUDElements/AttitudeIndicator'
 import { drawAirspeed }          from './HUDElements/Airspeed'
@@ -1197,6 +1198,13 @@ export class HUD {
       ctx.stroke()
       ctx.fillStyle = '#ffd54d'
       ctx.fillText(`${(rangeM / 1000).toFixed(1)}km`, screen.x + r + 4, screen.y - r - 2)
+
+      // Label human opponents. Knowing who you are about to merge with is most
+      // of what makes a LAN dogfight fun, and AI contacts have no name worth
+      // showing, so this is deliberately only for remote players.
+      if (enemy instanceof NetworkAircraft) {
+        ctx.fillText(enemy.displayName, screen.x + r + 4, screen.y + r + 9)
+      }
     }
 
     // Missiles: own missiles and inbound-to-player missiles get distinct marker colors.

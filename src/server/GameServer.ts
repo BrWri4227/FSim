@@ -13,6 +13,7 @@ import {
   isValidHitEvent,
   isValidPlayerState,
   isValidProfile,
+  sanitizeProfile,
 } from '../shared/network/validation'
 
 /**
@@ -152,8 +153,11 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
 
       if (msg['type'] === 'join') {
         if (!isValidProfile(msg['profile'])) return
-        peer.profile = msg['profile']
-        emit(`Player ${peerId} joined (${msg['profile'].aircraftId.toUpperCase()})`)
+        // Sanitize here rather than trusting the sender: the callsign is
+        // rendered as text on every other client.
+        peer.profile = sanitizeProfile(msg['profile'])
+        const who = peer.profile.callsign ?? peerId
+        emit(`Player ${who} joined (${peer.profile.aircraftId.toUpperCase()})`)
         send(socket, {
           type: 'welcome',
           playerId: peerId,
@@ -165,14 +169,14 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
               state: p.state,
             })),
         })
-        broadcast({ type: 'peer-join', playerId: peerId, profile: msg['profile'] }, peerId)
+        broadcast({ type: 'peer-join', playerId: peerId, profile: peer.profile }, peerId)
         return
       }
 
       if (msg['type'] === 'profile-update') {
         if (!peer.profile || !isValidProfile(msg['profile'])) return
-        peer.profile = msg['profile']
-        broadcast({ type: 'peer-profile-update', playerId: peerId, profile: msg['profile'] }, peerId)
+        peer.profile = sanitizeProfile(msg['profile'])
+        broadcast({ type: 'peer-profile-update', playerId: peerId, profile: peer.profile }, peerId)
         return
       }
 

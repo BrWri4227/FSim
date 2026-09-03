@@ -12,6 +12,11 @@ export type RadarMode = 'OFF' | 'RWS' | 'TWS' | 'STT' | 'GMTI'
 
 export interface NetPlayerProfile {
   aircraftId: string
+  /**
+   * Display name shown to every other client. Optional so a client on an older
+   * build still validates; receivers fall back to the peer id.
+   */
+  callsign?: string
 }
 
 export interface NetRadarState {

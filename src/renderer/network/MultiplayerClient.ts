@@ -175,9 +175,18 @@ export class MultiplayerClient {
     }
   }
 
-  updateProfile(profile: NetPlayerProfile): void {
-    this.profile = profile
-    this.send({ type: 'profile-update', profile })
+  /**
+   * Merge a partial profile update. Callers only ever know about the one field
+   * they changed — picking an aircraft used to replace the whole profile and
+   * silently drop the callsign with it.
+   */
+  updateProfile(patch: Partial<NetPlayerProfile>): void {
+    this.profile = { ...this.profile, ...patch }
+    this.send({ type: 'profile-update', profile: this.profile })
+  }
+
+  getProfile(): NetPlayerProfile {
+    return this.profile
   }
 
   /** Queue state for throttled send — call flushStateSend each sim tick. */

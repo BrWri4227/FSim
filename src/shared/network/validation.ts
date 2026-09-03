@@ -22,10 +22,51 @@ export function isVec4(v: unknown): v is [number, number, number, number] {
   return Array.isArray(v) && v.length === 4 && v.every(x => typeof x === 'number' && isFinite(x))
 }
 
+export const MAX_CALLSIGN_LENGTH = 24
+
+/**
+ * Strip anything that would let a callsign misrepresent itself on someone
+ * else's screen. It is rendered as text on every other client, so control
+ * characters (including the bidirectional overrides, which can visually
+ * reorder surrounding text) and runs of whitespace are collapsed out before
+ * the length limit is applied.
+ *
+ * Returns an empty string if nothing usable is left; callers fall back to the
+ * peer id.
+ */
+export function sanitizeCallsign(raw: unknown): string {
+  if (typeof raw !== 'string') return ''
+  return raw
+    // Tab / newline / carriage return become spaces, so a pasted two-line name
+    // reads as two words rather than having them run together.
+    .replace(/[\t\n\r]/g, ' ')
+    // Everything else non-printable is dropped outright. The \u2028-\u202e and
+    // \u2060-\u206f ranges include the bidirectional overrides, which can
+    // visually reorder or hide text around them on the receiving client.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_CALLSIGN_LENGTH)
+}
+
 export function isValidProfile(p: unknown): p is NetPlayerProfile {
   if (typeof p !== 'object' || p === null) return false
   const o = p as Record<string, unknown>
-  return typeof o['aircraftId'] === 'string' && o['aircraftId'].length > 0 && o['aircraftId'].length <= 64
+  if (!(typeof o['aircraftId'] === 'string' && o['aircraftId'].length > 0 && o['aircraftId'].length <= 64)) {
+    return false
+  }
+  const callsign = o['callsign']
+  if (callsign !== undefined && (typeof callsign !== 'string' || callsign.length > MAX_CALLSIGN_LENGTH * 4)) {
+    return false
+  }
+  return true
+}
+
+/** Normalize an accepted profile in place — call after `isValidProfile`. */
+export function sanitizeProfile(p: NetPlayerProfile): NetPlayerProfile {
+  const callsign = sanitizeCallsign(p.callsign)
+  return callsign ? { aircraftId: p.aircraftId, callsign } : { aircraftId: p.aircraftId }
 }
 
 export function isValidHitEvent(h: unknown, senderId: string): h is HitEvent {
