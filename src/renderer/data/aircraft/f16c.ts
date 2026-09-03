@@ -93,6 +93,8 @@ export const F16C: AircraftSpec = {
   maxGPositive: 9.0,
   maxGNegative: -3.0,
   gunSpec: M61A1,
+  // M61A1 in the port LERX root, just aft of the canopy sill.
+  gunMuzzleBodyM: [1.7, -0.55, -0.45],
   heatSignatureBaseKW: 35,
   rcsTableM2: [1.2, 2.0, 4.0, 2.5, 1.0, 2.5, 4.0, 2.0],
   pilotEyePointM: [3.5, 0, -1.2],

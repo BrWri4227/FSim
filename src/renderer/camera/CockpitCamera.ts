@@ -6,29 +6,62 @@ import { clamp } from '../utils/MathUtils'
 export class CockpitCamera {
   private yaw = 0    // head look yaw, radians
   private pitch = 0  // head look pitch, radians
-  private mouseSensitivity = 0.002
+  private dragSensitivity = 0.005
+
+  private active = true
+  private looking = false
+  private lastMouse = { x: 0, y: 0 }
 
   private readonly MAX_YAW   = Math.PI / 2.2   // ±80°
   private readonly MAX_PITCH = 0.7              // ±40°
-
-  private onCanvasClick = (): void => {
-    document.getElementById('three-canvas')?.requestPointerLock()
-  }
+  /** Per-second fraction by which head recenters when freelook is released. */
+  private readonly RETURN_RATE = 12
 
   constructor() {
-    window.addEventListener('mousemove', this.onMouse)
-    document.getElementById('three-canvas')?.addEventListener('click', this.onCanvasClick)
+    window.addEventListener('mousedown', this.onMouseDown)
+    window.addEventListener('mousemove', this.onMouseMove)
+    window.addEventListener('mouseup', this.onMouseUp)
+    window.addEventListener('blur', this.onBlur)
   }
 
-  private onMouse = (e: MouseEvent) => {
-    if (document.pointerLockElement) {
-      this.yaw   = clamp(this.yaw   - e.movementX * this.mouseSensitivity, -this.MAX_YAW, this.MAX_YAW)
-      this.pitch = clamp(this.pitch - e.movementY * this.mouseSensitivity, -this.MAX_PITCH, this.MAX_PITCH)
-    }
+  /** Called by CameraManager so the inactive camera ignores mouse input. */
+  setActive(active: boolean): void {
+    this.active = active
+    if (!active) this.looking = false
   }
 
-  update(camera: THREE.PerspectiveCamera, player: PlayerAircraft): void {
+  private onMouseDown = (e: MouseEvent) => {
+    if (e.button !== 2 || !this.active) return
+    this.looking = true
+    this.lastMouse = { x: e.clientX, y: e.clientY }
+  }
+
+  private onMouseMove = (e: MouseEvent) => {
+    if (!this.looking) return
+    const dx = e.clientX - this.lastMouse.x
+    const dy = e.clientY - this.lastMouse.y
+    this.lastMouse = { x: e.clientX, y: e.clientY }
+    this.yaw   = clamp(this.yaw   - dx * this.dragSensitivity, -this.MAX_YAW, this.MAX_YAW)
+    this.pitch = clamp(this.pitch - dy * this.dragSensitivity, -this.MAX_PITCH, this.MAX_PITCH)
+  }
+
+  private onMouseUp = (e: MouseEvent) => {
+    if (e.button === 2) this.looking = false
+  }
+
+  private onBlur = () => { this.looking = false }
+
+  update(camera: THREE.PerspectiveCamera, player: PlayerAircraft, dt = 0.016): void {
     const { spec, state } = player
+
+    // Ease the head back to boresight once the pilot releases freelook.
+    if (!this.looking) {
+      const k = Math.exp(-this.RETURN_RATE * dt)
+      this.yaw   *= k
+      this.pitch *= k
+      if (Math.abs(this.yaw)   < 1e-4) this.yaw = 0
+      if (Math.abs(this.pitch) < 1e-4) this.pitch = 0
+    }
 
     // Aircraft position / attitude in Three.js world
     const aircraftPos  = nedToThree(state.positionNED)
@@ -64,7 +97,9 @@ export class CockpitCamera {
   getHeadElDeg(): number { return this.pitch * (180 / Math.PI) }
 
   dispose(): void {
-    window.removeEventListener('mousemove', this.onMouse)
-    document.getElementById('three-canvas')?.removeEventListener('click', this.onCanvasClick)
+    window.removeEventListener('mousedown', this.onMouseDown)
+    window.removeEventListener('mousemove', this.onMouseMove)
+    window.removeEventListener('mouseup', this.onMouseUp)
+    window.removeEventListener('blur', this.onBlur)
   }
 }

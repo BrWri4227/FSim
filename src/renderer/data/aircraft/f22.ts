@@ -76,7 +76,10 @@ export const F22: AircraftSpec = {
   },
   hardpoints: F22_HARDPOINTS,
   maxAoADeg: 26, maxGPositive: 9.0, maxGNegative: -3.0,
+  thrustVectoring: 'pitch',
   gunSpec: M61A1,
+  // M61A2 in the starboard wing-root fairing above the right intake.
+  gunMuzzleBodyM: [1.4, 1.35, -0.55],
   heatSignatureBaseKW: 18,
   rcsTableM2: [0.05, 0.08, 0.15, 0.10, 0.04, 0.10, 0.15, 0.08],
   pilotEyePointM: [4.5, 0, -1.35],

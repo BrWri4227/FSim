@@ -73,6 +73,8 @@ export const F15C: AircraftSpec = {
   hardpoints: F15C_HARDPOINTS,
   maxAoADeg: 28, maxGPositive: 9.0, maxGNegative: -3.0,
   gunSpec: M61A1,
+  // M61A1 in the starboard wing-root fairing above the intake.
+  gunMuzzleBodyM: [1.3, 1.05, -0.5],
   heatSignatureBaseKW: 55,
   rcsTableM2: [5.0, 8.0, 15.0, 9.0, 4.0, 9.0, 15.0, 8.0],
   pilotEyePointM: [4.0, 0, -1.4],

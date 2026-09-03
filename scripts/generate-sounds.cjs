@@ -100,6 +100,39 @@ function alloc(durationSec) {
   return new Float32Array(Math.floor(SR * durationSec))
 }
 
+/** Small deterministic PRNG so re-runs produce identical bursts per seed. */
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** State-variable band-pass — richer resonance than cascaded one-poles. */
+function svfBandpass(samples, freq, q) {
+  const out = new Float32Array(samples.length)
+  const f = 2 * Math.sin(Math.PI * freq / SR)
+  const damp = 1 / q
+  let low = 0, band = 0
+  for (let i = 0; i < samples.length; i++) {
+    low += f * band
+    const high = samples[i] - low - damp * band
+    band += f * high
+    out[i] = band
+  }
+  return out
+}
+
+/** Soft clip — adds grit and loudness without a harsh digital ceiling. */
+function saturate(samples, drive = 1.4) {
+  const out = new Float32Array(samples.length)
+  const k = Math.tanh(drive)
+  for (let i = 0; i < samples.length; i++) out[i] = Math.tanh(samples[i] * drive) / k
+  return out
+}
+
 // ── Sound generators ──────────────────────────────────────────────────────────
 
 // engine_ab.wav — afterburner roar (3.2 s, loop-friendly)
@@ -162,38 +195,164 @@ function gen_engine_flameout() {
   return normalise(lpf(s, 1300))
 }
 
-// gun_30mm.wav — GSh-30-1 cannon burst (1.5 s, seamless loop)
-// ~1800 RPM = 30 rounds/sec. Heavy percussive thuds.
-function gen_gun_30mm() {
-  const RATE   = 30                             // rounds per second
-  const DUR    = 1.5                            // exactly 45 shots
-  const s      = alloc(DUR)
-  const PERIOD = Math.floor(SR / RATE)          // samples per shot
+// ── Aircraft-cannon "buzzsaw" engine ─────────────────────────────────────────
+// A looped burst = a train of single-round reports (crack + body thump +
+// breech clack) with per-round timing jitter and amplitude/pitch variation,
+// over a continuous muzzle-gas roar bed, sub rumble and a faint rotary whine.
+// Rounds are stamped modulo the loop length so the pattern is exactly periodic;
+// the stationary beds get a short wrap crossfade. The jitter is what keeps it
+// from sounding like a flat synthetic tone.
 
-  // Single-shot template (~35 ms: initial shockwave then low-freq ringing)
-  const SHOT_LEN = Math.floor(SR * 0.035)
-  const shot = new Float32Array(SHOT_LEN)
-  for (let j = 0; j < SHOT_LEN; j++) {
+/** One single-round report template (Float32Array of `len` samples). */
+function makeShot(o, rng) {
+  const s = new Float32Array(o.len)
+  const clackDelay = Math.floor(SR * (0.0006 + rng() * 0.0009))
+  const thumpF = o.thumpFreq * (0.9 + rng() * 0.2)
+  for (let j = 0; j < o.len; j++) {
     const t = j / SR
-    const shockEnv  = Math.exp(-t / 0.003) * 0.9   // sharp shockwave click
-    const ringEnv   = Math.exp(-t / 0.012) * 0.6   // low ringing body tone
-    shot[j] = noise() * shockEnv
-            + sin_(t, 75) * ringEnv
-            + sin_(t, 52) * ringEnv * 0.6
+    const crack = noise() * Math.exp(-t / o.crackDecay) * o.crackLevel
+    const thump = (sin_(t, thumpF) + 0.35 * sin_(t, thumpF * 2.02)) *
+      Math.exp(-t / o.thumpDecay) * o.thumpLevel
+    const ct = j - clackDelay
+    const clack = ct > 0 ? noise() * Math.exp(-(ct / SR) / 0.004) * o.clackLevel : 0
+    s[j] = crack + thump + clack
   }
+  return lpf(hpf(s, o.hpHz), o.lpHz)
+}
 
-  // Stamp shots at regular intervals
-  const nShots = Math.floor(DUR * RATE)
+function buildBurst(c) {
+  const rng = mulberry32(c.seed)
+  const nShots = Math.round(c.rateHz * c.loopSeconds)   // integer => exact period fit
+  const L  = Math.round(SR * c.loopSeconds)             // final looped length
+  const xf = Math.floor(SR * 0.045)                     // bed wrap-crossfade length
+  const Lp = L + xf
+  const period = L / nShots
+  const shotLen = Math.floor(SR * c.shotLenSec)
+
+  // Layer 1 — rounds, positions modulo L (exactly L-periodic, loops clean).
+  const rounds = new Float32Array(L)
   for (let k = 0; k < nShots; k++) {
-    const off = k * PERIOD
-    for (let j = 0; j < SHOT_LEN && off + j < s.length; j++) {
-      s[off + j] += shot[j]
+    const start = Math.round(k * period + (rng() * 2 - 1) * c.timingJitter * period)
+    const amp = 1 - c.ampVar + rng() * (2 * c.ampVar)
+    const tmpl = makeShot({ len: shotLen, ...c.shot }, rng)
+    for (let j = 0; j < shotLen; j++) {
+      rounds[((start + j) % L + L) % L] += tmpl[j] * amp
     }
   }
 
-  // High-pass to remove DC, then low-pass to shape tone colour
-  return normalise(lpf(hpf(s, 30), 950))
+  // Layer 2 — muzzle-gas roar bed (band-passed noise).
+  let roar = new Float32Array(Lp)
+  for (let i = 0; i < Lp; i++) roar[i] = noise()
+  roar = hpf(lpf(svfBandpass(roar, (c.roarLpHz + c.roarHpHz) / 2, 0.7), c.roarLpHz), c.roarHpHz)
+
+  // Layer 3 — sub rumble (slow random-walk amplitude on a low sine pair).
+  const rumble = new Float32Array(Lp)
+  let rw = 0
+  for (let i = 0; i < Lp; i++) {
+    rw += (noise() * 0.5 - rw) * 0.0006
+    const t = i / SR
+    rumble[i] = (sin_(t, c.rumbleHz) + 0.5 * sin_(t, c.rumbleHz * 1.5)) * (0.6 + rw)
+  }
+
+  // Layer 4 — rotary mechanical whine (gently detuned pair).
+  let whine = new Float32Array(Lp)
+  for (let i = 0; i < Lp; i++) {
+    const t = i / SR
+    whine[i] = sin_(t, c.whineHz) * 0.6 + sin_(t, c.whineHz * c.whineRatio) * 0.4
+  }
+  whine = hpf(whine, c.whineHz * 0.7)
+
+  // Bed sum, then heal its wrap by folding the tail over the head.
+  const bed = new Float32Array(L)
+  for (let i = 0; i < L; i++) {
+    const v = roar[i] * c.roarLevel + rumble[i] * c.rumbleLevel + whine[i] * c.whineLevel
+    if (i < xf) {
+      const a = i / xf
+      const vt = roar[L + i] * c.roarLevel + rumble[L + i] * c.rumbleLevel + whine[L + i] * c.whineLevel
+      bed[i] = v * a + vt * (1 - a)
+    } else {
+      bed[i] = v
+    }
+  }
+
+  const mix = new Float32Array(L)
+  for (let i = 0; i < L; i++) mix[i] = rounds[i] + bed[i]
+
+  return normalise(saturate(lpf(hpf(mix, c.hpFinal), c.lpFinal), c.drive), c.peak)
 }
+
+// gun_*_tail.wav — released-trigger spin-down: the rotor coasts to a stop
+// (falling whine), a few trailing "dwell" rounds fire at a widening interval,
+// and the muzzle-gas roar decays through a closing low-pass. One-shot; the
+// engine plays it as the firing loop fades out.
+function buildTail(c) {
+  const rng = mulberry32((c.seed ^ 0x5a5a) | 0)
+  const L = Math.floor(SR * c.tailSec)
+  const shotLen = Math.floor(SR * c.shotLenSec)
+  const out = new Float32Array(L)
+
+  // Trailing dwell rounds — normal spacing at first, then slowing as the rotor
+  // loses speed. Not enveloped: they stay punchy at the head of the tail.
+  let pos = 0, gap = SR / c.rateHz, amp = 0.9
+  for (let k = 0; k < c.dwellRounds; k++) {
+    const tmpl = makeShot({ len: shotLen, ...c.shot }, rng)
+    const start = Math.round(pos)
+    for (let j = 0; j < shotLen && start + j < L; j++) out[start + j] += tmpl[j] * amp
+    pos += gap; gap *= 1.7; amp *= 0.55
+  }
+
+  // Spin-down whine (pitch + amplitude fall) over a decaying, darkening roar.
+  const tau = c.tailSec * 0.32
+  let ph = 0, roarY = 0
+  for (let i = 0; i < L; i++) {
+    const t = i / SR
+    const env = Math.exp(-t / tau)
+    const f = c.whineHz * (0.38 + 0.62 * env)
+    ph += TWO_PI * f / SR
+    const whine = (Math.sin(ph) * 0.6 + Math.sin(ph * c.whineRatio) * 0.4) * c.whineLevel * 3.0
+
+    const lpCut = c.roarLpHz * (0.25 + 0.75 * env)
+    const a = 1 / (1 + SR / (TWO_PI * lpCut))
+    roarY += a * (noise() - roarY)
+
+    out[i] += (whine + roarY * c.roarLevel * 1.3 + Math.sin(t * TWO_PI * c.rumbleHz) * c.rumbleLevel * env) * env
+  }
+
+  return normalise(saturate(lpf(hpf(out, c.hpFinal), c.lpFinal), c.drive * 0.85), c.peak * 0.95)
+}
+
+// M61A1 Vulcan — 6000 rpm = 100 rounds/s. Tearing "BRRRRT"; rounds fuse into a
+// ~100 Hz buzzsaw note. Loop 0.60 s seamless; tail 0.50 s.
+const GUN_20MM = {
+  rateHz: 100, loopSeconds: 0.60, seed: 1337,
+  shotLenSec: 0.028, timingJitter: 0.06, ampVar: 0.16,
+  roarLevel: 0.32, roarLpHz: 3800, roarHpHz: 320,
+  rumbleLevel: 0.20, rumbleHz: 46,
+  whineLevel: 0.05, whineHz: 210, whineRatio: 1.005,
+  shot: { crackLevel: 0.85, crackDecay: 0.0016, thumpFreq: 150, thumpDecay: 0.010,
+          thumpLevel: 0.55, clackLevel: 0.22, hpHz: 90, lpHz: 5200 },
+  drive: 1.5, hpFinal: 60, lpFinal: 6500, peak: 0.94,
+  tailSec: 0.50, dwellRounds: 3,
+}
+
+// GSh-30-1 — 1800 rpm = 30 rounds/s. Slower, heavier; individual thuds audible
+// inside a deep "BRRT". Loop 1.20 s seamless; tail 0.62 s.
+const GUN_30MM = {
+  rateHz: 30, loopSeconds: 1.20, seed: 4242,
+  shotLenSec: 0.060, timingJitter: 0.05, ampVar: 0.22,
+  roarLevel: 0.24, roarLpHz: 3400, roarHpHz: 200,
+  rumbleLevel: 0.32, rumbleHz: 34,
+  whineLevel: 0.03, whineHz: 120, whineRatio: 1.006,
+  shot: { crackLevel: 0.82, crackDecay: 0.0024, thumpFreq: 84, thumpDecay: 0.022,
+          thumpLevel: 0.85, clackLevel: 0.30, hpHz: 55, lpHz: 4800 },
+  drive: 1.5, hpFinal: 40, lpFinal: 5400, peak: 0.95,
+  tailSec: 0.62, dwellRounds: 2,
+}
+
+function gen_gun_20mm()      { return buildBurst(GUN_20MM) }
+function gen_gun_30mm()      { return buildBurst(GUN_30MM) }
+function gen_gun_20mm_tail() { return buildTail(GUN_20MM) }
+function gen_gun_30mm_tail() { return buildTail(GUN_30MM) }
 
 // rwr_track.wav — track-mode RWR ping (0.13 s, one-shot)
 // Two quick ascending tones — more urgent than a search ping.
@@ -299,11 +458,20 @@ function gen_pull_up() {
 const GENERATORS = {
   'engine_ab.wav':       gen_engine_ab,
   'engine_flameout.wav': gen_engine_flameout,
+  'gun_20mm.wav':        gen_gun_20mm,
   'gun_30mm.wav':        gen_gun_30mm,
+  'gun_20mm_tail.wav':   gen_gun_20mm_tail,
+  'gun_30mm_tail.wav':   gen_gun_30mm_tail,
   'rwr_track.wav':       gen_rwr_track,
   'missile_launch.wav':  gen_missile_launch,
   'pull_up.wav':         gen_pull_up,
 }
+
+// Files whose canonical source is this script — always regenerated, even if a
+// WAV already exists. (The default behaviour keeps hand-dropped recordings.)
+const REGENERATE = new Set([
+  'gun_20mm.wav', 'gun_30mm.wav', 'gun_20mm_tail.wav', 'gun_30mm_tail.wav',
+])
 
 console.log('\nFSim sound generator')
 console.log('Output: ' + DIR + '\n')
@@ -315,11 +483,12 @@ if (!fs.existsSync(DIR)) {
 let generated = 0
 for (const [filename, gen] of Object.entries(GENERATORS)) {
   const fp = path.join(DIR, filename)
-  if (fs.existsSync(fp)) {
+  if (fs.existsSync(fp) && !REGENERATE.has(filename)) {
     console.log('  skip  ' + filename + '  (already exists)')
     continue
   }
-  process.stdout.write('  gen   ' + filename + ' ... ')
+  const verb = fs.existsSync(fp) ? 'regen ' : 'gen   '
+  process.stdout.write('  ' + verb + filename + ' ... ')
   const samples = gen()
   writeWAV(fp, samples)
   const kb = (samples.length * 2 / 1024).toFixed(0)

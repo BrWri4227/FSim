@@ -6,6 +6,8 @@ import type { DataLinkContact } from '../types/radar'
 import type { LoadedStore } from '../types/weapons'
 import type { TargetingPodState } from '../avionics/TargetingPod'
 import type { GroundTarget } from '../entities/GroundTarget'
+import type { Aircraft } from '../entities/Aircraft'
+import { computeLARInfo, selectedAAMissileSpec } from '../ui/HUDElements/TargetingComputer'
 import { drawRadarPage } from './MFDPages/RadarPage'
 import { drawEWPage }    from './MFDPages/EWPage'
 import { drawStoresPage } from './MFDPages/StoresPage'
@@ -52,19 +54,31 @@ export class MFDRenderer {
     dataLink: DataLinkContact[],
     pod: TargetingPodState | null = null,
     groundTargets: GroundTarget[] = [],
+    enemies: Aircraft[] = [],
   ): void {
     const page = PAGES[this.pageIdx]!
     const w = MFD_SIZE, h = MFD_SIZE
 
+    // Selected A/A missile envelope vs the current STT target, shared by the
+    // RADAR (DLZ staple) and STORES (LAR readout) pages.
+    const sttTarget = radar.sttTargetId
+      ? enemies.find(e => e.entityId === radar.sttTargetId) ?? null
+      : null
+    const aamSpec = selectedAAMissileSpec(stores, selectedWeapon)
+    const lar = aamSpec && sttTarget ? computeLARInfo(aamSpec, state, sttTarget.state) : null
+
     switch (page) {
       case 'RADAR':
-        drawRadarPage(this.ctx, w, h, radar, state.positionNED, state.attitudeQuat)
+        drawRadarPage(
+          this.ctx, w, h, radar, state.positionNED, state.attitudeQuat, state.velocityNED,
+          lar ? { rMinM: lar.rMinM, rNeM: lar.rNeM, rMaxM: lar.rMaxM, rangeM: lar.rangeM } : undefined,
+        )
         break
       case 'EW':
         drawEWPage(this.ctx, w, h, rwr, flareCount, chaffCount, performance.now() / 1000)
         break
       case 'STORES':
-        drawStoresPage(this.ctx, w, h, stores, gunRounds, selectedWeapon)
+        drawStoresPage(this.ctx, w, h, stores, gunRounds, selectedWeapon, lar)
         break
       case 'DATALINK':
         drawDataLinkPage(this.ctx, w, h, dataLink, state.positionNED)

@@ -12,6 +12,7 @@ export class ExternalCamera {
   private elevation = 0.3
   private isDragging = false
   private lastMouse = { x: 0, y: 0 }
+  private active = true
 
   constructor() {
     window.addEventListener('mousedown', this.onMouseDown)
@@ -20,8 +21,14 @@ export class ExternalCamera {
     window.addEventListener('wheel',     this.onWheel, { passive: true })
   }
 
+  /** Called by CameraManager so the inactive camera ignores mouse input. */
+  setActive(active: boolean): void {
+    this.active = active
+    if (!active) this.isDragging = false
+  }
+
   private onMouseDown = (e: MouseEvent) => {
-    if (e.button === 2) { this.isDragging = true; this.lastMouse = { x: e.clientX, y: e.clientY } }
+    if (e.button === 2 && this.active) { this.isDragging = true; this.lastMouse = { x: e.clientX, y: e.clientY } }
   }
   private onMouseMove = (e: MouseEvent) => {
     if (!this.isDragging) return

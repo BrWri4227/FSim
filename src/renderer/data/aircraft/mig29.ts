@@ -73,6 +73,8 @@ export const MIG29: AircraftSpec = {
   hardpoints: MIG29_HARDPOINTS,
   maxAoADeg: 28, maxGPositive: 9.0, maxGNegative: -3.0,
   gunSpec: GSH301,
+  // GSh-301 in the port LERX root, left of the windscreen.
+  gunMuzzleBodyM: [2.4, -0.85, -0.45],
   heatSignatureBaseKW: 50,
   rcsTableM2: [5.0, 8.0, 14.0, 8.5, 3.5, 8.5, 14.0, 8.0],
   pilotEyePointM: [3.6, 0, -1.3],

@@ -1,9 +1,14 @@
-export function drawAttitudeIndicator(ctx: CanvasRenderingContext2D, cx: number, cy: number, pitchDeg: number, rollDeg: number): void {
+export function drawAttitudeIndicator(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  pitchDeg: number,
+  rollDeg: number,
+  pxPerDeg = 6,
+): void {
   ctx.save()
   ctx.translate(cx, cy)
   ctx.rotate(-rollDeg * Math.PI / 180)
-
-  const pxPerDeg = 6
 
   // Pitch ladder
   for (let p = -40; p <= 40; p += 5) {
