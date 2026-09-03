@@ -306,7 +306,10 @@ export class FlightSession {
   private async startInternal(): Promise<void> {
     await this.initMultiplayer()
     this.applyPeerSpawnOffset()
-    const spawnCounts = spawnScenario(this.scenario, this.entityManager, this.player)
+    // initMultiplayer has resolved by here, so `multiplayer` is settled.
+    const spawnCounts = spawnScenario(this.scenario, this.entityManager, this.player, {
+      suppressAI: this.isMultiplayerLive(),
+    })
     this.missionTracker = new MissionTracker(this.scenario, spawnCounts)
     this.sessionStartTime = performance.now()
     this.lastTime = this.sessionStartTime
@@ -324,6 +327,15 @@ export class FlightSession {
     this.player.state.positionNED[1] = eastM
     // Keep state vector consistent with the new position (sv index 1 = East).
     this.player.state.sv[1] = eastM
+  }
+
+  /** True only when a LAN session was requested *and* the socket is up. */
+  private isMultiplayerLive(): boolean {
+    return (
+      this.multiplayerConfig.mode !== 'single' &&
+      this.multiplayer !== null &&
+      this.multiplayer.isConnected()
+    )
   }
 
   private async initMultiplayer(): Promise<void> {
@@ -482,7 +494,14 @@ export class FlightSession {
         this.scheduleMissionEnd('ejected', 4)
         return
       }
-    } else if (this.player.state.ejected) {
+    }
+
+    // Unconditional fallback. This used to be the `else` of the branch above,
+    // but startInternal always constructs a tracker, so the branch was dead —
+    // and a scenario with no lose conditions (Free Flight) returns outcome null
+    // forever. Dying there left the player sitting in the wreck with no debrief
+    // and no way out except the pause menu's abort, if they thought to look.
+    if (this.player.state.ejected) {
       this.scheduleMissionEnd(playerKilled ? 'killed' : 'ejected', 4)
     }
   }
@@ -683,11 +702,7 @@ export class FlightSession {
     this.sceneManager.dispose()
     this.audioManager.dispose()
 
-    const preserve =
-      Boolean(options?.preserveMultiplayer) &&
-      this.multiplayerConfig.mode !== 'single' &&
-      this.multiplayer !== null &&
-      this.multiplayer.isConnected()
+    const preserve = Boolean(options?.preserveMultiplayer) && this.isMultiplayerLive()
 
     let restored: LobbyRestoreBundle | undefined
     if (preserve && this.multiplayer) {

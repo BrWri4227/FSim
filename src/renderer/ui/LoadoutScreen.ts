@@ -192,6 +192,21 @@ export class LoadoutScreen {
       `<div style="font-size:14px;color:#00ff88;margin-top:4px">${this.scenario.name}</div>`
     this.contentEl.appendChild(missionBanner)
 
+    // Scenario objectives are scored against locally-spawned AI, which is not
+    // replicated and is suppressed outright in a LAN session. Anything other
+    // than Dogfight therefore has no bandits and no reachable win condition.
+    if (this.lobbyConnected && this.scenario.id !== 'dogfight') {
+      const warn = document.createElement('div')
+      warn.style.cssText =
+        'border:1px solid #aa7722;background:#1a1206;padding:10px 12px;width:100%;' +
+        'box-sizing:border-box;text-align:center;font-size:11px;color:#ffaa44'
+      warn.textContent =
+        `"${this.scenario.name}" is a single-player mission. In a LAN session no AI is ` +
+        'spawned, so there will be nothing to fight but the other pilots and no objectives ' +
+        'to complete. Go back and pick Dogfight (Multiplayer).'
+      this.contentEl.appendChild(warn)
+    }
+
     if (this.onBack) {
       const backBtn = document.createElement('button')
       backBtn.textContent = '← CHANGE MISSION'
@@ -334,12 +349,25 @@ export class LoadoutScreen {
       parent.appendChild(row)
     }
 
+    // Time of day and weather are per-client: they change the lighting the
+    // scene is built with and the air the flight model integrates, and neither
+    // is replicated. Two players on different settings would be flying in
+    // measurably different air, so lock them to the scenario in a lobby.
+    const envLocked = this.lobbyConnected
+    if (envLocked) {
+      // Reset to the scenario's canonical conditions rather than this client's
+      // last-used setting — otherwise locking the selects still leaves two
+      // players starting in different weather.
+      this.timeOfDay = this.scenario.timeOfDay ?? 'DAY'
+      this.weatherPreset = this.scenario.weather ?? 'CLEAR'
+    }
     mkSelectRow(
       envSection,
       'Time of day', TIME_OF_DAY_PRESETS,
       v => TIME_OF_DAY[v as TimeOfDayPreset].label,
       this.timeOfDay,
       v => { this.timeOfDay = v as TimeOfDayPreset },
+      envLocked,
     )
     mkSelectRow(
       envSection,
@@ -347,7 +375,14 @@ export class LoadoutScreen {
       v => WEATHER_PRESET_LABELS[v as WeatherPreset],
       this.weatherPreset,
       v => { this.weatherPreset = v as WeatherPreset },
+      envLocked,
     )
+    if (envLocked) {
+      const envNote = document.createElement('div')
+      envNote.textContent = 'Locked in multiplayer — all pilots fly the same conditions.'
+      envNote.style.cssText = 'font-size:10px;color:#446644;margin-top:4px'
+      envSection.appendChild(envNote)
+    }
     this.contentEl.appendChild(envSection)
 
     // ── Settings ────────────────────────────────────────────────────────────

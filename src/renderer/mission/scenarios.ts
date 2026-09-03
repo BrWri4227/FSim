@@ -171,9 +171,42 @@ export const STRIKE_PACKAGE: ScenarioDescriptor = {
   timeLimitSec: 900,
 }
 
+/**
+ * The multiplayer scenario. No AI, no objectives — the mission is the other
+ * players, so there is nothing to complete and no win condition. Everything
+ * that makes a session end (respawn, scoring) is driven by the LAN layer.
+ *
+ * Every other scenario spawns AI on all clients independently, with no
+ * replication, so each player fights their own private copy of the same
+ * bandits. This one is what a LAN dogfight should select.
+ */
+export const DOGFIGHT: ScenarioDescriptor = {
+  id: 'dogfight',
+  name: 'Dogfight (Multiplayer)',
+  description: 'LAN free-for-all — no AI, no objectives, just the other players.',
+  briefing:
+    'Free-for-all against the other pilots in the lobby. There are no AI bandits ' +
+    'and no objectives: every contact is a real player. You respawn a few seconds ' +
+    'after being shot down, so the session continues until everyone quits. Hold N ' +
+    'for the scoreboard.',
+  playerSpawn: {
+    positionNED: [0, 0, -5000],
+    velocityNED: [250, 0, 0],
+  },
+  enemies: [],
+  wingmen: [],
+  groundTargets: [],
+  objectives: [],
+  winConditions: [],
+  loseConditions: ['player_killed', 'player_ejected'],
+  timeOfDay: 'DAY',
+  weather: 'CLEAR',
+}
+
 export const SCENARIO_CATALOG: ScenarioDescriptor[] = [
   TRAFFIC_PATTERN,
   FREE_FLIGHT,
+  DOGFIGHT,
   HEAD_ON_BVR,
   CAP_WITH_WINGMAN,
   STRIKE_PACKAGE,
