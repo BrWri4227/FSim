@@ -417,8 +417,13 @@ export class Aircraft {
     // Flap visibility
     setFlapsVisible(this.mesh, this.state.flaps > 0)
 
-    // Show/hide store meshes as weapons are expended
-    const activeHardpoints = new Set(this.state.loadedStores.map(s => s.hardpointId))
+    // Show/hide store meshes as weapons are expended. Fired stores stay in
+    // loadedStores with remainingRounds 0 (the weapons page still lists them),
+    // so keying purely on hardpoint id left every missile hanging on the rail
+    // after launch.
+    const activeHardpoints = new Set(
+      this.state.loadedStores.filter(s => s.remainingRounds > 0).map(s => s.hardpointId)
+    )
     for (const [id, mesh] of this.storeMeshes) {
       mesh.visible = activeHardpoints.has(id)
     }

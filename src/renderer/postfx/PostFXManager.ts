@@ -14,6 +14,23 @@ export const POSTFX_QUALITY_LABELS: Record<PostFXQuality, string> = {
   LOW:    'Low — no bloom, no shadows',
 }
 
+/**
+ * Renderer-level cost knobs for the same quality setting, consumed by
+ * `SceneManager`. Shadow map size and device pixel ratio dominate GPU cost far
+ * more than the post chain does, so the LOW preset has to reach them too or the
+ * setting does nothing for the people who need it.
+ */
+export const RENDER_QUALITY: Record<PostFXQuality, {
+  shadows: boolean
+  shadowMapSize: number
+  softShadows: boolean
+  maxPixelRatio: number
+}> = {
+  HIGH:   { shadows: true,  shadowMapSize: 2048, softShadows: true,  maxPixelRatio: 2 },
+  MEDIUM: { shadows: true,  shadowMapSize: 1024, softShadows: false, maxPixelRatio: 1.5 },
+  LOW:    { shadows: false, shadowMapSize: 512,  softShadows: false, maxPixelRatio: 1 },
+}
+
 const QUALITY_PRESETS: Record<PostFXQuality, { strength: number; radius: number; threshold: number; halfResBloom: boolean; bloomEnabled: boolean }> = {
   HIGH:   { strength: 0.45, radius: 0.40, threshold: 0.88, halfResBloom: false, bloomEnabled: true },
   MEDIUM: { strength: 0.40, radius: 0.35, threshold: 0.90, halfResBloom: true,  bloomEnabled: true },
@@ -25,6 +42,7 @@ export class PostFXManager {
   private gPass: GEffectPass
   private bloomPass: UnrealBloomPass
   private quality: PostFXQuality = 'HIGH'
+  private timeOfDayBloomStrength: number | null = null
   private viewportW = 1
   private viewportH = 1
 
@@ -45,9 +63,9 @@ export class PostFXManager {
     this.quality = quality
     const preset = QUALITY_PRESETS[quality]
     this.bloomPass.enabled = preset.bloomEnabled
-    this.bloomPass.strength = preset.strength
     this.bloomPass.radius = preset.radius
     this.bloomPass.threshold = preset.threshold
+    this.applyBloomStrength()
     this.applyBloomResolution()
   }
 
@@ -61,7 +79,20 @@ export class PostFXManager {
 
   /** Override the bloom strength for the current time-of-day (day = subtle, night = punchy). */
   setBloomStrength(strength: number): void {
-    this.bloomPass.strength = strength
+    this.timeOfDayBloomStrength = strength
+    this.applyBloomStrength()
+  }
+
+  /**
+   * Time-of-day sets the absolute look; quality scales it relative to HIGH.
+   * Kept as separate inputs because the two are set independently and in
+   * either order — a bare assignment from one would clobber the other.
+   */
+  private applyBloomStrength(): void {
+    const preset = QUALITY_PRESETS[this.quality]
+    const base = this.timeOfDayBloomStrength ?? preset.strength
+    const scale = preset.strength / QUALITY_PRESETS.HIGH.strength
+    this.bloomPass.strength = base * scale
   }
 
   render(): void {

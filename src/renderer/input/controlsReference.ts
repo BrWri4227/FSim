@@ -48,13 +48,34 @@ export const CONTROLS_REFERENCE: ControlGroup[] = [
     ],
   },
   {
+    label: 'WINGMEN',
+    bindings: [
+      ['1', 'Engage — attack your target'],
+      ['2', 'Cover me'],
+      ['3', 'Return to base'],
+      ['4', 'Rejoin formation'],
+    ],
+  },
+  {
     label: 'MISC',
     bindings: [
       ['Tab', 'Toggle cockpit / external camera'],
       ['F1 / F2', 'Cycle left / right MFD page'],
+      ['F11', 'Toggle fullscreen'],
       ['F12', 'Toggle debug overlay'],
       ['Esc', 'Pause menu'],
       ['` (backtick)', 'Eject'],
+    ],
+  },
+  {
+    label: 'GAMEPAD',
+    bindings: [
+      ['Left stick', 'Roll / pitch'],
+      ['Right stick X', 'Yaw'],
+      ['LT / RT', 'Throttle down / up'],
+      ['RB', 'Fire gun'],
+      ['A', 'Fire missile'],
+      ['B', 'Countermeasures'],
     ],
   },
 ]

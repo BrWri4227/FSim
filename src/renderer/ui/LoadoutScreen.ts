@@ -377,10 +377,14 @@ export class LoadoutScreen {
     glocChk.style.cssText = 'cursor:pointer;accent-color:#00ff88'
     glocChk.onchange = () => { this.glocEnabled = glocChk.checked }
     const glocLbl = document.createElement('span')
-    glocLbl.textContent = 'G-LOC & AGSM Physiology'
+    glocLbl.textContent = 'G-LOC blackout'
     glocLbl.style.color = '#88bb88'
+    const glocHint = document.createElement('span')
+    glocHint.textContent = '— sustained high-G greys out your vision and can knock you out; off for new pilots'
+    glocHint.style.cssText = 'color:#446644;font-size:10px'
     glocRow.appendChild(glocChk)
     glocRow.appendChild(glocLbl)
+    glocRow.appendChild(glocHint)
     optSection.appendChild(glocRow)
 
     const rudderRow = document.createElement('label')

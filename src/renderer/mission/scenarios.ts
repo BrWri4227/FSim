@@ -4,7 +4,11 @@ export const FREE_FLIGHT: ScenarioDescriptor = {
   id: 'free_flight',
   name: 'Free Flight',
   description: 'Empty skies — practice flight and weapons with no objectives.',
-  briefing: 'No hostiles or targets. Use F12 debug overlay to spawn entities if needed.',
+  briefing:
+    'Airborne at 5,000 m with no hostiles and nothing to shoot at. Good place to ' +
+    'learn the aircraft: try the controls, find the stall, and get a feel for how ' +
+    'much speed a hard turn costs you. Nothing here can end the mission except ' +
+    'the ground. Press Esc for the pause menu and the full control list.',
   playerSpawn: {
     positionNED: [0, 0, -5000],
     velocityNED: [250, 0, 0],

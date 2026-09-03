@@ -137,7 +137,7 @@ export class FlightSession {
     const threeCanvas = document.getElementById('three-canvas') as HTMLCanvasElement
     const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement
 
-    this.sceneManager = new SceneManager(threeCanvas, options.timeOfDay)
+    this.sceneManager = new SceneManager(threeCanvas, options.timeOfDay, options.postFXQuality)
     this.cameraManager = new CameraManager(this.sceneManager.camera)
     this.inputManager = new InputManager({ invertPitch: options.invertPitch })
     this.audioManager = new AudioManager()
@@ -198,7 +198,12 @@ export class FlightSession {
       })
     })
 
-    this.postFX = new PostFXManager(this.sceneManager.renderer, this.sceneManager.scene, this.sceneManager.camera)
+    this.postFX = new PostFXManager(
+      this.sceneManager.renderer,
+      this.sceneManager.scene,
+      this.sceneManager.camera,
+      options.postFXQuality,
+    )
     this.postFX.setSize(window.innerWidth, window.innerHeight)
     this.postFX.setBloomStrength(this.sceneManager.getBloomStrength())
     setLODCamera(this.sceneManager.camera)
