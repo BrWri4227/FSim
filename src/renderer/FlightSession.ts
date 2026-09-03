@@ -7,7 +7,7 @@ import { HUD } from './ui/HUD'
 import { DebugOverlay } from './debug/DebugOverlay'
 import { DebugVisuals } from './debug/DebugVisuals'
 import { AudioManager } from './audio/AudioManager'
-import { PostFXManager } from './postfx/PostFXManager'
+import { PostFXManager, type PostFXQuality } from './postfx/PostFXManager'
 import { AWACS } from './avionics/AWACS'
 import { MultiplayerClient } from './network/MultiplayerClient'
 import type { MultiplayerConfig } from './network/MultiplayerTypes'
@@ -36,15 +36,21 @@ const FIXED_DT = 1 / 60
 export interface FlightOptions {
   glocEnabled: boolean
   autoRudder: boolean
+  invertPitch: boolean
   timeOfDay: TimeOfDayPreset
   weather: WeatherPreset
+  masterVolume: number
+  postFXQuality: PostFXQuality
 }
 
 export const DEFAULT_FLIGHT_OPTIONS: FlightOptions = {
-  glocEnabled: true,
+  glocEnabled: false,
   autoRudder: true,
+  invertPitch: false,
   timeOfDay: 'DAY',
   weather: 'CLEAR',
+  masterVolume: 0.8,
+  postFXQuality: 'HIGH',
 }
 
 /** LAN session client + connection settings for restoring the lobby after debrief. */

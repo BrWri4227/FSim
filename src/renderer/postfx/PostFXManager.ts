@@ -6,6 +6,14 @@ import { GEffectPass, type GEffectInputs } from './GEffectPass'
 
 export type PostFXQuality = 'HIGH' | 'MEDIUM' | 'LOW'
 
+export const POSTFX_QUALITIES: readonly PostFXQuality[] = ['HIGH', 'MEDIUM', 'LOW']
+
+export const POSTFX_QUALITY_LABELS: Record<PostFXQuality, string> = {
+  HIGH:   'High — full bloom, soft shadows',
+  MEDIUM: 'Medium — half-res bloom, hard shadows',
+  LOW:    'Low — no bloom, no shadows',
+}
+
 const QUALITY_PRESETS: Record<PostFXQuality, { strength: number; radius: number; threshold: number; halfResBloom: boolean; bloomEnabled: boolean }> = {
   HIGH:   { strength: 0.45, radius: 0.40, threshold: 0.88, halfResBloom: false, bloomEnabled: true },
   MEDIUM: { strength: 0.40, radius: 0.35, threshold: 0.90, halfResBloom: true,  bloomEnabled: true },
