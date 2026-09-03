@@ -79,8 +79,6 @@ export interface MissileState {
   lastKnownTargetVel: Vec3
   active: boolean
   shooterEntityId: string
-  /** Previous-frame miss distance for closest-approach proximity fuse. */
-  prevMissDistanceM: number | null
 }
 
 export interface GunRoundState {

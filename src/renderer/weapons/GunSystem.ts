@@ -4,7 +4,7 @@ import type { GunRoundState } from '../types/weapons'
 import type { Aircraft } from '../entities/Aircraft'
 import type { DamageZone } from '../types/damage'
 import { updateGunRound } from './GunRound'
-import { v3add, v3scale, quatRotateVec, nedToThree, v3dist } from '../utils/MathUtils'
+import { v3add, v3scale, quatRotateVec, nedToThree, segmentPointDistance } from '../utils/MathUtils'
 import { applyHit } from '../systems/DamageModel'
 
 const HIT_RADIUS = 5  // meters for gun kill
@@ -108,11 +108,15 @@ export class GunSystem {
 
     for (let i = this.rounds.length - 1; i >= 0; i--) {
       const round = this.rounds[i]!
+      // Capture the pre-integration position for a swept segment test — a round can
+      // travel ~20 m per tick at muzzle+aircraft speed, well past the ~5 m hit sphere,
+      // so testing only the post-integration point misses roughly half of well-aimed shots.
+      const prevPos = round.positionNED
       updateGunRound(round, dt)
 
-      // Hit check
+      // Hit check — swept segment (prevPos -> new position) vs a sphere around each enemy.
       for (const enemy of enemies) {
-        if (v3dist(round.positionNED, enemy.state.positionNED) < HIT_RADIUS) {
+        if (segmentPointDistance(prevPos, round.positionNED, enemy.state.positionNED) < HIT_RADIUS) {
           round.active = false
           // Vary hit zone by proximity position relative to target
           const dx = round.positionNED[0] - enemy.state.positionNED[0]
@@ -126,6 +130,9 @@ export class GunSystem {
           const severity = 0.22
           applyHit(enemy.damage, zone, severity, enemy.state.invincible)
           this.onTargetHit?.(enemy, zone, severity)
+          // Stop after the first hit so a round can't damage two enemies standing
+          // within HIT_RADIUS of each other.
+          break
         }
       }
 

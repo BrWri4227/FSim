@@ -49,6 +49,15 @@ describe('DamageModel.applyHit', () => {
     applyHit(dmg, 'WING_LEFT', 1.0)
     expect(applyHit(dmg, 'WING_RIGHT', 1.0)).toBe(true)
   })
+
+  it('a dead-centre missile hit (lethality 1.0) destroys in one shot', () => {
+    // MissileSystem severity formula: lethality^2 * 1.15, clamped to 1.0 by applyHit.
+    const dmg = defaultDamageState()
+    const lethality = 1.0
+    const severity = lethality * lethality * 1.15
+    expect(applyHit(dmg, 'FUSELAGE', severity)).toBe(true)
+    expect(dmg.zones.FUSELAGE).toBe(1)
+  })
 })
 
 describe('DamageModel.computeFlightPenalties', () => {

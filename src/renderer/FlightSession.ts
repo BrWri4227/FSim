@@ -1,4 +1,3 @@
-import * as THREE from 'three'
 import { SceneManager } from './scene/SceneManager'
 import { CameraManager } from './camera/CameraManager'
 import { PlayerAircraft } from './entities/PlayerAircraft'
@@ -23,7 +22,7 @@ import { FlareEffect } from './scene/FlareEffect'
 import { ChaffEffect } from './scene/ChaffEffect'
 import { setLODCamera } from './entities/Aircraft'
 import { warmupMissileVisuals } from './weapons/MissileSystem'
-import { warmupExplosionVisuals } from './scene/ExplosionEffect'
+import { warmupExplosionVisuals, stepExplosionPool } from './scene/ExplosionEffect'
 import { CockpitController } from './cockpit/CockpitController'
 import { PauseMenu } from './ui/PauseMenu'
 import { SortieStats } from './mission/SortieStats'
@@ -358,6 +357,10 @@ export class FlightSession {
     if (controls.wingmanCover)  this.entityManager.commandWingmen('COVER')
     if (controls.wingmanRTB)    this.entityManager.commandWingmen('RTB')
     if (controls.wingmanRejoin) this.entityManager.commandWingmen('REJOIN')
+    // Explosion particle pool is shared per-scene across every MissileSystem/BombSystem
+    // (player, AI, SAMs, debug) — step it exactly once per tick here, not inside each
+    // weapon system's own update().
+    stepExplosionPool(this.sceneManager.scene, dt)
     this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined, this.entityManager.getGroundTargets())
     this.syncMultiplayer(dt)
     this.entityManager.update(dt, this.player)

@@ -4,6 +4,8 @@ import { AIM120B } from '../data/weapons/aim120b'
 import type { MissileState } from '../types/weapons'
 import type { AircraftState } from '../types/aircraft'
 
+const DT = 1 / 60
+
 function makeMissile(overrides: Partial<MissileState> = {}): MissileState {
   return {
     id: 'm1',
@@ -24,42 +26,50 @@ function makeMissile(overrides: Partial<MissileState> = {}): MissileState {
     lastKnownTargetVel: [0, 0, 0],
     active: true,
     shooterEntityId: 'p1',
-    prevMissDistanceM: null,
     ...overrides,
   }
 }
 
-function makeTarget(pos: [number, number, number] = [100, 0, -5000]): AircraftState {
-  return { positionNED: pos } as AircraftState
+function makeTarget(
+  pos: [number, number, number] = [100, 0, -5000],
+  vel: [number, number, number] = [0, 0, 0]
+): AircraftState {
+  return { positionNED: pos, velocityNED: vel } as AircraftState
 }
 
 describe('Warhead.checkProximityFuse', () => {
-  it('detonates when inside fuse gate', () => {
-    const m = makeMissile({ positionNED: [0, 0, -5000] })
-    const t = makeTarget([5, 0, -5000])
-    expect(checkProximityFuse(m, t)).toBe(true)
+  it('detonates when already inside the fuse gate', () => {
+    const m = makeMissile({ positionNED: [0, 0, -5000], velocityNED: [0, 0, 0] })
+    const t = makeTarget([5, 0, -5000], [0, 0, 0])
+    const result = checkProximityFuse(m, t, DT)
+    expect(result.detonate).toBe(true)
+    expect(result.missDistanceM).toBeCloseTo(5)
   })
 
-  it('detonates on closest-approach when distance starts increasing inside gate', () => {
-    const gate = AIM120B.proxFuseRadiusM
-    const m = makeMissile({
-      positionNED: [0, 0, -5000],
-      prevMissDistanceM: gate - 1,
-    })
-    const t = makeTarget([gate + 2, 0, -5000])
-    expect(checkProximityFuse(m, t)).toBe(true)
-    expect(m.prevMissDistanceM).toBeGreaterThan(gate)
+  it('detonates on a high-closure pass whose closest approach falls strictly inside the tick', () => {
+    // Head-on merge: ~1200 m/s closure (missile 900 m/s, target 300 m/s closing), so
+    // relative separation changes by 1200 * (1/60) = 20 m over a single tick — enough
+    // to step clean past a 12 m fuse gate. Both the start-of-tick and end-of-tick
+    // positions are set up to be OUTSIDE the gate (13.45 m each) while the true
+    // closest-approach point at t = dt/2 (lateral miss distance 9 m) is inside it.
+    // A same-tick point test (the old, buggy behaviour) would miss this shot entirely.
+    const gate = AIM120B.proxFuseRadiusM // 12
+    const m = makeMissile({ positionNED: [0, 0, -5000], velocityNED: [900, 0, 0] })
+    const t = makeTarget([10, 9, -5000], [-300, 0, 0])
+
+    const result = checkProximityFuse(m, t, DT)
+    expect(result.detonate).toBe(true)
+    expect(result.missDistanceM).toBeCloseTo(9, 1)
+    expect(result.missDistanceM).toBeLessThan(gate)
   })
 
-  it('does not detonate when still closing and outside gate', () => {
+  it('does not detonate when the closest approach stays outside the gate', () => {
     const gate = AIM120B.proxFuseRadiusM
-    const m = makeMissile({
-      positionNED: [0, 0, -5000],
-      prevMissDistanceM: gate + 50,
-    })
-    const t = makeTarget([gate + 40, 0, -5000])
-    expect(checkProximityFuse(m, t)).toBe(false)
-    expect(m.prevMissDistanceM).toBeCloseTo(gate + 40)
+    const m = makeMissile({ positionNED: [0, gate + 50, -5000], velocityNED: [300, 0, 0] })
+    const t = makeTarget([500, 0, -5000], [0, 0, 0])
+    const result = checkProximityFuse(m, t, DT)
+    expect(result.detonate).toBe(false)
+    expect(result.missDistanceM).toBeGreaterThan(gate)
   })
 })
 
@@ -67,17 +77,17 @@ describe('Warhead.computeLethality', () => {
   const lethal = AIM120B.lethalRadiusM
 
   it('returns 1.0 at or inside lethal radius', () => {
-    expect(computeLethality([0, 0, 0], [lethal, 0, 0], lethal)).toBe(1)
-    expect(computeLethality([0, 0, 0], [0, 0, 0], lethal)).toBe(1)
+    expect(computeLethality(0, lethal)).toBe(1)
+    expect(computeLethality(lethal, lethal)).toBe(1)
   })
 
   it('returns 0 beyond 3x lethal radius', () => {
-    expect(computeLethality([0, 0, 0], [lethal * 3 + 1, 0, 0], lethal)).toBe(0)
+    expect(computeLethality(lethal * 3 + 1, lethal)).toBe(0)
   })
 
   it('linearly falls off between lethal and 3x lethal radius', () => {
     const mid = lethal * 2
-    expect(computeLethality([0, 0, 0], [mid, 0, 0], lethal)).toBeCloseTo(0.5)
+    expect(computeLethality(mid, lethal)).toBeCloseTo(0.5)
   })
 })
 

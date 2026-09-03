@@ -203,7 +203,6 @@ export class MissileSystem {
       lastKnownTargetVel: knownVel,
       active: true,
       shooterEntityId,
-      prevMissDistanceM: null,
     }
     this.missiles.push(missile)
 
@@ -232,7 +231,10 @@ export class MissileSystem {
     radarTargetVel?: [number,number,number],
     groundTargets: GroundTarget[] = [],
   ): void {
-    this.explosions.update(dt)
+    // Explosion particle pool is shared per-scene across every MissileSystem/BombSystem —
+    // it is stepped exactly once per tick from FlightSession.tick(), not here (see
+    // stepExplosionPool in ExplosionEffect.ts). Stepping it here too would multi-advance
+    // the pool once per live weapon system and shrink explosion lifetime accordingly.
 
     // Build a single O(1) lookup map for this update call — avoids an O(enemies) linear
     // scan inside every missile's loop iteration.
@@ -430,24 +432,29 @@ export class MissileSystem {
       } else if (guidanceTargetPos && guidanceTargetVel) {
         guidanceAccel = guideMissile(m, guidanceTargetPos, guidanceTargetVel, dt)
 
-        // Proximity fuse
-        if (target !== undefined && checkProximityFuse(m, target.state)) {
-          const lethality = computeLethality(m.positionNED, target.state.positionNED, m.spec.lethalRadiusM)
-          if (lethality > 0.3) {
-            const zone = hitZoneFromMissileApproach(m.velocityNED, target.state.attitudeQuat)
-            const severity = lethality * 0.65
-            applyHit(target.damage, zone, severity, target.state.invincible)
-            this.onTargetHit?.(target, zone, severity)
-            // Proximity blast: secondary fragments can hit adjacent zones
-            if (lethality > 0.7 && !target.state.invincible) {
-              const secondary: DamageZone[] = ['FUSELAGE', 'ENGINE', 'WING_LEFT', 'WING_RIGHT']
-              for (const sz of secondary) {
-                if (sz !== zone) applyHit(target.damage, sz, lethality * 0.15)
+        // Proximity fuse — swept closest-approach test over the tick (see Warhead.ts)
+        if (target !== undefined) {
+          const fuse = checkProximityFuse(m, target.state, dt)
+          if (fuse.detonate) {
+            const lethality = computeLethality(fuse.missDistanceM, m.spec.lethalRadiusM)
+            if (lethality > 0.3) {
+              const zone = hitZoneFromMissileApproach(m.velocityNED, target.state.attitudeQuat)
+              // A dead-centre hit (lethality 1.0) is a kill; falloff is steep so a
+              // near-miss stays a scratch rather than a guaranteed mission kill.
+              const severity = lethality * lethality * 1.15
+              applyHit(target.damage, zone, severity, target.state.invincible)
+              this.onTargetHit?.(target, zone, severity)
+              // Proximity blast: secondary fragments can hit adjacent zones
+              if (lethality > 0.7 && !target.state.invincible) {
+                const secondary: DamageZone[] = ['FUSELAGE', 'ENGINE', 'WING_LEFT', 'WING_RIGHT']
+                for (const sz of secondary) {
+                  if (sz !== zone) applyHit(target.damage, sz, lethality * 0.15)
+                }
               }
             }
+            this.explode(i, m)
+            continue
           }
-          this.explode(i, m)
-          continue
         }
       }
 
@@ -488,7 +495,7 @@ export class MissileSystem {
           if (dx*dx + dy*dy + dz*dz < fuseSq) { hitGT = gt; break }
         }
         if (hitGT) {
-          const lethality = computeLethality(m.positionNED, hitGT.state.positionNED, m.spec.lethalRadiusM)
+          const lethality = computeLethality(v3dist(m.positionNED, hitGT.state.positionNED), m.spec.lethalRadiusM)
           const damage = (m.spec.lethalRadiusM * 4) * Math.max(0.3, lethality)
           hitGT.applyDamage(damage)
           this.explode(i, m)

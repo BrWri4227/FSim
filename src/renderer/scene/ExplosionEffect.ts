@@ -53,6 +53,43 @@ function ensureExplosionPool(scene: THREE.Scene): ExplosionSlot[] {
   return pool
 }
 
+/**
+ * Advance one scene's explosion pool by `dt`.
+ *
+ * The pool is keyed per-`THREE.Scene` (see `explosionPools` above) and shared by every
+ * `MissileSystem`/`BombSystem` instance in that scene — the player's, each AI aircraft's,
+ * SAMs, and debug spawns. Call this exactly once per tick (e.g. from `FlightSession.tick`).
+ * If every weapon system steps its own copy of `ExplosionManager.update`, the shared pool
+ * gets advanced N times per tick (N = live weapon systems), which is what previously made
+ * a 2.2 s explosion last well under half a second in a multi-bandit scenario.
+ */
+export function stepExplosionPool(scene: THREE.Scene, dt: number): void {
+  const pool = explosionPools.get(scene)
+  if (!pool) return
+
+  for (const exp of pool) {
+    if (!exp.active) continue
+    exp.age += dt
+    const t = exp.age / exp.lifetime
+    const pos = exp.positions
+    for (let i = 0; i < EXPLOSION_PARTICLE_COUNT; i++) {
+      const vi = i * 3
+      pos[vi]!     += (exp.velocities[vi]     ?? 0) * dt
+      pos[vi + 1]! += (exp.velocities[vi + 1] ?? 0) * dt - 9.8 * dt * exp.age
+      pos[vi + 2]! += (exp.velocities[vi + 2] ?? 0) * dt
+    }
+    exp.geo.attributes['position']!.needsUpdate = true
+    exp.mat.opacity = Math.max(0, 1 - t)
+    exp.mat.color.setHSL(0.08 - t * 0.06, 1.0, 0.55 - t * 0.2)
+
+    if (exp.age >= exp.lifetime) {
+      exp.active = false
+      exp.particles.visible = false
+      exp.mat.opacity = 0
+    }
+  }
+}
+
 /** Pre-compile explosion particle shaders at session start. */
 export function warmupExplosionVisuals(
   renderer: THREE.WebGLRenderer,
@@ -111,31 +148,11 @@ export class ExplosionManager {
     // No PointLight — adding one per detonation recompiles every lit MeshStandardMaterial.
   }
 
+  /** @deprecated Call `stepExplosionPool(scene, dt)` exactly once per tick instead —
+   *  see the free function below. Kept only so any stray caller still compiles;
+   *  do not wire this back into a per-system `update()` loop. */
   update(dt: number): void {
-    const pool = explosionPools.get(this.scene)
-    if (!pool) return
-
-    for (const exp of pool) {
-      if (!exp.active) continue
-      exp.age += dt
-      const t = exp.age / exp.lifetime
-      const pos = exp.positions
-      for (let i = 0; i < EXPLOSION_PARTICLE_COUNT; i++) {
-        const vi = i * 3
-        pos[vi]!     += (exp.velocities[vi]     ?? 0) * dt
-        pos[vi + 1]! += (exp.velocities[vi + 1] ?? 0) * dt - 9.8 * dt * exp.age
-        pos[vi + 2]! += (exp.velocities[vi + 2] ?? 0) * dt
-      }
-      exp.geo.attributes['position']!.needsUpdate = true
-      exp.mat.opacity = Math.max(0, 1 - t)
-      exp.mat.color.setHSL(0.08 - t * 0.06, 1.0, 0.55 - t * 0.2)
-
-      if (exp.age >= exp.lifetime) {
-        exp.active = false
-        exp.particles.visible = false
-        exp.mat.opacity = 0
-      }
-    }
+    stepExplosionPool(this.scene, dt)
   }
 
   dispose(): void {
