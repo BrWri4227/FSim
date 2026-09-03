@@ -54,7 +54,18 @@ interface PeerRecord {
   /** Sliding one-second message counter for rate limiting. */
   msgWindowStart: number
   msgCount: number
+  /** Server-authoritative score, so every client shows the same standings. */
+  kills: number
+  deaths: number
 }
+
+/**
+ * Ignore a death reported within this long of the previous one from the same
+ * peer. A victim's damage state stays past the kill threshold for the whole
+ * respawn delay, so a client that re-evaluates each tick — or one that is
+ * simply buggy — would otherwise inflate its killer's score without limit.
+ */
+const DEATH_DEBOUNCE_MS = 3000
 
 export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
   const host = opts.host ?? '0.0.0.0'
@@ -130,7 +141,10 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
       isAlive: true,
       msgWindowStart: Date.now(),
       msgCount: 0,
+      kills: 0,
+      deaths: 0,
     }
+    let lastDeathAtMs = 0
     peers.set(peerId, peer)
     emit(`Socket connection attempt from ${remote} (${peerId})`)
 
@@ -167,7 +181,11 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
               playerId: p.id,
               profile: p.profile as NetPlayerProfile,
               state: p.state,
+              // Included so a late joiner sees the real standings rather than
+              // a table of zeroes that only fills in as people die.
+              score: { kills: p.kills, deaths: p.deaths },
             })),
+          score: { kills: peer.kills, deaths: peer.deaths },
         })
         broadcast({ type: 'peer-join', playerId: peerId, profile: peer.profile }, peerId)
         return
@@ -202,6 +220,49 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
         if (!sourcePeer?.state || !targetPeer?.state) return
         if (!isPlausibleHit(hit, sourcePeer.state, targetPeer.state)) return
         broadcast({ type: 'hit', hit }, peerId)
+        return
+      }
+
+      if (msg['type'] === 'death') {
+        if (!peer.profile) return
+
+        const now = Date.now()
+        if (now - lastDeathAtMs < DEATH_DEBOUNCE_MS) return
+        lastDeathAtMs = now
+
+        const rawKillerId = msg['killerId']
+        if (rawKillerId !== null && typeof rawKillerId !== 'string') return
+
+        // A killer only counts if they are a real, joined peer other than the
+        // victim. Self-attribution would let a client farm its own score, and
+        // a stale id from someone who has since left must not resurrect them.
+        const killerPeer =
+          typeof rawKillerId === 'string' && rawKillerId !== peerId
+            ? peers.get(rawKillerId)
+            : undefined
+        const killerId = killerPeer?.profile ? killerPeer.id : null
+
+        peer.deaths++
+        if (killerPeer?.profile) killerPeer.kills++
+
+        const victimName = peer.profile.callsign ?? peerId
+        const killerName = killerPeer?.profile
+          ? (killerPeer.profile.callsign ?? killerPeer.id)
+          : null
+        emit(killerName ? `${victimName} was shot down by ${killerName}` : `${victimName} went down`)
+
+        // No exceptPeerId: every client, the victim included, builds the
+        // scoreboard and kill feed from this one stream, so they cannot
+        // disagree about what happened.
+        broadcast({
+          type: 'death',
+          victimId: peerId,
+          killerId,
+          victimScore: { kills: peer.kills, deaths: peer.deaths },
+          killerScore: killerPeer?.profile
+            ? { kills: killerPeer.kills, deaths: killerPeer.deaths }
+            : null,
+        })
       }
     })
 

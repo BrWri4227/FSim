@@ -108,6 +108,16 @@ export class FlightSession {
   private landedSafely = false
   private seenInboundMissileIds = new Set<string>()
 
+  // ── Kill attribution ───────────────────────────────────────────────────────
+  private lastDamageSourceId: string | null = null
+  private lastDamageAtMs = 0
+  /**
+   * How long a hit stays "responsible" for a death. Long enough to cover a
+   * mortally damaged aircraft spiralling into the ground, short enough that a
+   * scratch taken minutes earlier does not steal the credit from terrain.
+   */
+  private static readonly KILL_CREDIT_WINDOW_MS = 10_000
+
   private onComplete: (result: FlightResult) => void
 
   constructor(
@@ -327,6 +337,17 @@ export class FlightSession {
     this.player.state.positionNED[1] = eastM
     // Keep state vector consistent with the new position (sv index 1 = East).
     this.player.state.sv[1] = eastM
+  }
+
+  /**
+   * Who to credit for the local player's death, or null for terrain, a stall
+   * or a voluntary eject. The server re-validates that the id is a live peer.
+   */
+  private resolveKillerId(): string | null {
+    if (!this.lastDamageSourceId) return null
+    const ageMs = performance.now() - this.lastDamageAtMs
+    if (ageMs > FlightSession.KILL_CREDIT_WINDOW_MS) return null
+    return this.lastDamageSourceId
   }
 
   /** True only when a LAN session was requested *and* the socket is up. */
@@ -635,6 +656,10 @@ export class FlightSession {
     for (const hit of this.multiplayer.consumeInboundHits()) {
       if (hit.targetId !== this.localNetworkId) continue
       this.player.applyIncomingHit(hit.zone, hit.severity)
+      // Remember who last hurt us so a death can be attributed. Damage is
+      // client-authoritative, so the victim is the only one who can say.
+      this.lastDamageSourceId = hit.sourceId
+      this.lastDamageAtMs = performance.now()
     }
   }
 

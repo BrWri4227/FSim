@@ -43,7 +43,6 @@ export function sanitizeCallsign(raw: unknown): string {
     // Everything else non-printable is dropped outright. The \u2028-\u202e and
     // \u2060-\u206f ranges include the bidirectional overrides, which can
     // visually reorder or hide text around them on the receiving client.
-    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, '')
     .replace(/\s+/g, ' ')
     .trim()

@@ -77,6 +77,12 @@ export interface HitEvent {
   weapon: 'GUN' | 'MISSILE'
 }
 
+/** Scoreboard entry. Maintained by the server so every client agrees. */
+export interface NetScore {
+  kills: number
+  deaths: number
+}
+
 export type ClientMessage =
   | { type: 'join'; profile: NetPlayerProfile }
   | { type: 'profile-update'; profile: NetPlayerProfile }
@@ -84,12 +90,27 @@ export type ClientMessage =
   /** Clears in-flight state on the server so roster shows IN LOBBY again. */
   | { type: 'return-to-lobby' }
   | { type: 'hit'; hit: HitEvent }
+  /**
+   * "I was shot down." The victim reports its own death because damage is
+   * client-authoritative — only the victim knows its damage state crossed the
+   * threshold. `killerId` is the victim's best guess at who did it, or null
+   * for terrain, a stall or a voluntary eject. The sender never states its own
+   * id; the server stamps it, matching the `hit` precedent.
+   */
+  | { type: 'death'; killerId: string | null }
 
 export type ServerMessage =
   | {
       type: 'welcome'
       playerId: string
-      peers: Array<{ playerId: string; profile: NetPlayerProfile; state: NetPlayerState | null }>
+      peers: Array<{
+        playerId: string
+        profile: NetPlayerProfile
+        state: NetPlayerState | null
+        score: NetScore
+      }>
+      /** Late joiners need their own row too, in case of a reconnect. */
+      score: NetScore
     }
   | {
       type: 'peer-join'
@@ -114,6 +135,15 @@ export type ServerMessage =
   | {
       type: 'hit'
       hit: HitEvent
+    }
+  | {
+      type: 'death'
+      victimId: string
+      /** Null for terrain, a stall, or a kill the victim could not attribute. */
+      killerId: string | null
+      /** Authoritative post-event totals, so no client has to keep its own tally. */
+      victimScore: NetScore
+      killerScore: NetScore | null
     }
 
 export function cloneNetPlayerState(s: NetPlayerState): NetPlayerState {
