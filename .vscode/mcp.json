@@ -2,9 +2,9 @@
   "servers": {
     "vexp": {
       "type": "stdio",
-      "command": "C:\\Users\\Bry-PC\\AppData\\Local\\Programs\\cursor\\Cursor.exe",
+      "command": "C:\\Program Files\\nodejs\\node.exe",
       "args": [
-        "c:\\Users\\Bry-PC\\.cursor\\extensions\\vexp.vexp-vscode-3.1.0-win32-x64\\dist\\mcp-server.cjs"
+        "c:\\Users\\Bry-PC\\.cursor\\extensions\\vexp.vexp-vscode-3.1.1-win32-x64\\dist\\mcp-server.cjs"
       ],
       "env": {
         "VEXP_WORKSPACE": "c:\\Users\\Bry-PC\\Documents\\GitHub\\FSim"
