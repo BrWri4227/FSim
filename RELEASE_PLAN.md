@@ -12,8 +12,8 @@ the uncommitted Stage 1–2 changes present on 2026-09-03** (see the preconditio
 
 Implemented on `BW/Cursor-Opus-Implement-Sanity`. `npm run ci` exits 0 — **265/265 tests**, 0 lint
 warnings. The original plan's "all of it is uncommitted" note is stale: Stages 1–4 are committed
-as the log below. Stage 5 (packaged build, two-client rehearsal, audit §15 checklist) was **not**
-executed in this session.
+as the log below. Stage 5's code items and everything machine-verifiable are done (see the
+Stage 5 subsection); what remains needs a second machine and a pair of eyes.
 
 ```
 664b3e9 S4-D/E: kill feed, scoreboard, and in-flight respawn
