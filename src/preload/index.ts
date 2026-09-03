@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+/** Injected at build time from package.json — see `define` in electron.vite.config.ts. */
+declare const __APP_VERSION__: string
+
 contextBridge.exposeInMainWorld('fsim', {
-  version: '0.1.5',
+  version: __APP_VERSION__,
   assets: {
     getAudioBaseUrls: () => ipcRenderer.invoke('assets:get-audio-base-urls') as Promise<{ urls: string[] }>,
   },
