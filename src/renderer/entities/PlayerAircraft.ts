@@ -15,7 +15,7 @@ import { TargetingPod } from '../avionics/TargetingPod'
 import { GLOCModel } from '../physics/GLOCModel'
 import type { RWRState } from '../types/radar'
 import type { HMSState } from '../types/ir'
-import type { DamageZone } from '../types/damage'
+import { defaultDamageState, type DamageZone } from '../types/damage'
 import { getMissileSpec, getStoreDragPenalty } from '../data/weapons/catalog'
 import { quatRotateVec, clamp } from '../utils/MathUtils'
 
@@ -508,6 +508,28 @@ export class PlayerAircraft extends Aircraft {
     this.state.gearCollapsed = false
     this.state.lastTouchdownSinkMS = null
     this.mesh.visible = true
+  }
+
+  /**
+   * Put the pilot back in a fresh jet in the current session. Single-player
+   * never calls this — death there still ends the sortie.
+   */
+  respawn(): void {
+    this.resetPosition()
+    this.damage = defaultDamageState()
+    this.reloadWeapons()
+    this.voluntaryEject = false
+    this.weaponInhibitRemainSec = 0
+    this.resetFlightControlShaping()
+    this.radar.unlockSTT()
+    this.missiles.clear()
+    this.bombs.clear()
+    this.selectedWeaponIndex = 0
+    this.state.onGround = false
+    this.state.gearDown = false
+    this.state.speedBrake = false
+    this.state.flaps = 0
+    this.state.invincible = false
   }
 
   getRWRState(): RWRState { return this.rwr.state }

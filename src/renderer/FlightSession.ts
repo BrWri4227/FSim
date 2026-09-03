@@ -24,6 +24,8 @@ import { warmupMissileVisuals } from './weapons/MissileSystem'
 import { warmupExplosionVisuals, stepExplosionPool, setExplosionAudioHook } from './scene/ExplosionEffect'
 import { CockpitController } from './cockpit/CockpitController'
 import { PauseMenu } from './ui/PauseMenu'
+import { RespawnOverlay } from './ui/RespawnOverlay'
+import type { ScoreboardRow } from './ui/HUDElements/Scoreboard'
 import { SortieStats } from './mission/SortieStats'
 import { saveSettings } from './persistence'
 import { getAGLM } from './scene/Terrain'
@@ -88,6 +90,10 @@ export class FlightSession {
   private disposed = false
   private completionScheduled = false
   private completionTimer: ReturnType<typeof setTimeout> | null = null
+  private respawning = false
+  private respawnTimer: ReturnType<typeof setTimeout> | null = null
+  private respawnOverlay: RespawnOverlay | null = null
+  private static readonly RESPAWN_DELAY_SEC = 5
   private frameDt = FIXED_DT
   private glocEnabled: boolean
   private autoRudder: boolean
@@ -111,6 +117,8 @@ export class FlightSession {
   // ── Kill attribution ───────────────────────────────────────────────────────
   private lastDamageSourceId: string | null = null
   private lastDamageAtMs = 0
+  /** Deaths this session, including multiplayer respawns, so debrief is honest. */
+  private sessionDeaths = 0
   /**
    * How long a hit stays "responsible" for a death. Long enough to cover a
    * mortally damaged aircraft spiralling into the ground, short enough that a
@@ -474,7 +482,7 @@ export class FlightSession {
   }
 
   private updateMissionEnd(_dt: number): void {
-    if (this.completionScheduled) return
+    if (this.completionScheduled || this.respawning) return
 
     const elapsed = (performance.now() - this.sessionStartTime) / 1000
     const playerKilled = this.player.state.ejected && !this.player.voluntaryEject
@@ -507,12 +515,8 @@ export class FlightSession {
         this.scheduleMissionEnd('failure', 2)
         return
       }
-      if (evaluation.outcome === 'killed') {
-        this.scheduleMissionEnd('killed', 4)
-        return
-      }
-      if (evaluation.outcome === 'ejected') {
-        this.scheduleMissionEnd('ejected', 4)
+      if (evaluation.outcome === 'killed' || evaluation.outcome === 'ejected') {
+        this.handlePlayerDown(evaluation.outcome)
         return
       }
     }
@@ -523,8 +527,117 @@ export class FlightSession {
     // forever. Dying there left the player sitting in the wreck with no debrief
     // and no way out except the pause menu's abort, if they thought to look.
     if (this.player.state.ejected) {
-      this.scheduleMissionEnd(playerKilled ? 'killed' : 'ejected', 4)
+      this.handlePlayerDown(playerKilled ? 'killed' : 'ejected')
     }
+  }
+
+  /**
+   * Single-player: death ends the sortie. Multiplayer: stay in the session and
+   * respawn after a short overlay so a four-player dogfight is not two menus.
+   */
+  private handlePlayerDown(outcome: 'killed' | 'ejected'): void {
+    if (this.isMultiplayerLive()) {
+      this.beginRespawn(outcome)
+      return
+    }
+    this.scheduleMissionEnd(outcome, 4)
+  }
+
+  private beginRespawn(outcome: 'killed' | 'ejected'): void {
+    if (this.respawning) return
+    this.respawning = true
+    this.sessionDeaths++
+    this.multiplayer?.sendDeath(this.resolveKillerId())
+
+    this.respawnOverlay = new RespawnOverlay({
+      killerName: this.displayNameFor(this.resolveKillerId()),
+      outcome,
+      delaySec: FlightSession.RESPAWN_DELAY_SEC,
+      getStandings: () => this.collectStandings(),
+    })
+
+    this.respawnTimer = setTimeout(() => {
+      if (this.disposed) return
+      this.completeRespawn()
+    }, FlightSession.RESPAWN_DELAY_SEC * 1000)
+  }
+
+  private completeRespawn(): void {
+    this.respawnTimer = null
+    this.respawnOverlay?.dispose()
+    this.respawnOverlay = null
+
+    this.player.respawn()
+    applyPlayerSpawn(this.player, this.scenario)
+    this.applyPeerSpawnOffset()
+    this.scatterRespawn()
+
+    this.seenInboundMissileIds.clear()
+    this.lastDamageSourceId = null
+    this.lastDamageAtMs = 0
+    this.respawning = false
+  }
+
+  /** Offset the respawn so we do not stack on the killer or on other peers. */
+  private scatterRespawn(): void {
+    const alt = this.player.state.positionNED[2]
+    const heading = Math.random() * Math.PI * 2
+    const north = (Math.random() * 2 - 1) * 3000
+    const east = (Math.random() * 2 - 1) * 3000
+    const speed = 250
+    const velN = speed * Math.cos(heading)
+    const velE = speed * Math.sin(heading)
+    const half = heading / 2
+    const q: [number, number, number, number] = [Math.cos(half), 0, 0, Math.sin(half)]
+
+    this.player.state.positionNED = [north, east, alt]
+    this.player.state.velocityNED = [velN, velE, 0]
+    this.player.state.attitudeQuat = q
+    this.player.state.sv = [
+      north, east, alt,
+      velN, velE, 0,
+      q[0], q[1], q[2], q[3],
+      0, 0, 0,
+    ]
+  }
+
+  private displayNameFor(playerId: string | null): string | null {
+    if (!playerId || !this.multiplayer) return null
+    if (playerId === this.localNetworkId) {
+      return this.multiplayer.getProfile().callsign || 'You'
+    }
+    const snap = this.multiplayer.getRemoteSnapshots().find(s => s.playerId === playerId)
+    return snap?.profile.callsign || playerId
+  }
+
+  private collectStandings(): ScoreboardRow[] {
+    if (!this.multiplayer) return []
+    const localId = this.localNetworkId
+    const rows: ScoreboardRow[] = []
+    if (localId) {
+      const score = this.multiplayer.getScore(localId)
+      rows.push({
+        playerId: localId,
+        name: this.multiplayer.getProfile().callsign || 'You',
+        aircraft: this.player.spec.displayName,
+        kills: score.kills,
+        deaths: score.deaths,
+        isLocal: true,
+      })
+    }
+    for (const snap of this.multiplayer.getRemoteSnapshots()) {
+      const score = this.multiplayer.getScore(snap.playerId)
+      const spec = getAircraftById(snap.profile.aircraftId)
+      rows.push({
+        playerId: snap.playerId,
+        name: snap.profile.callsign || snap.playerId,
+        aircraft: spec?.displayName ?? snap.profile.aircraftId.toUpperCase(),
+        kills: score.kills,
+        deaths: score.deaths,
+        isLocal: false,
+      })
+    }
+    return rows
   }
 
   private scheduleMissionEnd(outcome: MissionOutcome, delaySec: number): void {
@@ -554,7 +667,7 @@ export class FlightSession {
     }
     const completedIds = tracker?.evaluate(tickState).completedObjectiveIds ?? []
     const objectivesTotal = tracker?.primaryObjectiveCount ?? 0
-    const deaths = outcome === 'killed' || outcome === 'ejected' ? 1 : 0
+    const deaths = this.sessionDeaths + (outcome === 'killed' || outcome === 'ejected' ? 1 : 0)
 
     const spec = this.player.spec
     const s = this.player.state
@@ -653,6 +766,9 @@ export class FlightSession {
     this.trackedRemoteIds    = seen
 
     if (!this.localNetworkId) return
+    this.hud.setLocalNetworkId(this.localNetworkId)
+    this.hud.setScoreboard(this.collectStandings())
+
     for (const hit of this.multiplayer.consumeInboundHits()) {
       if (hit.targetId !== this.localNetworkId) continue
       this.player.applyIncomingHit(hit.zone, hit.severity)
@@ -660,6 +776,15 @@ export class FlightSession {
       // client-authoritative, so the victim is the only one who can say.
       this.lastDamageSourceId = hit.sourceId
       this.lastDamageAtMs = performance.now()
+    }
+
+    for (const death of this.multiplayer.consumeInboundDeaths()) {
+      this.hud.notifyKill(
+        this.displayNameFor(death.killerId),
+        this.displayNameFor(death.victimId) ?? death.victimId,
+        death.killerId === this.localNetworkId,
+        death.victimId === this.localNetworkId,
+      )
     }
   }
 
@@ -709,10 +834,16 @@ export class FlightSession {
     this.paused = false
     this.pauseMenu?.dispose()
     this.pauseMenu = null
+    this.respawnOverlay?.dispose()
+    this.respawnOverlay = null
     cancelAnimationFrame(this.rafId)
     if (this.completionTimer !== null) {
       clearTimeout(this.completionTimer)
       this.completionTimer = null
+    }
+    if (this.respawnTimer !== null) {
+      clearTimeout(this.respawnTimer)
+      this.respawnTimer = null
     }
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('resize',  this.onResize)

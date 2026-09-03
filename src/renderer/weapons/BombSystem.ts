@@ -207,9 +207,13 @@ export class BombSystem {
     return this.bombs
   }
 
-  dispose(): void {
+  clear(): void {
     for (const b of this.bombs) this.scene.remove(b.mesh)
     this.bombs.length = 0
+  }
+
+  dispose(): void {
+    this.clear()
     this.bombGeo.dispose()
     this.bombMat.dispose()
     this.explosions.dispose()

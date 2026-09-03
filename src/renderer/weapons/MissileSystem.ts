@@ -560,10 +560,23 @@ export class MissileSystem {
 
   getMissiles(): MissileState[] { return this.missiles }
 
-  dispose(): void {
+  /**
+   * Drop every in-flight missile without tearing down the system. Used on
+   * respawn: `dispose()` is for session teardown and does not empty the arrays,
+   * so calling it and then launching again would leak the old meshes.
+   */
+  clear(): void {
     for (const m of this.meshes) this.scene.remove(m)
     for (const t of this.thrusters) t.dispose()
     for (const t of this.trails) t.dispose()
+    this.missiles.length = 0
+    this.meshes.length = 0
+    this.thrusters.length = 0
+    this.trails.length = 0
+  }
+
+  dispose(): void {
+    this.clear()
     this.explosions.dispose()
   }
 }

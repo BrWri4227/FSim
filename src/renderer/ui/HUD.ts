@@ -16,6 +16,8 @@ import { drawFuelGauge }         from './HUDElements/FuelGauge'
 import { drawThreatDisplay, createRWRDisplayState, type RWRDisplayState } from './HUDElements/ThreatDisplay'
 import { drawLandingAids } from './HUDElements/LandingAids'
 import { drawDamagePanel } from './HUDElements/DamagePanel'
+import { drawKillFeed, KILL_FEED_LINE_SEC, KILL_FEED_MAX_LINES, type KillFeedEntry } from './HUDElements/KillFeed'
+import { drawScoreboard, type ScoreboardRow } from './HUDElements/Scoreboard'
 import { overallDamage } from '../systems/DamageModel'
 import type { DamageZone } from '../types/damage'
 import { getAGLM } from '../scene/Terrain'
@@ -87,6 +89,11 @@ export class HUD {
   private hitFlashRemainSec = 0
   /** Severity of the hit driving the current flash, for vignette intensity. */
   private hitFlashSeverity = 0
+  private killFeed: KillFeedEntry[] = []
+  private scoreboardRows: ScoreboardRow[] = []
+  private scoreboardHeld = false
+  /** Local peer id so inbound-missile markers resolve MP shots aimed at `peer_N`. */
+  private localNetworkId: string | null = null
   private lastRenderMs = 0
   private lastDrawMs = 0
   /** Minimum interval between full HUD repaints (~30 Hz). */
@@ -118,12 +125,40 @@ export class HUD {
     this.ctx = canvas.getContext('2d')!
     this.player = player
     this.entityManager = entityManager
+    window.addEventListener('keydown', this.onScoreboardKey)
+    window.addEventListener('keyup', this.onScoreboardKey)
+  }
+
+  private onScoreboardKey = (e: KeyboardEvent): void => {
+    if (e.code !== 'KeyN' || e.repeat) return
+    this.scoreboardHeld = e.type === 'keydown'
+    this.forceRedraw = true
   }
 
   /** Called by the missile system when a decoy (flare or chaff) successfully seduces a missile. */
   notifyDecoySuccess(type: 'FLARE' | 'CHAFF'): void {
     this.decoyFlashRemainSec = 2.0
     this.decoyFlashType = type
+    this.forceRedraw = true
+  }
+
+  setLocalNetworkId(id: string | null): void {
+    this.localNetworkId = id
+  }
+
+  setScoreboard(rows: ScoreboardRow[]): void {
+    this.scoreboardRows = rows
+  }
+
+  notifyKill(killer: string | null, victim: string, ownKill: boolean, ownDeath: boolean): void {
+    this.killFeed.unshift({
+      victim,
+      killer,
+      ownKill,
+      ownDeath,
+      remainSec: KILL_FEED_LINE_SEC,
+    })
+    if (this.killFeed.length > KILL_FEED_MAX_LINES) this.killFeed.length = KILL_FEED_MAX_LINES
     this.forceRedraw = true
   }
 
@@ -143,7 +178,9 @@ export class HUD {
     const needsFlash =
       this.decoyFlashRemainSec > 0 ||
       this.wmCmdFlashRemainSec > 0 ||
-      this.hitFlashRemainSec > 0
+      this.hitFlashRemainSec > 0 ||
+      this.killFeed.length > 0 ||
+      this.scoreboardHeld
     if (
       !this.forceRedraw &&
       !needsFlash &&
@@ -170,6 +207,10 @@ export class HUD {
     if (this.hitFlashRemainSec > 0) {
       this.hitFlashRemainSec = Math.max(0, this.hitFlashRemainSec - dtSec)
       if (this.hitFlashRemainSec === 0) this.hitFlashSeverity = 0
+    }
+    if (this.killFeed.length > 0) {
+      for (const entry of this.killFeed) entry.remainSec -= dtSec
+      this.killFeed = this.killFeed.filter(e => e.remainSec > 0)
     }
 
     ctx.clearRect(0, 0, c.width, c.height)
@@ -297,8 +338,8 @@ export class HUD {
     this.drawLAR(ctx, larX, larY)
 
     // Targeting pod FLIR view — top-right corner overlay when active
+    const flirSize = Math.round(180 * uiScale)
     if (player.targetingPod.state.active) {
-      const flirSize = Math.round(180 * uiScale)
       const flirX = W - edgePadX - flirSize
       const flirY = headingBandH + edgePadY + 4
       // Draw into a temporary offscreen canvas to keep coordinate math local
@@ -475,6 +516,20 @@ export class HUD {
 
     // Landing aids — AoA indexer (gear down) + radar altitude (low)
     drawLandingAids(ctx, cx, cy, uiScale, state, getAGLM(state.positionNED))
+
+    // Kill feed sits below the FLIR's maximum extent so it is never covered
+    // when a player turns the targeting pod on.
+    drawKillFeed(
+      ctx,
+      W - edgePadX,
+      headingBandH + edgePadY + 4 + flirSize + Math.round(10 * uiScale),
+      this.killFeed,
+      uiScale,
+    )
+
+    if (this.scoreboardHeld) {
+      drawScoreboard(ctx, cx, edgePadY + headingBandH + Math.round(48 * uiScale), this.scoreboardRows, uiScale)
+    }
 
     // Drawn last so nothing paints over it.
     if (this.hitFlashRemainSec > 0) this.drawHitFlash(ctx, W, H)
@@ -1222,7 +1277,8 @@ export class HUD {
       }
     }
 
-    const inbound = this.entityManager.getInboundMissiles(['player'])
+    const inboundIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
+    const inbound = this.entityManager.getInboundMissiles(inboundIds)
     for (const m of inbound) {
       const screen = this.projectNEDToScreen(camera, m.positionNED, W, H)
       if (!screen) continue
@@ -1502,5 +1558,8 @@ export class HUD {
     this.forceRedraw = true
   }
 
-  dispose(): void { /* canvas managed externally */ }
+  dispose(): void {
+    window.removeEventListener('keydown', this.onScoreboardKey)
+    window.removeEventListener('keyup', this.onScoreboardKey)
+  }
 }

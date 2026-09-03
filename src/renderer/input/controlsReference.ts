@@ -60,6 +60,7 @@ export const CONTROLS_REFERENCE: ControlGroup[] = [
     label: 'MISC',
     bindings: [
       ['Tab', 'Toggle cockpit / external camera'],
+      ['N (hold)', 'Scoreboard'],
       ['F1 / F2', 'Cycle left / right MFD page'],
       ['F11', 'Toggle fullscreen'],
       ['F12', 'Toggle debug overlay'],
