@@ -2,9 +2,15 @@ import type { ControlInputs } from '../types/aircraft'
 import { DEFAULT_BINDINGS } from './ControlMapping'
 import { clamp } from '../utils/MathUtils'
 
+export interface InputOptions {
+  /** Flip the pitch axis for players who expect pull-back-to-climb on W. */
+  invertPitch?: boolean
+}
+
 export class InputManager {
   private keys = new Set<string>()
   private throttle = 0.3
+  private opts: InputOptions
 
   private fireMissilePrev = false
   private cycleMissilePrev = false
@@ -25,11 +31,14 @@ export class InputManager {
 
   private onContextMenu = (e: Event): void => { e.preventDefault() }
 
-  constructor() {
+  constructor(opts: InputOptions = {}) {
+    this.opts = opts
     window.addEventListener('keydown', this.onKeyDown)
     window.addEventListener('keyup', this.onKeyUp)
     window.addEventListener('contextmenu', this.onContextMenu)
   }
+
+  setInvertPitch(invert: boolean): void { this.opts.invertPitch = invert }
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.ctrlKey && (e.code === 'KeyW' || e.code === 'KeyS' || e.code === 'KeyR')) e.preventDefault()
@@ -52,33 +61,49 @@ export class InputManager {
   }
 
   getControls(dt: number): ControlInputs {
-    // Gamepad support
     const gp = navigator.getGamepads()[0]
-    let pitch = 0, roll = 0, yaw = 0
+
+    // Keyboard axes are read unconditionally. Chromium exposes a gamepad as soon
+    // as it sees one input event from it, so branching on mere presence meant a
+    // controller sitting on the desk permanently killed W/A/S/D/Q/E.
+    let pitch = this.axis(DEFAULT_BINDINGS.pitchUp, DEFAULT_BINDINGS.pitchDown)
+    let roll  = this.axis(DEFAULT_BINDINGS.rollRight, DEFAULT_BINDINGS.rollLeft)
+    let yaw   = this.axis(DEFAULT_BINDINGS.yawRight, DEFAULT_BINDINGS.yawLeft)
 
     if (gp) {
-      // Standard gamepad layout: left stick = roll/pitch, triggers = throttle
-      roll  = gp.axes[0] ?? 0
-      pitch = -(gp.axes[1] ?? 0)
-      yaw   = gp.axes[2] ?? 0
-      // Prevent tiny stick drift from exciting lateral oscillation.
-      roll = this.applyAxisDeadzone(roll, 0.08)
-      pitch = this.applyAxisDeadzone(pitch, 0.08)
-      yaw = this.applyAxisDeadzone(yaw, 0.10)
-      const rtrigger = ((gp.buttons[7]?.value ?? 0))
-      const ltrigger = ((gp.buttons[6]?.value ?? 0))
-      this.throttle = clamp(this.throttle + (rtrigger - ltrigger) * 0.02, 0, 1)
-    } else {
-      pitch = this.axis(DEFAULT_BINDINGS.pitchUp, DEFAULT_BINDINGS.pitchDown)
-      roll  = this.axis(DEFAULT_BINDINGS.rollRight, DEFAULT_BINDINGS.rollLeft)
-      yaw   = this.axis(DEFAULT_BINDINGS.yawRight, DEFAULT_BINDINGS.yawLeft)
-      if (this.keys.has(DEFAULT_BINDINGS.throttleUp))
-        this.throttle = clamp(this.throttle + 0.25 * dt, 0, 1)
-      if (this.keys.has(DEFAULT_BINDINGS.throttleDown) && this.throttle > 0)
-        this.throttle = clamp(this.throttle - 0.25 * dt, 0, 1)
+      // Standard layout: left stick = roll/pitch, right stick X = yaw.
+      // Deadzone first, so stick drift can never beat a deliberate keypress below.
+      const padRoll  = this.applyAxisDeadzone(gp.axes[0] ?? 0, 0.08)
+      const padPitch = this.applyAxisDeadzone(-(gp.axes[1] ?? 0), 0.08)
+      const padYaw   = this.applyAxisDeadzone(gp.axes[2] ?? 0, 0.10)
+      // Per axis, whichever device is deflected further wins.
+      if (Math.abs(padPitch) > Math.abs(pitch)) pitch = padPitch
+      if (Math.abs(padRoll)  > Math.abs(roll))  roll  = padRoll
+      if (Math.abs(padYaw)   > Math.abs(yaw))   yaw   = padYaw
     }
 
-    const fireMissile = this.keys.has(DEFAULT_BINDINGS.fireMissile)
+    // Throttle keys stay live regardless of pad presence; the triggers add to them.
+    if (this.keys.has(DEFAULT_BINDINGS.throttleUp))
+      this.throttle = clamp(this.throttle + 0.25 * dt, 0, 1)
+    if (this.keys.has(DEFAULT_BINDINGS.throttleDown) && this.throttle > 0)
+      this.throttle = clamp(this.throttle - 0.25 * dt, 0, 1)
+    if (gp) {
+      const rtrigger = gp.buttons[7]?.value ?? 0
+      const ltrigger = gp.buttons[6]?.value ?? 0
+      if (rtrigger > 0.05 || ltrigger > 0.05)
+        this.throttle = clamp(this.throttle + (rtrigger - ltrigger) * 0.02, 0, 1)
+    }
+
+    if (this.opts.invertPitch) pitch = -pitch
+
+    // Minimum viable pad weapon bindings so a stick user is not locked out of
+    // fighting. Full mapping is deferred. RB rather than RT for the gun, because
+    // the triggers are the throttle.
+    const padFireGun  = (gp?.buttons[5]?.pressed ?? false)
+    const padFireMsl  = (gp?.buttons[0]?.pressed ?? false)
+    const padDecoy    = (gp?.buttons[1]?.pressed ?? false)
+
+    const fireMissile = this.keys.has(DEFAULT_BINDINGS.fireMissile) || padFireMsl
     const cycleMissile = this.keys.has(DEFAULT_BINDINGS.cycleMissile)
     const gear = this.keys.has(DEFAULT_BINDINGS.gear)
     const flaps = this.keys.has(DEFAULT_BINDINGS.flaps)
@@ -135,11 +160,11 @@ export class InputManager {
       roll,
       yaw,
       throttle: this.throttle,
-      fireGun: this.keys.has(DEFAULT_BINDINGS.fireGun),
+      fireGun: this.keys.has(DEFAULT_BINDINGS.fireGun) || padFireGun,
       fireMissile: fireMissileEdge,
       cycleMissile: cycleMissileEdge,
-      dispenseFlare: this.keys.has(DEFAULT_BINDINGS.flare),
-      dispenseChaff: this.keys.has(DEFAULT_BINDINGS.chaff),
+      dispenseFlare: this.keys.has(DEFAULT_BINDINGS.flare) || padDecoy,
+      dispenseChaff: this.keys.has(DEFAULT_BINDINGS.chaff) || padDecoy,
       toggleGear: gearEdge,
       cycleFlaps: flapsEdge,
       brakeHeld: this.keys.has(DEFAULT_BINDINGS.brake),

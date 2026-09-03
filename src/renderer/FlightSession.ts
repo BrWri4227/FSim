@@ -139,7 +139,7 @@ export class FlightSession {
 
     this.sceneManager = new SceneManager(threeCanvas, options.timeOfDay)
     this.cameraManager = new CameraManager(this.sceneManager.camera)
-    this.inputManager = new InputManager()
+    this.inputManager = new InputManager({ invertPitch: options.invertPitch })
     this.audioManager = new AudioManager()
     // Attempt to load real sound files from public/sounds/. Falls back to synthesis silently.
     void this.audioManager.loadSounds('sounds/')
