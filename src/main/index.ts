@@ -52,8 +52,9 @@ function createWindow(): void {
   })()
 
   const win = new BrowserWindow({
-    width: 1920,
-    height: 1080,
+    // Fits inside a 1080p desktop once the title bar is accounted for; F11 goes fullscreen.
+    width: 1600,
+    height: 900,
     fullscreen: false,
     backgroundColor: '#000000',
     webPreferences: {
@@ -65,6 +66,16 @@ function createWindow(): void {
   })
 
   win.setMenuBarVisibility(false)
+
+  // The menu bar is hidden, so Electron's default fullscreen accelerator is gone.
+  // Scoped to this window's input rather than a global shortcut, which would take
+  // F11 away from every other application while FSim runs.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F11') {
+      event.preventDefault()
+      win.setFullScreen(!win.isFullScreen())
+    }
+  })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     try {
