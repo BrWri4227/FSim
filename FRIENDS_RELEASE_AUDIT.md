@@ -37,8 +37,7 @@ The single-player mission path is close to ready. The multiplayer path — the e
 upcoming playtest — is not. There is **no PvP game mode**. The five scenarios in the catalog are
 all single-player PvE missions; each connected client independently spawns and simulates its own
 private copy of the scenario AI, evaluates its own win/lose conditions, and picks its own weather
-and time of day. The only scenario two friends can meaningfully share is **Free Flight**, whose
-in-game briefing literally instructs the player to open the F12 developer menu — and in which
+and time of day. The only scenario two friends can meaningfully share is **Free Flight**, in which
 **dying leaves the player permanently frozen in mid-air with no way out except the pause menu**.
 
 On top of that, the combat loop itself has two mechanical defects that will make weapons feel
@@ -84,7 +83,7 @@ and it becomes a legitimate Friends Alpha.
 | Multiplayer transport | **Working** | ws relay, validation, rate limits, heartbeat, deflate, quantisation, interpolation + extrapolation. |
 | Multiplayer *gameplay* | **Missing** | No mode, no teams, no names, no scores, no kill feed, no respawn, no AI replication. |
 | Settings UI (volume / graphics / keybinds) | **Missing** | `masterVolume` and `postFXQuality` are persisted but never read. No remapping, no sensitivity, no fullscreen. |
-| Developer tooling in shipped build | **Present and exposed** | F12 opens a full cheat/spawn/weather panel including god mode. |
+| Developer tooling in shipped build | **Present by design** | F12 opens a spawn / god-mode / weather panel. **Kept deliberately** — see §13. |
 
 ---
 
@@ -582,45 +581,6 @@ Consider applying the same rule to the R-77 for consistency.
 
 ---
 
-### [P1] The F12 debug overlay ships enabled, with god mode
-**Category:** Remove / Change · **System:** Debug · **Confidence:** Confirmed · **Effort:** Tiny · **Playtest Blocker:** No
-
-**Current State.** `DebugOverlay` is always constructed in `FlightSession` and toggled by F12
-([FlightSession.ts:221](src/renderer/FlightSession.ts:221)). It exposes:
-- **Invincibility** checkbox → `player.state.invincible = true` ([DebugOverlay.ts:195](src/renderer/debug/DebugOverlay.ts:195))
-- **Reload Weapons** ([DebugOverlay.ts:222](src/renderer/debug/DebugOverlay.ts:222)) and **Reset Position** ([DebugOverlay.ts:241](src/renderer/debug/DebugOverlay.ts:241))
-- Spawn arbitrary enemies / wingmen / ground targets, launch a missile at yourself, load A/G
-  stores, live weather control, seeker/radar cone visualisers.
-
-F12 is documented in the in-game controls reference, and the Free Flight briefing says
-*"Use F12 debug overlay to spawn entities if needed"* ([scenarios.ts:7](src/renderer/mission/scenarios.ts:7)).
-
-**Problem.** Damage is applied on the *receiving* client, so `invincible` in multiplayer is a
-complete, undetectable cheat — the invincible player takes zero damage from everyone and their
-opponents get no feedback. `Reload Weapons` is infinite ammo. `Reset Position` is a free teleport
-and de-facto respawn.
-
-To be fair, some of this is currently *load-bearing*: Reset Position is the only in-flight
-recovery from the Free Flight death freeze. Fix the P0s first, then lock this down.
-
-**Player Impact.** Either someone finds it and the session becomes unserious, or nobody finds it
-and the briefing text just confuses them.
-
-**Recommended Change.** Keep the telemetry, gate the rest:
-- Hide the SPAWN and PLAYER CONTROLS sections whenever `multiplayerConfig.mode !== 'single'`.
-- Gate the whole overlay behind an explicit opt-in — an env var (`FSIM_DEBUG=1`) read in
-  `src/main/index.ts` and exposed on `window.fsim`, or a hidden key chord. Leaving the telemetry
-  readout available is fine and useful for bug reports.
-- Rewrite the Free Flight briefing for players: "Empty skies. Practice takeoffs, gun tracking and
-  missile launches with no time pressure."
-
-**Implementation Notes.** `src/renderer/debug/DebugOverlay.ts` (constructor takes an options
-object), `src/renderer/FlightSession.ts:195`, `src/main/index.ts` + `src/preload/index.ts` (flag),
-`src/renderer/input/controlsReference.ts:55` (drop the F12 line for players),
-`src/renderer/mission/scenarios.ts:7`.
-
----
-
 ### [P1] No fullscreen, and the window is hard-coded to 1920×1080
 **Category:** Add · **System:** Shell · **Confidence:** Confirmed · **Effort:** Tiny · **Playtest Blocker:** No
 
@@ -780,7 +740,9 @@ ring is permanently full of SEARCH blips. Add a range cutoff (~150 km) and skip 
 
 `CONTROLS_REFERENCE` ([controlsReference.ts:11](src/renderer/input/controlsReference.ts:11)) omits the
 1/2/3/4 wingman commands that the README documents and `InputManager` implements. Add a WINGMEN
-group. Also add F11 (once implemented) and remove F12 from the player-facing build.
+group. Also add F11 once it exists. Keep the F12 line — the overlay ships enabled by decision
+(§13), so it should be documented rather than hidden; consider relabelling it "Sandbox / debug
+panel" so players know it is a real feature and not something they were not meant to find.
 
 ### [P2] Gun rounds allocate a Three.js Mesh each
 **Category:** Optimize · **System:** Weapons / Rendering · **Confidence:** Confirmed · **Effort:** Small
@@ -1023,8 +985,7 @@ free-for-all playtest with people you are already on voice with.
 
 | Item | Action | Why |
 |---|---|---|
-| **F12 debug overlay — spawn + player-control sections** | Disable in multiplayer; gate the whole panel behind an env flag | Undetectable god mode, infinite ammo, teleport. *(P1)* |
-| **Free Flight's "use F12" briefing text** | Rewrite | Ships developer instructions to players. *(P1)* |
+| **F12 debug overlay** | **Keep — decided.** Ships as-is | Explicitly retained by the project owner. See §13 for what that implies for multiplayer trust. |
 | **Head-On BVR / CAP with Wingman / Strike Package in a lobby session** | Grey out or warn when a lobby client is connected | They spawn phantom per-client AI and complete independently. Keep them as single-player missions. *(P0-adjacent)* |
 | **F/A-18C** | Drop from the roster, or point it at `FA18Cockpit` | Only airframe with the generic placeholder cockpit tub. *(P2)* |
 | **F/A-18E** | Keep, but add its turn-rate reference band | Currently the only unvalidated airframe, and it breaks CI. *(P0)* |
@@ -1049,8 +1010,8 @@ Tiny-to-small effort, high player impact. Do these first — most of the list is
 8. **Graphics quality select** — `PostFXManager` presets already exist and are unreachable. ~20 lines.
 9. **F11 fullscreen + a 1600×900 default window** — ~6 lines in `main/index.ts`.
 10. **`.filter(s => s.remainingRounds > 0)` on store mesh visibility** — 1 line. Fired missiles stop hanging under the wing.
-11. **Hide the debug overlay's spawn/cheat sections when `mode !== 'single'`** — ~5 lines.
-12. **Rewrite the Free Flight briefing** — 1 string.
+11. **Range-gate the RWR** (~150 km, and skip contacts whose radar is off) — ~4 lines. Stops the threat ring being permanently full of blips in a four-player session.
+12. **Reword the Free Flight briefing** — 1 string. Keep the F12 pointer, phrase the rest for a player: "Empty skies — practice takeoffs, gun tracking and missile launches with no time pressure. F12 opens the sandbox panel to spawn targets."
 13. **Add the WINGMEN group to `controlsReference.ts`** — ~8 lines.
 14. **Pass the local network id to the HUD's inbound-missile query** — ~4 lines. Inbound missiles become visible in MP.
 15. **`break` after a gun hit, and fix the two dead lint computations** — 3 lines.
@@ -1082,6 +1043,29 @@ and the change would be large and risky.
 
 **Client-authoritative hit detection generally.** It is exploitable in principle. Your friends are
 not going to write a packet forger, and `isPlausibleHit` already blocks the accidental cases.
+
+**The F12 debug overlay — kept by decision.** `DebugOverlay` is always constructed in
+`FlightSession` and toggled by F12 ([FlightSession.ts:221](src/renderer/FlightSession.ts:221)),
+exposing an invincibility checkbox ([DebugOverlay.ts:195](src/renderer/debug/DebugOverlay.ts:195)),
+Reload Weapons ([DebugOverlay.ts:222](src/renderer/debug/DebugOverlay.ts:222)), Reset Position
+([DebugOverlay.ts:241](src/renderer/debug/DebugOverlay.ts:241)), arbitrary enemy/wingman/ground-target
+spawning, a launch-a-missile-at-yourself button, live weather control, and seeker/radar cone
+visualisers. **This ships as-is.** It is genuinely useful during a playtest — you can reproduce a
+reported bug on the spot, spawn a specific merge geometry, or dial in weather without relaunching,
+and Reset Position is currently the only in-flight recovery from the Free Flight death freeze.
+
+Two consequences to be aware of rather than fix:
+- Damage is applied on the *receiving* client, so `invincible` in multiplayer is undetectable by
+  anyone else — an invincible player simply never takes damage and their opponents get no
+  feedback that anything is wrong. Reload Weapons is likewise infinite ammo. This is a social
+  contract, not a technical control: tell the group what F12 does up front, and it becomes a
+  shared sandbox tool rather than a discovered exploit.
+- Because `Reset Position` doubles as an emergency respawn today, its usefulness drops once the
+  P1 in-flight respawn lands. Nothing to change either way.
+
+If you ever open the game beyond the friend group, revisit this — an env-var gate
+(`FSIM_DEBUG=1` read in `src/main/index.ts`, exposed on `window.fsim`) keeps the tooling for you
+and removes it for everyone else. That is a P3 concern, not a playtest one.
 
 **The avionics suite.** `Radar.ts`, `RWR.ts`, `CMDS.ts`, `TargetingPod.ts`, `HMS.ts`, `GPWS.ts`,
 `AWACS.ts`. Feature-complete and working. The only avionics changes worth making now are the
@@ -1145,8 +1129,8 @@ confirm you can kill both MiGs with two missiles.
 **What:** Gamepad blend fix. Master volume slider (including `utt.volume` for speech). Graphics
 quality select. F11 fullscreen + 1600×900 default. "NO LOCK" weapon feedback. Damage panel + hit
 flash + hit/explosion audio. Default G-LOC off and relabel it. Invert-pitch option. Fired-store
-mesh visibility. Wingman keys in the controls reference. Rewrite the Free Flight briefing. Hide
-the debug overlay's cheat sections when not single-player.
+mesh visibility. Wingman keys in the controls reference. RWR range gate. Reword the Free Flight
+briefing. (The debug overlay stays as-is — no work here.)
 **Why here:** this is everything that makes the difference between a friend playing the game and a
 friend asking you a question on Discord. It is all independent of multiplayer, so it can be
 validated single-player before you coordinate a session.
@@ -1212,7 +1196,7 @@ Customised to what this project actually contains.
 - [ ] Game launches to the mission select screen with no console errors
 - [ ] Window fits on a 1080p screen; F11 toggles fullscreen
 - [ ] A player can reach flight from a cold start without being told anything
-- [ ] Controls reference is complete and accurate (wingman keys present, F12 absent, F11 present)
+- [ ] Controls reference is complete and accurate (wingman keys present, F11 present, F12 listed)
 - [ ] Master volume works and persists; AWACS speech obeys it
 - [ ] Graphics quality selector works and persists
 
@@ -1247,8 +1231,8 @@ Customised to what this project actually contains.
 - [ ] A 15-minute session stays synchronised (no accumulating position drift)
 
 **Hygiene**
-- [ ] The F12 debug overlay's spawn/cheat sections are unreachable in multiplayer
-- [ ] No developer-facing text in any briefing or UI string
+- [ ] The group has been told what F12 does before the session starts (it ships enabled — see §13)
+- [ ] Briefing and UI strings read like they were written for a player, not a developer
 - [ ] No P0 findings remain open
 - [ ] P1 findings 1–8 resolved (damage feedback, missile lethality, gun hits, MP identity/scoring,
       respawn, explosions, volume, graphics)
@@ -1306,7 +1290,7 @@ to break; plan for how you will learn from it.
 - Phantom AI aircraft in the dogfight scenario
 - Time of day or weather differing between clients
 - An aircraft remaining visible after its pilot disconnected
-- Anyone finding F12
+- Someone leaving F12 invincibility on by accident and quietly ruining a round for everyone else
 - Audio cutting out, or the AWACS voice talking over everything
 - HUD elements off-screen at a non-1080p resolution
 
