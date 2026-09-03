@@ -34,7 +34,12 @@ export class SceneManager {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: quality !== 'LOW',
-      powerPreference: 'high-performance'
+      powerPreference: 'high-performance',
+      // View distance is ~200 km but ground detail (runway markings, lights,
+      // parked jets) sits centimetres above the terrain. A linear depth buffer
+      // has metres of slop at that range and the ground z-fights violently;
+      // a logarithmic buffer keeps precision usable across the whole frustum.
+      logarithmicDepthBuffer: true,
     })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, rq.maxPixelRatio))
     this.renderer.setSize(window.innerWidth, window.innerHeight)

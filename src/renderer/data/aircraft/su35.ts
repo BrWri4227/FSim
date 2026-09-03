@@ -72,7 +72,10 @@ export const SU35: AircraftSpec = {
   },
   hardpoints: SU35_HARDPOINTS,
   maxAoADeg: 30, maxGPositive: 9.0, maxGNegative: -3.0,
+  thrustVectoring: '3d',
   gunSpec: GSH301,
+  // GSh-301 in the starboard LERX root, right of the canopy.
+  gunMuzzleBodyM: [2.6, 1.3, -0.5],
   heatSignatureBaseKW: 75,
   rcsTableM2: [4.0, 7.0, 14.0, 8.0, 3.5, 8.0, 14.0, 7.0],
   pilotEyePointM: [4.2, 0, -1.5],

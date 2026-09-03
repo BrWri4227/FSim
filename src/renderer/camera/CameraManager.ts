@@ -18,7 +18,13 @@ export class CameraManager {
     this.cockpit = new CockpitCamera()
     this.external = new ExternalCamera()
     this.applyLayerMask()
+    this.applyActiveCamera()
     window.addEventListener('keydown', this.onKey)
+  }
+
+  private applyActiveCamera(): void {
+    this.cockpit.setActive(this.mode === 'COCKPIT')
+    this.external.setActive(this.mode === 'EXTERNAL')
   }
 
   private applyLayerMask(): void {
@@ -33,17 +39,21 @@ export class CameraManager {
   private onKey = (e: KeyboardEvent) => {
     if (e.code === 'Tab') {
       e.preventDefault()
-      this.mode = this.mode === 'COCKPIT' ? 'EXTERNAL' : 'COCKPIT'
-      this.applyLayerMask()
-      // Exit pointer lock when switching to external
-      if (this.mode === 'EXTERNAL') document.exitPointerLock()
+      this.toggleMode()
     }
   }
 
-  update(player: PlayerAircraft): void {
+  /** Swap cockpit / external view. Shared by the Tab key and the controller. */
+  toggleMode(): void {
+    this.mode = this.mode === 'COCKPIT' ? 'EXTERNAL' : 'COCKPIT'
+    this.applyLayerMask()
+    this.applyActiveCamera()
+  }
+
+  update(player: PlayerAircraft, dt = 0.016): void {
     player.setCockpitViewActive(this.mode === 'COCKPIT')
     if (this.mode === 'COCKPIT') {
-      this.cockpit.update(this.camera, player)
+      this.cockpit.update(this.camera, player, dt)
     } else {
       this.external.update(this.camera, player)
     }

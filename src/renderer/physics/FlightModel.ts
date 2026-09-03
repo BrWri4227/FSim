@@ -8,7 +8,7 @@ import { computeMassProperties, type InertiaMatrix, type MassProperties } from '
 import { getWeather, turbulenceAmplitudeRadS } from './WeatherState'
 import { computeFlightKinematics, eulerFromQuat } from './FlightKinematics'
 import { advanceTurbulenceClock, sampleTurbulenceAxis } from './TurbulenceNoise'
-import { DEG2RAD, clamp } from '../utils/MathUtils'
+import { DEG2RAD, clamp, quatFromEulerZYX } from '../utils/MathUtils'
 
 const G0 = 9.80665
 
@@ -53,10 +53,12 @@ function computeDerivativeInto(
   storeDragCD: number,
   flapCL: number,
   flapCD: number,
+  flapCm: number,
   inertia: InertiaMatrix,
   cgBodyM: import('../types/common').Vec3,
   actualThrustN: number,
   fuelKg: number,
+  minAltM: number,
   out: number[]
 ): void {
   const kin = computeFlightKinematics(sv)
@@ -105,7 +107,7 @@ function computeDerivativeInto(
 
   const CL = aeroCoeffs.CL + ctrlDeltas.dCL + flapCL
   const CD = Math.max(0, aeroCoeffs.CD + storeDragCD + flapCD)
-  const Cm = aeroCoeffs.Cm + ctrlDeltas.dCm
+  const Cm = aeroCoeffs.Cm + ctrlDeltas.dCm + flapCm
   const CY = aeroCoeffs.CY
   const Cl = aeroCoeffs.Cl + ctrlDeltas.dCl
   const Cn = aeroCoeffs.Cn + ctrlDeltas.dCn
@@ -147,13 +149,65 @@ function computeDerivativeInto(
   const dvdt_z = az_b + qw * acTz + qx * acTy - qy * acTx
 
   // Moments in body frame
-  const L = Cl * qBar * S * b
+  let L = Cl * qBar * S * b
   let M = Cm * qBar * S * c
-  const N = Cn * qBar * S * b
+  let N = Cn * qBar * S * b
 
-  // CG offset pitch moment — stores/fuel shift the effective pitching moment
+  // CG offset pitch moment — stores/fuel shift the effective pitching moment.
+  // Scaled by dynamic pressure so it fades out at low speed / on the ground: this
+  // models an in-flight trim shift, not a static gravity moment, and left
+  // unscaled it would slowly wind the nose up while parked.
   const cgPitch = massKg * G0 * (cgBodyM[2] * Math.cos(alphaRad) - cgBodyM[0] * Math.sin(alphaRad))
-  M += cgPitch * c * 0.015
+  M += cgPitch * c * 0.015 * clamp(qBar / 3000, 0, 1)
+
+  // ─── Landing-gear ground reaction ───────────────────────────────────────────
+  // Near the ground the gear behaves as a spring-damper that holds a level rest
+  // attitude. It is weighted by weight-on-wheels (how much load the wheels still
+  // carry), so as lift builds during the takeoff roll the gear stops fighting the
+  // elevator and the nose rotates naturally. Without this the airframe is a free
+  // rigid body in pitch on the runway and any residual moment tips it over.
+  const nearGround = (-sv[2]!) - minAltM <= 0.6
+  const wow = nearGround ? clamp(1 - (-Fz_aero) / (0.9 * massKg * G0), 0, 1) : 0
+  if (nearGround) {
+    const att = eulerFromQuat(qw, qx, qy, qz)
+    const pitchErrRad = (att.pitch - (spec.groundRestPitchDeg ?? 0)) * DEG2RAD
+    const rollErrRad = att.roll * DEG2RAD
+    M += wow * (-inertia.Iyy * 6.0 * pitchErrRad - inertia.Iyy * 5.0 * qr)
+    L += wow * (-inertia.Ixx * 6.0 * rollErrRad - inertia.Ixx * 5.0 * p)
+    N += -wow * inertia.Izz * 2.5 * r
+  }
+
+  // ─── Low-speed pitch assist (carefree FBW) ─────────────────────────────────
+  // Models an AoA-command flight control law: a firm nose-up pull adds authority
+  // that bare aerodynamic surface power would lack at low q-bar, so a deliberate
+  // yank actually reaches the high-alpha regime the FCS soft-limiter now allows
+  // (cobra, high-AoA snap). Gated on a firm pull (>0.55 command) so ordinary
+  // maneuvering is untouched, faded out by ~250 kt so the sustained-turn /
+  // structural-G regime is untouched, and suppressed while on the wheels.
+  const cmdFrac = Math.abs(pitchRadCmd) / maxPitchRad
+  const pitchAssistEnv =
+    clamp(1 - qBar / 11000, 0, 1) *
+    clamp((cmdFrac - 0.55) / 0.35, 0, 1) *
+    (1 - 0.85 * wow)
+  if (pitchAssistEnv > 0) {
+    M += (-pitchRadCmd / maxPitchRad) * inertia.Iyy * 2.4 * pitchAssistEnv
+  }
+
+  // ─── Thrust vectoring ───────────────────────────────────────────────────────
+  // Adds a control moment independent of airspeed, so vectored jets keep pitch
+  // (and, for 3D nozzles, yaw) authority at very low dynamic pressure — post-stall
+  // nose-pointing and cobra recovery.
+  if (spec.thrustVectoring && thrustN > 0) {
+    const tvcAuth = clamp(1 - qBar / 8000, 0, 1)
+    const armM = spec.mass.macM * 1.6
+    const maxDeflRad = 17 * DEG2RAD
+    const pitchDefl = clamp(pitchRadCmd / maxPitchRad, -1, 1) * maxDeflRad
+    M += -Math.sin(pitchDefl) * thrustN * armM * tvcAuth * 0.55
+    if (spec.thrustVectoring === '3d') {
+      const yawDefl = clamp(yawRadCmd / maxYawRad, -1, 1) * maxDeflRad
+      N += Math.sin(yawDefl) * thrustN * armM * tvcAuth * 0.4
+    }
+  }
 
   // Angular acceleration from Euler equations (uses pre-computed inertia)
   const { Ixx, Iyy, Izz, Ixz } = inertia
@@ -191,20 +245,21 @@ export function stepRK4(
   fuelKg = 0,
   massProps?: MassProperties,
   actualThrustN?: number,
+  flapCm = 0,
 ): StateVec {
   const mp = massProps ?? computeMassProperties(spec, fuelKg, [])
   const thrustN = actualThrustN ?? computeCommandedThrustN(spec, controls.throttle)
 
-  computeDerivativeInto(sv, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, mp, mp.cgBodyM, thrustN, fuelKg, _k1)
+  computeDerivativeInto(sv, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, flapCm, mp, mp.cgBodyM, thrustN, fuelKg, minAltM, _k1)
   addScaledSVInto(sv, _k1, dt * 0.5, _svT)
 
-  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, mp, mp.cgBodyM, thrustN, fuelKg, _k2)
+  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, flapCm, mp, mp.cgBodyM, thrustN, fuelKg, minAltM, _k2)
   addScaledSVInto(sv, _k2, dt * 0.5, _svT)
 
-  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, mp, mp.cgBodyM, thrustN, fuelKg, _k3)
+  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, flapCm, mp, mp.cgBodyM, thrustN, fuelKg, minAltM, _k3)
   addScaledSVInto(sv, _k3, dt, _svT)
 
-  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, mp, mp.cgBodyM, thrustN, fuelKg, _k4)
+  computeDerivativeInto(_svT, spec, controls, massKg, penalties, storeDragCD, flapCL, flapCD, flapCm, mp, mp.cgBodyM, thrustN, fuelKg, minAltM, _k4)
 
   // Allocate exactly one new array for the result that callers store in state.sv
   const result = new Array(13) as StateVec
@@ -220,6 +275,19 @@ export function stepRK4(
   if (-result[2] < minAltM) {
     result[2] = -minAltM
     if (result[5] > 0) result[5] = 0
+  }
+
+  // Ground attitude backstop — the gear spring-damper in the derivative does the
+  // real work; this is a hard limit so a large-dt frame spike can't tumble the
+  // jet past a physically impossible attitude while it sits on the runway.
+  if ((-result[2]) - minAltM <= 0.6) {
+    const gAtt = eulerFromQuat(result[6], result[7], result[8], result[9])
+    const clampedPitch = clamp(gAtt.pitch, -6, 20)
+    if (clampedPitch !== gAtt.pitch) {
+      const gq = quatFromEulerZYX(gAtt.yaw * DEG2RAD, clampedPitch * DEG2RAD, gAtt.roll * DEG2RAD)
+      result[6] = gq[0]; result[7] = gq[1]; result[8] = gq[2]; result[9] = gq[3]
+      result[11] = 0
+    }
   }
 
   // Turbulence — band-limited angular-rate perturbation, rolled-off at high IAS where
@@ -241,13 +309,22 @@ export function stepRK4(
 
 // ─── Engine helpers ──────────────────────────────────────────────────────────
 
-/** Instantaneous commanded thrust (N) at sea level, before spool lag or altitude lapse. */
+/**
+ * Instantaneous commanded thrust (N) at sea level, before spool lag or altitude lapse.
+ *
+ * Two linear segments so both endpoints are reachable:
+ *  - throttle 0 … abMin   → idle … full military (dry) thrust
+ *  - throttle abMin … 1    → full military … full wet (afterburner) thrust
+ * The old single ramp maxed dry thrust at only `abMin` of its rated value, so
+ * military power (and therefore supercruise) was unreachable.
+ */
 export function computeCommandedThrustN(spec: AircraftSpec, throttle: number): number {
   const t = clamp(throttle, 0, 1)
-  const isAB = t >= spec.engine.afterburnerThrottleMin
-  const maxThrust = isAB ? spec.engine.maxThrustWetN : spec.engine.maxThrustDryN
-  const idle = spec.engine.idleThrustN
-  return idle + (maxThrust - idle) * t
+  const { idleThrustN: idle, maxThrustDryN: dry, maxThrustWetN: wet, afterburnerThrottleMin: abMin } = spec.engine
+  if (t <= abMin) {
+    return idle + (dry - idle) * (t / Math.max(abMin, 1e-3))
+  }
+  return dry + (wet - dry) * ((t - abMin) / Math.max(1 - abMin, 1e-3))
 }
 
 export interface EngineDynamicsState {
@@ -273,7 +350,7 @@ export function updateEngineDynamics(
 
   let commanded = computeCommandedThrustN(spec, t)
 
-  const wasWet = engine.thrustN > (idle + dryMax) * 0.55
+  const wasWet = engine.thrustN > dryMax * 1.05
   if (!wantAB && wasWet && engine.abLightOffSec <= 0) {
     engine.abLightOffSec = 0.35
   }

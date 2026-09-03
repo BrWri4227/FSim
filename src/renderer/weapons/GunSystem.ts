@@ -36,6 +36,9 @@ export class GunSystem {
   private muzzleFlash: THREE.Sprite
   private muzzleFlashTimer = 0
   private static readonly MUZZLE_FLASH_DURATION = 0.04  // seconds
+  // Fallback muzzle position (body frame) when a spec omits gunMuzzleBodyM: 4 m
+  // ahead of the CG on the centreline.
+  private static readonly DEFAULT_MUZZLE_BODY_M: [number, number, number] = [4, 0, 0]
 
   constructor(spec: GunSpec | null, scene: THREE.Scene) {
     this.spec = spec
@@ -58,20 +61,26 @@ export class GunSystem {
     this.onTargetHit = cb
   }
 
-  fire(state: AircraftState, _spec: import('../types/aircraft').AircraftSpec): void {
+  fire(state: AircraftState, spec: import('../types/aircraft').AircraftSpec): void {
     if (!this.spec || this.remainingRounds <= 0) return
     const interval = 60 / this.spec.rateOfFireRPM
     if (this.fireTimer > 0) return
 
     this.fireTimer = interval
 
-    // Spawn round at aircraft nose, along body +x direction
+    // Spawn round at the gun muzzle, along body +x direction. The muzzle offset is
+    // in body frame (+x fwd, +y right, +z down); rotate it into NED and add to CG.
     const bodyForward: [number,number,number] = [1, 0, 0]
     const forwardNED = quatRotateVec(state.attitudeQuat, bodyForward)
+    const muzzleBodyM = spec.gunMuzzleBodyM ?? GunSystem.DEFAULT_MUZZLE_BODY_M
+    const muzzlePosNED = v3add(
+      state.positionNED,
+      quatRotateVec(state.attitudeQuat, muzzleBodyM)
+    )
     const vel = v3add(state.velocityNED, v3scale(forwardNED, this.spec.muzzleVelocityMS))
 
     const round: GunRoundState = {
-      positionNED: [...state.positionNED],
+      positionNED: [...muzzlePosNED],
       velocityNED: vel,
       ageSec: 0,
       active: true,

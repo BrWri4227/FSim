@@ -114,16 +114,14 @@ export class CockpitController {
 
     const state = player.state
 
-    // Animate the 3D stick + throttle from the pilot's smoothed control axes.
+    // Animate the 3D stick + throttle + rudder pedals from the pilot's smoothed
+    // control axes (yaw includes any auto-rudder / FCS contribution).
     if (this.detailedCockpit) {
       const axes = player.controlAxes
-      this.detailedCockpit.setControls(axes.pitch, axes.roll, state.throttle)
+      this.detailedCockpit.setControls(axes.pitch, axes.roll, state.throttle, axes.yaw)
     }
 
-    this.glassHUD.update(
-      state, player.spec, player.radar.state, player.rwr.state,
-      player.hms.state.cursorAzDeg, player.hms.state.cursorElDeg,
-    )
+    this.glassHUD.update(player, entityManager)
 
     const gunRounds = player.gun.getRoundsRemaining()
     const selectedWeapon = player.getSelectedWeaponName()
@@ -133,12 +131,14 @@ export class CockpitController {
       state.loadedStores, gunRounds, selectedWeapon,
       player.cmds.flareCount, player.cmds.chaffCount,
       dataLink, player.targetingPod.state, entityManager.getGroundTargets(),
+      entityManager.getEnemies(),
     )
     this.mfdRight?.update(
       state, player.radar.state, player.rwr.state,
       state.loadedStores, gunRounds, selectedWeapon,
       player.cmds.flareCount, player.cmds.chaffCount,
       dataLink, player.targetingPod.state, entityManager.getGroundTargets(),
+      entityManager.getEnemies(),
     )
   }
 

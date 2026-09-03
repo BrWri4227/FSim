@@ -3,7 +3,9 @@ import { GSH301 } from '../weapons/gsh301'
 import { SU57_HARDPOINTS } from '../hardpoints/su57_hardpoints'
 
 // Su-57 Felon — 19.8 m length, 14.0 m span, ~78.8 m² wing area
-// 2× AL-41F1: 147 kN dry / 176 kN AB each; 3D thrust vectoring
+// 2× AL-41F1 (izdeliye 117): ~100 kN dry / ~150 kN AB each. Wet is pushed to the
+// planned izdeliye 30 figure (~176 kN each) for an arcade-fast top end; dry is
+// kept realistic so the afterburner is still a meaningful step. 3D TVC.
 const ALPHA = [-10, -5, 0, 5, 10, 15, 20, 25, 30]
 const MACH  = [0.0, 0.3, 0.6, 0.9, 1.2, 1.6, 2.0]
 
@@ -61,7 +63,7 @@ export const SU57: AircraftSpec = {
     CNdr: [-0.046,-0.044,-0.036,-0.028,-0.020],
   },
   engine: {
-    maxThrustDryN: 294000,
+    maxThrustDryN: 200000,
     maxThrustWetN: 352000,
     idleThrustN: 9500,
     spoolTimeSec: 2.8,
@@ -75,7 +77,10 @@ export const SU57: AircraftSpec = {
   },
   hardpoints: SU57_HARDPOINTS,
   maxAoADeg: 30, maxGPositive: 9.0, maxGNegative: -3.0,
+  thrustVectoring: '3d',
   gunSpec: GSH301,
+  // GSh-301 in the starboard wing-root / LEVCON fairing.
+  gunMuzzleBodyM: [2.2, 1.4, -0.5],
   heatSignatureBaseKW: 28,
   rcsTableM2: [0.15, 0.25, 0.50, 0.30, 0.12, 0.30, 0.50, 0.25],
   pilotEyePointM: [4.5, 0, -1.45],

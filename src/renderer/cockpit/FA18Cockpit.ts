@@ -23,17 +23,23 @@ export class FA18Cockpit extends THREE.Group {
 
   private static readonly STICK_BASE = new THREE.Vector3(0.25, 0.34, -0.2)
   private static readonly THROTTLE_PIVOT = new THREE.Vector3(-0.53, 0.72, 0.2)
+  private static readonly RUDDER_PIVOT_L = new THREE.Vector3(-0.22, 0.1, -1.15)
+  private static readonly RUDDER_PIVOT_R = new THREE.Vector3(0.22, 0.1, -1.15)
 
   /** Max stick deflection each axis (rad). */
   private static readonly STICK_PITCH_RANGE = 0.22
   private static readonly STICK_ROLL_RANGE = 0.24
   /** Total throttle lever swing from idle (aft) to max (forward), rad. */
   private static readonly THROTTLE_RANGE = 0.5
+  /** Fore/aft swing of each rudder pedal from neutral, rad. */
+  private static readonly RUDDER_PEDAL_RANGE = 0.3
 
   /** Holds all structure, translated by −EYE so the eye sits at the origin. */
   private readonly root = new THREE.Group()
   private readonly stickPivot = new THREE.Group()
   private readonly throttlePivot = new THREE.Group()
+  private readonly rudderPivotLeft = new THREE.Group()
+  private readonly rudderPivotRight = new THREE.Group()
 
   /** MFD display quads wired by the CockpitController (canvas textures). */
   readonly mfdLeft: THREE.Mesh
@@ -43,6 +49,7 @@ export class FA18Cockpit extends THREE.Group {
   private animPitch = 0
   private animRoll = 0
   private animThrottle = 0.3
+  private animYaw = 0
 
   private readonly materials = {
     cockpit: new THREE.MeshStandardMaterial({ color: 0x25282a, emissive: 0x090a0b, roughness: 0.82, metalness: 0.08 }),
@@ -71,7 +78,9 @@ export class FA18Cockpit extends THREE.Group {
 
     this.stickPivot.position.copy(FA18Cockpit.STICK_BASE)
     this.throttlePivot.position.copy(FA18Cockpit.THROTTLE_PIVOT)
-    this.root.add(this.stickPivot, this.throttlePivot)
+    this.rudderPivotLeft.position.copy(FA18Cockpit.RUDDER_PIVOT_L)
+    this.rudderPivotRight.position.copy(FA18Cockpit.RUDDER_PIVOT_R)
+    this.root.add(this.stickPivot, this.throttlePivot, this.rudderPivotLeft, this.rudderPivotRight)
 
     this.createCockpitTub()
     this.createSeat()
@@ -88,7 +97,7 @@ export class FA18Cockpit extends THREE.Group {
     this.mfdRight = this.createMFD('mfd_right', 0.36, 1.03, -0.98, 0.38, 0.33)
     this.createMFD('mfd_center', 0, 0.68, -1.08, 0.39, 0.29)
 
-    this.setControls(0, 0, 0.3)
+    this.setControls(0, 0, 0.3, 0)
   }
 
   /**
@@ -96,14 +105,16 @@ export class FA18Cockpit extends THREE.Group {
    * @param pitch −1 (push / nose down) .. +1 (pull / nose up)
    * @param roll  −1 (left) .. +1 (right)
    * @param throttle 0 (idle) .. 1 (max / afterburner)
+   * @param yaw   −1 (left rudder) .. +1 (right rudder)
    */
-  setControls(pitch: number, roll: number, throttle: number): void {
+  setControls(pitch: number, roll: number, throttle: number, yaw = 0): void {
     // Inputs are already smoothed upstream, but ease a little more so keyboard
     // throttle steps and axis snaps read as physical lever/stick motion.
     const k = 0.25
     this.animPitch += (clamp(pitch, -1, 1) - this.animPitch) * k
     this.animRoll += (clamp(roll, -1, 1) - this.animRoll) * k
     this.animThrottle += (clamp(throttle, 0, 1) - this.animThrottle) * k
+    this.animYaw += (clamp(yaw, -1, 1) - this.animYaw) * k
 
     // Pull back (pitch +) tilts the grip toward the pilot (+Z) → +rotation.x.
     this.stickPivot.rotation.x = this.animPitch * FA18Cockpit.STICK_PITCH_RANGE
@@ -111,6 +122,10 @@ export class FA18Cockpit extends THREE.Group {
     this.stickPivot.rotation.z = -this.animRoll * FA18Cockpit.STICK_ROLL_RANGE
     // Idle sits aft (+rotation.x), full power swings the levers forward (−).
     this.throttlePivot.rotation.x = (0.5 - this.animThrottle) * FA18Cockpit.THROTTLE_RANGE
+    // Right rudder (yaw +) pushes the right pedal forward (−Z) and the left pedal
+    // back toward the pilot; left rudder is the mirror.
+    this.rudderPivotLeft.rotation.x = this.animYaw * FA18Cockpit.RUDDER_PEDAL_RANGE
+    this.rudderPivotRight.rotation.x = -this.animYaw * FA18Cockpit.RUDDER_PEDAL_RANGE
   }
 
   private box(
@@ -356,9 +371,13 @@ export class FA18Cockpit extends THREE.Group {
   }
 
   private createRudderPedals(): void {
-    for (const side of [-1, 1]) {
-      this.box(this.root, 'RudderPedalArm', new THREE.Vector3(0.045, 0.045, 0.48), new THREE.Vector3(side * 0.22, 0.23, -0.75), this.materials.metal, new THREE.Euler(-0.2, 0, 0))
-      this.box(this.root, 'RudderPedal', new THREE.Vector3(0.24, 0.08, 0.17), new THREE.Vector3(side * 0.22, 0.33, -1), this.materials.metal, new THREE.Euler(-0.38, 0, 0))
+    for (const side of [-1, 1] as const) {
+      const pivot = side === -1 ? this.rudderPivotLeft : this.rudderPivotRight
+      const base = pivot.position
+      const rel = (x: number, y: number, z: number): THREE.Vector3 =>
+        new THREE.Vector3(x, y, z).sub(base)
+      this.box(pivot, 'RudderPedalArm', new THREE.Vector3(0.045, 0.045, 0.48), rel(side * 0.22, 0.23, -0.75), this.materials.metal, new THREE.Euler(-0.2, 0, 0))
+      this.box(pivot, 'RudderPedal', new THREE.Vector3(0.24, 0.08, 0.17), rel(side * 0.22, 0.33, -1), this.materials.metal, new THREE.Euler(-0.38, 0, 0))
     }
   }
 

@@ -14,6 +14,8 @@ const STICK_PITCH_RANGE = 0.22
 const STICK_ROLL_RANGE = 0.24
 const THROTTLE_RANGE = 0.5
 const THROTTLE_PIVOT = new THREE.Vector3(-0.53, 0.72, 0.2)
+/** Fore/aft swing of each rudder pedal from neutral, rad. */
+const RUDDER_PEDAL_RANGE = 0.3
 
 /** MFD screen offset toward the pilot (+Z) inside each tilted bezel group. */
 const MFD_FACE_Z = 0.036
@@ -31,7 +33,7 @@ const MFD_BIND: Record<string, [string, string]> = {
 }
 
 export type AnimatedCockpit = THREE.Group & {
-  setControls(pitch: number, roll: number, throttle: number): void
+  setControls(pitch: number, roll: number, throttle: number, yaw: number): void
 }
 
 /**
@@ -50,6 +52,7 @@ export function prepareCockpitForSim(aircraftId: string, cockpit: THREE.Group): 
 
   const stickPivot = buildPivot(cockpit, stickBase, ['ControlStickShaft', 'ControlStickGrip'])
   const throttlePivot = buildPivot(cockpit, THROTTLE_PIVOT.clone(), ['ThrottleLever', 'ThrottleGrip'])
+  const rudderPivots = buildRudderPivots(cockpit)
 
   bindMfdScreens(cockpit, aircraftId)
 
@@ -62,13 +65,15 @@ export function prepareCockpitForSim(aircraftId: string, cockpit: THREE.Group): 
   let animPitch = 0
   let animRoll = 0
   let animThrottle = 0.3
+  let animYaw = 0
 
   const animated = cockpit as AnimatedCockpit
-  animated.setControls = (pitch: number, roll: number, throttle: number): void => {
+  animated.setControls = (pitch: number, roll: number, throttle: number, yaw = 0): void => {
     const k = 0.25
     animPitch += (clamp(pitch, -1, 1) - animPitch) * k
     animRoll += (clamp(roll, -1, 1) - animRoll) * k
     animThrottle += (clamp(throttle, 0, 1) - animThrottle) * k
+    animYaw += (clamp(yaw, -1, 1) - animYaw) * k
 
     if (stickPivot) {
       stickPivot.rotation.x = animPitch * STICK_PITCH_RANGE
@@ -77,6 +82,10 @@ export function prepareCockpitForSim(aircraftId: string, cockpit: THREE.Group): 
     if (throttlePivot) {
       throttlePivot.rotation.x = (0.5 - animThrottle) * THROTTLE_RANGE
     }
+    // Right rudder (yaw > 0) pushes the right pedal forward (−Z) and the left
+    // pedal back toward the pilot; left rudder is the mirror.
+    if (rudderPivots.left)  rudderPivots.left.rotation.x  =  animYaw * RUDDER_PEDAL_RANGE
+    if (rudderPivots.right) rudderPivots.right.rotation.x = -animYaw * RUDDER_PEDAL_RANGE
   }
 
   return animated
@@ -124,6 +133,32 @@ function buildPivot(
   }
   parent.add(pivot)
   return pivot
+}
+
+/**
+ * The two rudder pedals share the names `RudderPedalArm` / `RudderPedal`, so
+ * split them by which side of centre they sit on and give each side its own
+ * pivot at the forward (floor) mount so it can swing fore/aft independently.
+ */
+function buildRudderPivots(parent: THREE.Group): { left?: THREE.Group; right?: THREE.Group } {
+  const pedalParts = parent.children.filter(
+    c => c.name === 'RudderPedalArm' || c.name === 'RudderPedal',
+  )
+  const makeSide = (sign: number): THREE.Group | undefined => {
+    const parts = pedalParts.filter(p => Math.sign(p.position.x) === sign)
+    if (parts.length === 0) return undefined
+    const pivot = new THREE.Group()
+    pivot.name = 'rudderPivot'
+    pivot.position.set(sign * 0.22, 0.1, -1.15)
+    for (const part of parts) {
+      parent.remove(part)
+      part.position.sub(pivot.position)
+      pivot.add(part)
+    }
+    parent.add(pivot)
+    return pivot
+  }
+  return { left: makeSide(-1), right: makeSide(1) }
 }
 
 function bindMfdScreens(cockpit: THREE.Group, aircraftId: string): void {

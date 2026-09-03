@@ -1,6 +1,15 @@
 import type { LoadedStore } from '../../types/weapons'
+import type { LARInfo } from '../../ui/HUDElements/TargetingComputer'
 
-export function drawStoresPage(ctx: CanvasRenderingContext2D, w: number, h: number, stores: LoadedStore[], gunRounds: number, selectedWeapon: string): void {
+export function drawStoresPage(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  stores: LoadedStore[],
+  gunRounds: number,
+  selectedWeapon: string,
+  lar: LARInfo | null = null,
+): void {
   ctx.fillStyle = '#001122'
   ctx.fillRect(0, 0, w, h)
   ctx.font = '11px monospace'
@@ -25,4 +34,15 @@ export function drawStoresPage(ctx: CanvasRenderingContext2D, w: number, h: numb
 
   ctx.fillStyle = '#4488ff'
   ctx.fillText(`GUN: ${gunRounds}`, 8, y + 4)
+
+  // Launch envelope readout for the selected A/A missile vs the STT target.
+  if (lar) {
+    const status = lar.inNoEscapeZone ? 'IN NEZ'
+      : lar.inRange ? 'IN RNG'
+      : lar.rangeM > lar.rMaxM ? 'OUT RNG' : 'TOO CLOSE'
+    ctx.fillStyle = lar.inNoEscapeZone ? '#00ff44' : lar.inRange ? '#00ff44' : '#ffb000'
+    ctx.fillText(`LAR ${status}`, 8, h - 30)
+    ctx.fillStyle = '#4488ff'
+    ctx.fillText(`RNG ${(lar.rangeM / 1852).toFixed(1)} / RMAX ${(lar.rMaxM / 1852).toFixed(1)} NM`, 8, h - 16)
+  }
 }

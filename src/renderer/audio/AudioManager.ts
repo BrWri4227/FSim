@@ -52,6 +52,8 @@ const SOUND_FILES: Record<string, string> = {
   engine_fire_right: 'engine_fire_right.wav',
   gun_20mm:          'gun_20mm.wav',
   gun_30mm:          'gun_30mm.wav',
+  gun_20mm_tail:     'gun_20mm_tail.wav',
+  gun_30mm_tail:     'gun_30mm_tail.wav',
   ir_growl_cold:     'ir_growl_cold.wav',
   ir_growl_hot:      'ir_growl_hot.wav',
   chaff:             'chaff.wav',
@@ -75,7 +77,7 @@ const SOUND_FILES: Record<string, string> = {
   explosion:         'explosion.wav',
 }
 
-const OPTIONAL_SOUND_FILES = new Set(['pitbull', 'shoot', 'hit', 'explosion'])
+const OPTIONAL_SOUND_FILES = new Set(['pitbull', 'shoot', 'hit', 'explosion', 'gun_20mm_tail', 'gun_30mm_tail'])
 const BINGO_FUEL_FRACTION = 0.20
 const LOW_FUEL_FRACTION = 0.10
 const CALLOUT_COOLDOWN_SEC = 10
@@ -130,11 +132,13 @@ export class AudioManager {
   private growlLocked = false
 
   // ── Cannon ──────────────────────────────────────────────────────────────
-  private gunOsc:    OscillatorNode | null = null
-  private gunModOsc: OscillatorNode | null = null
-  private gunGain:   GainNode | null = null
-  private gunSrc:    AudioBufferSourceNode | null = null
-  private gunFiring  = false
+  private gunOsc:     OscillatorNode | null = null
+  private gunModOsc:  OscillatorNode | null = null
+  private gunGain:    GainNode | null = null
+  private gunSrc:     AudioBufferSourceNode | null = null
+  private gunSrcGain: GainNode | null = null
+  private gunFiring   = false
+  private gunCaliber: '20mm' | '30mm' = '20mm'
 
   // ── Master gain (global volume) ─────────────────────────────────────────
   private masterGain: GainNode
@@ -573,11 +577,22 @@ export class AudioManager {
   private startGun(caliber: '20mm' | '30mm'): void {
     if (this.gunFiring) return
     this.gunFiring = true
+    this.gunCaliber = caliber
 
-    const fileKey = caliber === '20mm' ? 'gun_20mm' : 'gun_30mm'
-    const loop = this.startLoop(fileKey, caliber === '20mm' ? 0.7 : 0.85)
+    const fileKey    = caliber === '20mm' ? 'gun_20mm' : 'gun_30mm'
+    const targetGain = caliber === '20mm' ? 0.7 : 0.85
+    const loop = this.startLoop(fileKey, 0.0001)
     if (loop) {
-      ;[this.gunSrc] = loop
+      const [src, g] = loop
+      this.gunSrc = src
+      this.gunSrcGain = g
+      // Rotor spin-up: pitch + level rise as the barrels reach firing speed.
+      const now    = this.ctx.currentTime
+      const spinUp = caliber === '20mm' ? 0.18 : 0.26
+      src.playbackRate.setValueAtTime(caliber === '20mm' ? 0.82 : 0.74, now)
+      src.playbackRate.linearRampToValueAtTime(1, now + spinUp)
+      g.gain.setValueAtTime(0.0001, now)
+      g.gain.exponentialRampToValueAtTime(targetGain, now + spinUp)
       return
     }
 
@@ -630,19 +645,30 @@ export class AudioManager {
     if (!this.gunFiring) return
     this.gunFiring = false
 
+    const now = this.ctx.currentTime
+
     if (this.gunSrc) {
-      this.stopLoop(this.gunSrc, null)
-      this.gunSrc = null
+      // Fade the firing loop out fast, then let the spin-down tail (coasting
+      // rotor whine + trailing dwell rounds) carry the release.
+      const src = this.gunSrc, g = this.gunSrcGain
+      g?.gain.setTargetAtTime(0.0001, now, 0.03)
+      setTimeout(() => { try { src.stop() } catch { /* */ } }, 160)
+      this.gunSrc = null; this.gunSrcGain = null
+
+      const tailKey = this.gunCaliber === '20mm' ? 'gun_20mm_tail' : 'gun_30mm_tail'
+      this.playOnce(tailKey, this.gunCaliber === '20mm' ? 0.7 : 0.85)
       return
     }
 
-    const now = this.ctx.currentTime
-    this.gunGain?.gain.setTargetAtTime(0, now, 0.02)
+    // Synthesis fallback — fake the spin-down with a falling pitch + slow fade.
+    this.gunGain?.gain.setTargetAtTime(0.0001, now, 0.06)
+    this.gunOsc?.frequency.setTargetAtTime((this.gunCaliber === '20mm' ? 140 : 80) * 0.5, now, 0.12)
+    this.gunModOsc?.frequency.setTargetAtTime((this.gunCaliber === '20mm' ? 100 : 30) * 0.4, now, 0.12)
     const osc = this.gunOsc, modOsc = this.gunModOsc
     setTimeout(() => {
       try { osc?.stop()    } catch { /* */ }
       try { modOsc?.stop() } catch { /* */ }
-    }, 80)
+    }, 300)
     this.gunOsc = null; this.gunModOsc = null; this.gunGain = null
   }
 

@@ -109,9 +109,12 @@ export function getTerrainHeightAtNED(positionNED: readonly [number, number, num
 
 /**
  * Height above terrain (m) — positive when airborne.
+ *
+ * NED down is negative when airborne, so `-positionNED[2]` is altitude MSL;
+ * subtracting the terrain's MSL elevation gives height above the ground.
  */
 export function getAGLM(positionNED: readonly [number, number, number]): number {
-  return getTerrainHeightAtNED(positionNED) - positionNED[2]
+  return -positionNED[2] - getTerrainHeightAtNED(positionNED)
 }
 
 /**

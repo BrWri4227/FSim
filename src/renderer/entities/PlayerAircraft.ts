@@ -252,9 +252,9 @@ export class PlayerAircraft extends Aircraft {
 
     // Speed brakes toggle
     if (controls.speedBrakeToggle) this.state.speedBrake = !this.state.speedBrake
-    // Auto-retract flaps above limit speed (250 kts for pos 1, 200 kts for pos 2)
-    if (this.state.flaps === 2 && this.state.iasKts > 200) this.state.flaps = 1
-    if (this.state.flaps === 1 && this.state.iasKts > 250) this.state.flaps = 0
+    // Flaps are not speed-locked. Past their placard speed they lose effectiveness
+    // via aerodynamic blow-back (see computeFlapAero) rather than snapping back a
+    // detent, so the selected position is left exactly where the pilot put it.
 
     // Avionics
     this.radar.update(dt, this.state, enemies, controls.radarModeNext, false, groundTargets)

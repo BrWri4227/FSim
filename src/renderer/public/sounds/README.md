@@ -10,8 +10,10 @@ synthesized placeholders. Any missing file silently falls back to synthesis.
 | `engine_idle.wav`     | Jet engine at idle — looped, pitch-shifted by throttle     |
 | `engine_ab.wav`       | Afterburner roar (optional, reserved for future use)       |
 | `engine_flameout.wav` | Engine wind-down / compressor stall one-shot               |
-| `gun_20mm.wav`        | M61A1 Vulcan burst — looped while firing                   |
-| `gun_30mm.wav`        | GSh-30 burst — looped while firing                         |
+| `gun_20mm.wav`        | M61A1 Vulcan burst — looped while firing (script-generated)|
+| `gun_30mm.wav`        | GSh-30 burst — looped while firing (script-generated)      |
+| `gun_20mm_tail.wav`   | Vulcan spin-down one-shot on trigger release (script-gen)  |
+| `gun_30mm_tail.wav`   | GSh-30 spin-down one-shot on trigger release (script-gen)  |
 | `ir_growl_cold.wav`   | AIM-9 / R-73 seeker acquiring — looped                     |
 | `ir_growl_hot.wav`    | AIM-9 / R-73 seeker locked — looped                        |
 | `rwr_search.wav`      | Single RWR search ping                                     |
@@ -21,6 +23,18 @@ synthesized placeholders. Any missing file silently falls back to synthesis.
 | `pitbull.wav`         | "Pitbull" callout when ARH missile goes active             |
 | `pull_up.wav`         | GPWS "pull up" voice warning                               |
 | `pull_up_urgent.wav`  | GPWS "pull up pull up" urgent warning                      |
+
+## Regenerating the synthesized sounds
+
+`node scripts/generate-sounds.cjs` synthesizes any missing WAV. The four cannon
+files (`gun_20mm.wav`, `gun_30mm.wav`, `gun_20mm_tail.wav`, `gun_30mm_tail.wav`)
+are listed in that script's `REGENERATE` set, so they are rebuilt every run —
+retune via the `GUN_20MM` / `GUN_30MM` preset objects (`tailSec` / `dwellRounds`
+control the spin-down). Drop a real recording in with the same name and remove it
+from `REGENERATE` to make the recording canonical instead.
+
+`AudioManager` ramps the loop up on `startGun` (rotor spin-up) and, on
+`stopGun`, fades the loop and plays the matching `*_tail` one-shot.
 
 ## Free sources for realistic military aircraft sounds
 
