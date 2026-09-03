@@ -8,9 +8,9 @@ the uncommitted Stage 1–2 changes present on 2026-09-03** (see the preconditio
 
 ---
 
-## Status — 2026-09-03 (Stages 1–4 landed, Stage 5 not run)
+## Status — 2026-09-03 (Stages 1–4 landed; Stage 5 code done, live rehearsal outstanding)
 
-Implemented on `BW/Cursor-Opus-Implement-Sanity`. `npm run ci` exits 0 — **186/186 tests**, 0 lint
+Implemented on `BW/Cursor-Opus-Implement-Sanity`. `npm run ci` exits 0 — **265/265 tests**, 0 lint
 warnings. The original plan's "all of it is uncommitted" note is stale: Stages 1–4 are committed
 as the log below. Stage 5 (packaged build, two-client rehearsal, audit §15 checklist) was **not**
 executed in this session.
@@ -84,14 +84,47 @@ calls `MissileSystem.clear()` / `BombSystem.clear()` (not `dispose()`). Respawn 
 scenario altitude with a random heading. Respawn timer is cleared in `dispose()`. Single-player
 death still goes to debrief.
 
-### Stage 5 — still to do (no code, verification only)
+### Stage 5 — partly done (2026-09-03)
 
-1. Two-client rehearsal against `npm run server` (callsigns, kill feed, respawn, scoreboard, late
-   join, Alt-F4).
-2. Bump version in **both** `package.json` and `src/preload/index.ts` (the on-screen badge is
-   hard-coded separately), then `npm run dist:win`.
-3. Fresh-install test: sounds under `app.asar.unpacked`, DevTools closed, firewall prompt, audit
-   §15 checklist.
+`npm run ci` exits 0 — **265/265 tests, 27 files, 0 lint warnings**.
+
+```
+7c94dc7 S5: cover the multiplayer receive path end to end
+51ce0f8 S5: make the version badge tell the truth, bump to 0.2.0
+```
+
+**Done and verified:**
+
+| Item | Result |
+|---|---|
+| Version single-sourced | `electron.vite.config.ts` injects `__APP_VERSION__` from `package.json` via `define`; preload no longer hard-codes it. `window.fsim.version` stays synchronous, so the two badge call sites are unchanged. Verified `version: "0.2.0"` baked into `dist-electron/preload/index.mjs`. |
+| Version bumped | 0.1.5 → **0.2.0** |
+| Packaged build | `npm run dist:win` exit 0 → `release/FSim Setup 0.2.0.exe` (107.7 MB) + blockmap |
+| Packaged audio | All **29 WAVs** present under `release/win-unpacked/resources/app.asar.unpacked/dist-electron/renderer/sounds/`, including the new `hit.wav` / `explosion.wav` / gun tails. `asarUnpack` config is correct. |
+| Dedicated server | `npm run build:server` + live `node dist-server/server/standalone.js --port 45455`: real client joined, server logged `Player Probe joined (F22)` and returned `welcome` with `score`. The path `docs/dedicated-server.md` tells friends to use works. |
+| MP receive path | New `MultiplayerSession.integration.test.ts` — 7 tests, real clients ↔ real `GameServer` over real sockets. Stable across 5 consecutive runs. Covers callsign exchange, state relay, targeted hit delivery, kill scoring agreeing on both clients, **late-joiner standings**, peer departure, mid-session callsign change. |
+| Risk-register spot checks | `respawnTimer` **is** cleared in `FlightSession.dispose()`; kill feed, scoreboard and hit flash **are** all in the HUD `needsFlash` check. Both risks closed. |
+| Housekeeping | `eslint_out.txt` already gone; tree clean. |
+
+**Still to do — needs a second machine and a human:**
+
+1. **Two-client rehearsal with eyes on it.** The protocol is now covered by tests, but nobody has
+   watched remote-aircraft interpolation for rubber-banding, read the kill feed mid-fight, or
+   confirmed the respawn overlay feels right. Run `npm run server` on a third box and connect two
+   real clients.
+2. **Fresh-install test.** Install `release/FSim Setup 0.2.0.exe` on a machine that has never run
+   the dev server: confirm the console reports `29 / 29 sound files loaded` (a silent fallback to
+   synthesis is easy to miss), DevTools stay closed, the version badge reads `v0.2.0`, and the
+   Windows Defender prompt on first host is accepted and then joinable.
+3. **Audit §15 checklist**, the remaining boxes.
+
+**Two cosmetic findings from the packaging run** (neither blocks the playtest):
+
+- `default Electron icon is used — application icon is not set`. The installer, taskbar and Start
+  menu entry all show the stock Electron logo. A single 256×256 `build/icon.ico` plus
+  `"win": { "icon": "build/icon.ico" }` fixes it, and it is the first thing a friend sees.
+- `author is missed in the package.json`. Harmless, but electron-builder uses it for installer
+  metadata and the publisher string.
 
 Still out of scope: the P2 IR seeker quaternion-as-direction bug at `IRSeeker.ts` (`forward =
 [attitudeQuat[0], attitudeQuat[1], attitudeQuat[2]]` — fix is `quatRotateVec(state.attitudeQuat,
