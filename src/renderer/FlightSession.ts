@@ -329,6 +329,13 @@ export class FlightSession {
     if (this.disposed) return
     this.rafId = requestAnimationFrame(this.loop)
 
+    // Poll the controller once per frame — even while paused, so the Menu button
+    // can resume and the View button can still swap cameras.
+    this.inputManager.beginFrame()
+    const nav = this.inputManager.getFrameActions()
+    if (nav.cameraToggle) this.cameraManager.toggleMode()
+    if (nav.pauseToggle && !this.completionScheduled) this.togglePause()
+
     // Single-player pause: freeze the fixed-step sim but keep painting the frozen
     // frame so the scene stays visible behind the DOM overlay.
     if (this.paused) {
@@ -588,7 +595,7 @@ export class FlightSession {
     const playerState = this.player.state
     const cockpitView = this.cameraManager.getMode() === 'COCKPIT'
     this.player.setCockpitViewActive(cockpitView)
-    this.cameraManager.update(this.player)
+    this.cameraManager.update(this.player, this.frameDt)
     this.player.hms.setHeadDir(this.cameraManager.getHeadAzDeg(), this.cameraManager.getHeadElDeg())
 
     // Sync mesh transforms

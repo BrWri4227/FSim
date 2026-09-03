@@ -88,6 +88,13 @@ export interface AircraftSpec {
   maxGPositive: number
   maxGNegative: number
   gunSpec: GunSpec | null
+  /**
+   * Gun muzzle location relative to CG in body frame (+x fwd, +y right, +z down),
+   * same convention as {@link HardpointDef.posBodyM} and {@link pilotEyePointM}.
+   * Cannon rounds spawn here and the muzzle flash is drawn here. Defaults to
+   * 4 m directly ahead of the CG on the centreline when omitted.
+   */
+  gunMuzzleBodyM?: Vec3
   heatSignatureBaseKW: number
   rcsTableM2: number[]   // 8-point: 0°/45°/90°/135°/180°/225°/270°/315°
   pilotEyePointM: Vec3
@@ -96,6 +103,14 @@ export interface AircraftSpec {
   cmdsFlareCount?: number
   /** Maximum chaff bundles carried. Defaults to 120 when omitted. */
   cmdsChaffCount?: number
+  /** Static pitch attitude (deg) sitting on the gear. Defaults to 0 when omitted. */
+  groundRestPitchDeg?: number
+  /**
+   * Thrust-vectoring nozzles: adds airspeed-independent control authority so the
+   * jet can point its nose at very low dynamic pressure (post-stall).
+   * 'pitch' = 2D (pitch only, e.g. F-22); '3d' = pitch + yaw (e.g. Su-35/Su-57).
+   */
+  thrustVectoring?: 'pitch' | '3d'
 }
 
 export interface ControlInputs {

@@ -76,6 +76,8 @@ export const F35A: AircraftSpec = {
   hardpoints: F35A_HARDPOINTS,
   maxAoADeg: 25, maxGPositive: 9.0, maxGNegative: -3.0,
   gunSpec: M61A1,
+  // GAU-22/A in the starboard over-wing fairing, just aft of the canopy.
+  gunMuzzleBodyM: [1.6, 0.75, -0.55],
   heatSignatureBaseKW: 22,
   rcsTableM2: [0.08, 0.12, 0.22, 0.14, 0.06, 0.14, 0.22, 0.12],
   pilotEyePointM: [3.8, 0, -1.25],

@@ -73,6 +73,8 @@ export const FA18C: AircraftSpec = {
   hardpoints: FA18C_HARDPOINTS,
   maxAoADeg: 30, maxGPositive: 7.5, maxGNegative: -3.0,
   gunSpec: M61A1,
+  // M61A1 on top of the nose, ahead of the windscreen, on the centreline.
+  gunMuzzleBodyM: [5.2, 0.0, -0.4],
   heatSignatureBaseKW: 40,
   rcsTableM2: [1.0, 1.8, 3.5, 2.2, 0.9, 2.2, 3.5, 1.8],
   pilotEyePointM: [3.8, 0, -1.3],

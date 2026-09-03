@@ -5,6 +5,7 @@ import type { DamageState } from '../types/damage'
 import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState, computeActualThrustN, updateEngineDynamics, type EngineDynamicsState } from '../physics/FlightModel'
+import { computeFlapAero } from '../physics/FlapModel'
 import { computeMassProperties, computeTotalMass, computeStoreDrag } from '../physics/MassProperties'
 import { getTerrainHeightAtNED } from '../scene/Terrain'
 import { createPlaceholderAircraftMesh, buildDistantAircraftMesh, buildStoreMesh, createNozzlePoints, getThrusterScale, applyDamageTint, setGearAnimT, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
@@ -118,10 +119,8 @@ export class Aircraft {
 
     const gearDrag = this.state.gearDown ? 0.05 : 0
     const speedBrakeDrag = this.state.speedBrake ? 0.12 : 0
-    const FLAP_CL = [0, 0.5, 1.0] as const
-    const FLAP_CD = [0, 0.02, 0.08] as const
-    const flapCL = FLAP_CL[this.state.flaps]
-    const flapCD = FLAP_CD[this.state.flaps]
+    // Flap lift / drag / pitching-moment increments, with airspeed blow-back.
+    const { flapCL, flapCD, flapCm } = computeFlapAero(this.state.flaps, this.state.iasKts)
     const limitedControls = applyFCSLimits(controls, this.state, this.spec)
     const fcsControls = this.shapeFlightControls(limitedControls, dt)
     const groundClearM = getGroundClearance(this.spec.id, this.state.gearDown)
@@ -134,7 +133,7 @@ export class Aircraft {
     const newSV = stepRK4(
       this.state.sv, this.spec, fcsControls, massKg, penalties,
       storeDrag + gearDrag + speedBrakeDrag + penalties.asymmetricDragCD, dt, flapCL, flapCD, minAltM,
-      this.state.fuelKg, massProps, commandedThrust,
+      this.state.fuelKg, massProps, commandedThrust, flapCm,
     )
 
     // Update state from SV

@@ -13,6 +13,7 @@ import { drawThrottleBar }       from './HUDElements/ThrottleBar'
 import { drawFuelGauge }         from './HUDElements/FuelGauge'
 import { drawThreatDisplay, createRWRDisplayState, type RWRDisplayState } from './HUDElements/ThreatDisplay'
 import { drawLandingAids } from './HUDElements/LandingAids'
+import { FLAP_PLACARD_KTS } from '../physics/FlapModel'
 import { getAGLM } from '../scene/Terrain'
 import {
   computeRelativeKinematics,
@@ -32,10 +33,10 @@ import {
   computeMissileLeadSolution,
   computeMissileOptimalLaunchAngleDeg,
   getMissileSeekerLimitDeg,
-  solveInterceptTime,
   collectMissileTTI,
   type MissileTTIEntry,
 } from './HUDElements/TargetingComputer'
+import { solveGunLead } from '../physics/Ballistics'
 
 /**
  * HUD colour language (F/A-18/F-16 style):
@@ -51,8 +52,9 @@ const HUD_RED = '#ff2020'
 const HUD_BLUE = '#66ccff'
 const HUD_PITBULL = '#ffe66d'
 
-const G0 = 9.80665
 const MAX_HUD_TTI_LINES = 3
+/** Duration of the gun-funnel "just entered a firing zone" attention flash. */
+const GUN_FUNNEL_ENTER_FLASH_SEC = 0.45
 
 export class HUD {
   private canvas: HTMLCanvasElement
@@ -79,15 +81,26 @@ export class HUD {
     y: number
     fitY: number
     rangeM: number
+    tofSec: number
     lastTsMs: number
     initialized: boolean
+    /** Last frame's range tier, to detect the entry into a firing zone. */
+    prevTier: 'FAR' | 'IN' | 'PK' | null
+    /** Countdown (sec) for the "just entered range" attention flash. */
+    enterFlashSec: number
+    /** Expanding-ring phase [0,1) for the in-range pulse animation. */
+    pulsePhase: number
   } = {
     x: 0,
     y: 0,
     fitY: 0,
     rangeM: 0,
+    tofSec: 0,
     lastTsMs: 0,
     initialized: false,
+    prevTier: null,
+    enterFlashSec: 0,
+    pulsePhase: 0,
   }
 
   constructor(canvas: HTMLCanvasElement, player: PlayerAircraft, entityManager: EntityManager) {
@@ -149,7 +162,7 @@ export class HUD {
     const airspeedX = Math.max(edgePadX, Math.round(cx - sideTapeOffset - 22))
     const altimeterX = Math.min(W - edgePadX - 44, Math.round(cx + sideTapeOffset - 22))
     const gMeterX = airspeedX + 2
-    const vviX = airspeedX + 2
+    const leftInfoX = airspeedX + 2
     const lowerClusterY = Math.round(cy + THREE.MathUtils.clamp(H * 0.11, 74, 142))
     const radarW = Math.round(THREE.MathUtils.clamp(220 * uiScale, 185, 270))
     const radarH = Math.round(THREE.MathUtils.clamp(170 * uiScale, 145, 210))
@@ -200,8 +213,8 @@ export class HUD {
     // IAS tape — left (iasKts → convert to m/s for drawAirspeed which shows knots internally)
     drawAirspeed(ctx, airspeedX, cy, state.iasKts * 0.51444)
 
-    // Altimeter tape — right
-    drawAltimeter(ctx, altimeterX, cy, state.altitudeM)
+    // Altimeter tape — right (radar altitude when low, baro above the RA ceiling)
+    drawAltimeter(ctx, altimeterX, cy, state.altitudeM, getAGLM(state.positionNED))
 
     // G-meter — lower left
     drawGMeter(ctx, gMeterX, cy + 80 * uiScale, state.gCurrent, state.gMax, {
@@ -230,13 +243,13 @@ export class HUD {
       uiScale,
     )
 
-    // Mach — lower right
+    // Mach — beside the airspeed tape
     ctx.fillStyle = HUD_GREEN
-    ctx.fillText(`M ${state.mach.toFixed(2)}`, altimeterX + 2, cy + 80 * uiScale)
+    ctx.fillText(`M ${state.mach.toFixed(2)}`, leftInfoX, cy - 80 * uiScale)
 
-    // VVI
+    // VVI — beside the altimeter tape
     const vvi = Math.round(state.vviMps * 196.85)
-    ctx.fillText(`VVI ${vvi >= 0 ? '+' : ''}${vvi}`, vviX, cy - 80 * uiScale)
+    ctx.fillText(`VVI ${vvi >= 0 ? '+' : ''}${vvi}`, altimeterX + 2, cy + 80 * uiScale)
 
     // Flight path marker — screen-fixed from alpha/beta, matches the fixed ladder.
     const betaPx  = (state.betaDeg  / 60) * (W / 2)
@@ -306,11 +319,13 @@ export class HUD {
     const flapLabels = ['UP', 'TO', 'LDG']
     const flapSegW = [28, 24, 32]
     let flapX = stripCX - 52
+    // Amber when the selected position is past its placard speed and blowing back.
+    const flapBlownBack = state.flaps > 0 && state.iasKts > FLAP_PLACARD_KTS[state.flaps]
     for (let i = 0; i < 3; i++) {
       const active = state.flaps === i
       const segW = flapSegW[i]!
       if (active) {
-        ctx.fillStyle = i === 0 ? '#226644' : '#00ff44'
+        ctx.fillStyle = i === 0 ? '#226644' : flapBlownBack ? '#ffaa00' : '#00ff44'
         ctx.fillRect(flapX, stripY - gearH + 2, segW, gearH)
         ctx.fillStyle = i === 0 ? '#88bb88' : '#000'
       } else {
@@ -451,29 +466,32 @@ export class HUD {
     const tgtPos = target.state.positionNED
     const tgtVel = target.state.velocityNED
 
-    const relPos: [number, number, number] = [
-      tgtPos[0] - ownPos[0],
-      tgtPos[1] - ownPos[1],
-      tgtPos[2] - ownPos[2],
-    ]
-    const relVel: [number, number, number] = [
-      tgtVel[0] - ownVel[0],
-      tgtVel[1] - ownVel[1],
-      tgtVel[2] - ownVel[2],
-    ]
+    // Drag-aware lead solution: predicts the same trajectory the rounds fly
+    // (bullet slow-down + gravity), so tracking the pipper actually connects on a
+    // crossing target instead of falling aft.
+    const lead = solveGunLead({
+      ownPositionNED: ownPos,
+      ownVelocityNED: ownVel,
+      targetPositionNED: tgtPos,
+      targetVelocityNED: tgtVel,
+      muzzleVelocityMS: gunSpec.muzzleVelocityMS,
+      ballistics: gunSpec,
+    })
+    if (!lead) return
 
-    const interceptT = solveInterceptTime(relPos, relVel, gunSpec.muzzleVelocityMS)
-    if (!interceptT) return
-
-    const leadAimNED: [number, number, number] = [
-      tgtPos[0] + tgtVel[0] * interceptT,
-      tgtPos[1] + tgtVel[1] * interceptT,
-      tgtPos[2] + tgtVel[2] * interceptT - 0.5 * G0 * interceptT * interceptT,
-    ]
-    const leadScreen = this.projectNEDToScreen(camera, leadAimNED, W, H)
+    const leadScreen = this.projectNEDToScreen(camera, lead.aimPointNED, W, H)
     if (!leadScreen) return
 
-    const rangeM = Math.hypot(relPos[0], relPos[1], relPos[2])
+    const rangeM = lead.slantRangeM
+    const tofSec = lead.timeOfFlightSec
+    const speedFrac = lead.impactSpeedMS / Math.max(1, gunSpec.muzzleVelocityMS)
+    // Three range tiers drive colour + animation:
+    //   FAR — out of a practical gun WEZ (amber, static)
+    //   IN  — inside the gun WEZ, a tracking shot will connect (green, soft pulse)
+    //   PK  — close, flat, fast: high probability of kill (green, hard pulse + SHOOT)
+    const inEffectiveRange = rangeM <= gunSpec.maxRangeM && tofSec <= 1.6 && speedFrac >= 0.45
+    const inHighPk = rangeM <= gunSpec.maxRangeM * 0.4 && tofSec <= 0.95 && speedFrac >= 0.6
+    const tier: 'FAR' | 'IN' | 'PK' = inHighPk ? 'PK' : inEffectiveRange ? 'IN' : 'FAR'
     const wingspanM = Math.max(4, target.spec.mass.wingspanM)
     const horizontalFovRad = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * camera.aspect)
     const pxPerRad = W / horizontalFovRad
@@ -485,7 +503,10 @@ export class HUD {
       : 1 / 60
     this.gunFunnelState.lastTsMs = nowMs
 
-    const pipperTrackAlpha = this.computeSmoothingAlpha(dtSec, 0.11)
+    // Lighter smoothing up close where the geometry changes fastest, heavier at
+    // long range where the solution is noisier and less urgent.
+    const pipperTimeConstant = THREE.MathUtils.clamp(0.05 + tofSec * 0.05, 0.05, 0.12)
+    const pipperTrackAlpha = this.computeSmoothingAlpha(dtSec, pipperTimeConstant)
     const rangeTrackAlpha = this.computeSmoothingAlpha(dtSec, 0.18)
 
     if (!this.gunFunnelState.initialized) {
@@ -493,96 +514,174 @@ export class HUD {
       this.gunFunnelState.y = leadScreen.y
       this.gunFunnelState.fitY = leadScreen.y
       this.gunFunnelState.rangeM = rangeM
+      this.gunFunnelState.tofSec = tofSec
       this.gunFunnelState.initialized = true
     } else {
       this.gunFunnelState.x = THREE.MathUtils.lerp(this.gunFunnelState.x, leadScreen.x, pipperTrackAlpha)
       this.gunFunnelState.y = THREE.MathUtils.lerp(this.gunFunnelState.y, leadScreen.y, pipperTrackAlpha)
       this.gunFunnelState.rangeM = THREE.MathUtils.lerp(this.gunFunnelState.rangeM, rangeM, rangeTrackAlpha)
+      this.gunFunnelState.tofSec = THREE.MathUtils.lerp(this.gunFunnelState.tofSec, tofSec, rangeTrackAlpha)
     }
 
-    const funnelTopY = this.gunFunnelState.y - 12
+    // ── Animation timers ────────────────────────────────────────────────────
+    const tierRank = { FAR: 0, IN: 1, PK: 2 }
+    if (
+      this.gunFunnelState.prevTier !== null &&
+      tierRank[tier] > tierRank[this.gunFunnelState.prevTier]
+    ) {
+      this.gunFunnelState.enterFlashSec = GUN_FUNNEL_ENTER_FLASH_SEC
+    }
+    this.gunFunnelState.prevTier = tier
+    this.gunFunnelState.enterFlashSec = Math.max(0, this.gunFunnelState.enterFlashSec - dtSec)
+    const pulseHz = tier === 'PK' ? 2.8 : 1.3
+    this.gunFunnelState.pulsePhase = (this.gunFunnelState.pulsePhase + dtSec * pulseHz) % 1
+    const pulse = 0.5 - 0.5 * Math.cos(this.gunFunnelState.pulsePhase * Math.PI * 2) // 0→1→0
+    const enterFlash = this.gunFunnelState.enterFlashSec / GUN_FUNNEL_ENTER_FLASH_SEC // 1→0
+
+    const baseColor = tier === 'FAR' ? HUD_AMBER : HUD_GREEN
+    const fx = this.gunFunnelState.x
+    const fy = this.gunFunnelState.y
+
+    const funnelTopY = fy - 12
     const funnelHeightPx = THREE.MathUtils.clamp(H * 0.2, 95, 165)
     const railSteps = 18
-    const leftRail: Array<{x: number; y: number}> = []
-    const rightRail: Array<{x: number; y: number}> = []
+    const leftRail: Array<{ x: number; y: number }> = []
+    const rightRail: Array<{ x: number; y: number }> = []
     for (let i = 0; i < railSteps; i++) {
       const t = i / (railSteps - 1)
-      // Far range at top, near range at bottom for a realistic funnel profile.
       const sampleRangeM = THREE.MathUtils.lerp(farRangeM, nearRangeM, t)
-      const angularHalfSpanRad = Math.atan2(wingspanM * 0.5, sampleRangeM)
-      const halfWidthPx = THREE.MathUtils.clamp(angularHalfSpanRad * pxPerRad, 9, W * 0.34)
+      const halfWidthPx = THREE.MathUtils.clamp(Math.atan2(wingspanM * 0.5, sampleRangeM) * pxPerRad, 9, W * 0.34)
       const y = funnelTopY + t * funnelHeightPx
-      leftRail.push({ x: this.gunFunnelState.x - halfWidthPx, y })
-      rightRail.push({ x: this.gunFunnelState.x + halfWidthPx, y })
+      leftRail.push({ x: fx - halfWidthPx, y })
+      rightRail.push({ x: fx + halfWidthPx, y })
     }
 
     ctx.save()
-    ctx.strokeStyle = rangeM <= gunSpec.maxRangeM ? '#00ff44' : '#ffb000'
-    ctx.lineWidth = 2
+    ctx.lineJoin = 'round'
+    ctx.lineCap = 'round'
+    ctx.textAlign = 'left'
 
-    // Draw realistic stadiametric funnel rails (fit target wings between rails).
-    ctx.beginPath()
-    for (let i = 0; i < leftRail.length; i++) {
-      const p = leftRail[i]!
-      if (i === 0) ctx.moveTo(p.x, p.y)
-      else ctx.lineTo(p.x, p.y)
-    }
-    for (let i = 0; i < rightRail.length; i++) {
-      const p = rightRail[i]!
-      if (i === 0) ctx.moveTo(p.x, p.y)
-      else ctx.lineTo(p.x, p.y)
-    }
-    ctx.stroke()
-
-    // Range reference gates (distance where target wingspan should match rail spacing).
-    const gateRangesM = [1200, 900, 600, 400]
-    ctx.lineWidth = 1.5
-    for (const gateRangeM of gateRangesM) {
-      const gateT = THREE.MathUtils.clamp((farRangeM - gateRangeM) / Math.max(1, farRangeM - nearRangeM), 0, 1)
-      const gateY = funnelTopY + gateT * funnelHeightPx
-      const angularHalfSpanRad = Math.atan2(wingspanM * 0.5, Math.max(nearRangeM, gateRangeM))
-      const gateHalfWidthPx = THREE.MathUtils.clamp(angularHalfSpanRad * pxPerRad, 9, W * 0.34)
-      const innerGap = 9
+    const tracePath = (pts: Array<{ x: number; y: number }>) => {
       ctx.beginPath()
-      ctx.moveTo(this.gunFunnelState.x - gateHalfWidthPx, gateY)
-      ctx.lineTo(this.gunFunnelState.x - innerGap, gateY)
-      ctx.moveTo(this.gunFunnelState.x + innerGap, gateY)
-      ctx.lineTo(this.gunFunnelState.x + gateHalfWidthPx, gateY)
+      pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)))
       ctx.stroke()
     }
 
-    // Show the current target-size fit band on the funnel.
+    // Faint fill so the funnel shape reads at a glance against the world.
+    ctx.beginPath()
+    leftRail.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)))
+    for (let i = rightRail.length - 1; i >= 0; i--) ctx.lineTo(rightRail[i]!.x, rightRail[i]!.y)
+    ctx.closePath()
+    ctx.fillStyle = baseColor
+    ctx.globalAlpha = tier === 'FAR' ? 0.04 : 0.07 + 0.03 * pulse
+    ctx.fill()
+
+    // Reference rails — quiet backdrop.
+    ctx.globalAlpha = tier === 'FAR' ? 0.5 : 0.4
+    ctx.strokeStyle = baseColor
+    ctx.lineWidth = 1.5
+    tracePath(leftRail)
+    tracePath(rightRail)
+
+    // Range reference gates.
+    for (const gateRangeM of [1200, 900, 600, 400]) {
+      const gateT = THREE.MathUtils.clamp((farRangeM - gateRangeM) / Math.max(1, farRangeM - nearRangeM), 0, 1)
+      const gateY = funnelTopY + gateT * funnelHeightPx
+      const gateHalfWidthPx = THREE.MathUtils.clamp(Math.atan2(wingspanM * 0.5, Math.max(nearRangeM, gateRangeM)) * pxPerRad, 9, W * 0.34)
+      ctx.beginPath()
+      ctx.moveTo(fx - gateHalfWidthPx, gateY)
+      ctx.lineTo(fx - 9, gateY)
+      ctx.moveTo(fx + 9, gateY)
+      ctx.lineTo(fx + gateHalfWidthPx, gateY)
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+
+    // ── Sliding range caret: the stadiametric "fit" line + where-am-I marker ──
     const rangeT = THREE.MathUtils.clamp((farRangeM - this.gunFunnelState.rangeM) / Math.max(1, farRangeM - nearRangeM), 0, 1)
     const desiredFitY = funnelTopY + rangeT * funnelHeightPx
     this.gunFunnelState.fitY = THREE.MathUtils.lerp(this.gunFunnelState.fitY, desiredFitY, rangeTrackAlpha)
-    const currentHalfSpanPx = THREE.MathUtils.clamp(Math.atan2(wingspanM * 0.5, Math.max(nearRangeM, this.gunFunnelState.rangeM)) * pxPerRad, 9, W * 0.34)
+    const fitY = this.gunFunnelState.fitY
+    const fitHalfPx = THREE.MathUtils.clamp(Math.atan2(wingspanM * 0.5, Math.max(nearRangeM, this.gunFunnelState.rangeM)) * pxPerRad, 9, W * 0.34)
+    ctx.strokeStyle = baseColor
+    ctx.fillStyle = baseColor
+    ctx.lineWidth = tier === 'PK' ? 3 : 2
+    ctx.globalAlpha = tier === 'FAR' ? 0.8 : 0.75 + 0.25 * pulse
     ctx.beginPath()
-    ctx.moveTo(this.gunFunnelState.x - currentHalfSpanPx, this.gunFunnelState.fitY)
-    ctx.lineTo(this.gunFunnelState.x + currentHalfSpanPx, this.gunFunnelState.fitY)
+    ctx.moveTo(fx - fitHalfPx, fitY)
+    ctx.lineTo(fx + fitHalfPx, fitY)
     ctx.stroke()
+    // Inward chevrons at each end of the caret.
+    const chev = tier === 'FAR' ? 5 : 6 + 2 * pulse
+    for (const dir of [-1, 1]) {
+      const ex = fx + dir * fitHalfPx
+      ctx.beginPath()
+      ctx.moveTo(ex + dir * chev, fitY - chev)
+      ctx.lineTo(ex, fitY)
+      ctx.lineTo(ex + dir * chev, fitY + chev)
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
 
-    // LCOS pipper at lead+drop compensated impact point (realistic small ring + center dot).
+    // ── Pipper: the aim point. Ring + cross ticks + state-coded centre. ──────
     const r = 9
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.arc(this.gunFunnelState.x, this.gunFunnelState.y, r, 0, Math.PI * 2)
-    ctx.moveTo(this.gunFunnelState.x - 15, this.gunFunnelState.y)
-    ctx.lineTo(this.gunFunnelState.x - 5, this.gunFunnelState.y)
-    ctx.moveTo(this.gunFunnelState.x + 5, this.gunFunnelState.y)
-    ctx.lineTo(this.gunFunnelState.x + 15, this.gunFunnelState.y)
-    ctx.moveTo(this.gunFunnelState.x, this.gunFunnelState.y - 15)
-    ctx.lineTo(this.gunFunnelState.x, this.gunFunnelState.y - 5)
-    ctx.moveTo(this.gunFunnelState.x, this.gunFunnelState.y + 5)
-    ctx.lineTo(this.gunFunnelState.x, this.gunFunnelState.y + 15)
-    ctx.stroke()
-    ctx.beginPath()
-    ctx.arc(this.gunFunnelState.x, this.gunFunnelState.y, 2.2, 0, Math.PI * 2)
-    ctx.fillStyle = ctx.strokeStyle
-    ctx.fill()
+    ctx.strokeStyle = baseColor
+    ctx.fillStyle = baseColor
+    ctx.lineWidth = tier === 'PK' ? 3 : 2.2
 
-    ctx.font = '11px monospace'
-    ctx.fillStyle = ctx.strokeStyle
-    ctx.fillText(`${Math.round(this.gunFunnelState.rangeM)}m`, this.gunFunnelState.x + 13, this.gunFunnelState.y - 14)
+    // In-range pulse ring expanding out of the pipper.
+    if (tier !== 'FAR') {
+      ctx.save()
+      ctx.globalAlpha = 0.55 * (1 - this.gunFunnelState.pulsePhase)
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(fx, fy, r + 3 + this.gunFunnelState.pulsePhase * 12, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+    }
+    // "Just entered a firing zone" attention burst.
+    if (enterFlash > 0) {
+      ctx.save()
+      ctx.globalAlpha = enterFlash
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.arc(fx, fy, r + (1 - enterFlash) * 46, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    ctx.beginPath()
+    ctx.arc(fx, fy, r, 0, Math.PI * 2)
+    ctx.moveTo(fx - 15, fy); ctx.lineTo(fx - 5, fy)
+    ctx.moveTo(fx + 5, fy); ctx.lineTo(fx + 15, fy)
+    ctx.moveTo(fx, fy - 15); ctx.lineTo(fx, fy - 5)
+    ctx.moveTo(fx, fy + 5); ctx.lineTo(fx, fy + 15)
+    ctx.stroke()
+
+    ctx.beginPath()
+    ctx.arc(fx, fy, 2.4, 0, Math.PI * 2)
+    if (tier === 'FAR') ctx.stroke()
+    else ctx.fill()
+
+    // ── Labels: range, time-of-flight, and a firing cue. ────────────────────
+    ctx.font = 'bold 12px monospace'
+    ctx.fillStyle = baseColor
+    ctx.fillText(`${Math.round(this.gunFunnelState.rangeM)}`, fx + 15, fy - 13)
+    ctx.font = '10px monospace'
+    ctx.fillText(`T${this.gunFunnelState.tofSec.toFixed(1)}`, fx + 15, fy - 1)
+
+    const flashOn = (Math.floor(performance.now() / 125) & 1) === 0
+    if (tier === 'PK' && flashOn) {
+      ctx.font = 'bold 13px monospace'
+      ctx.fillStyle = HUD_GREEN
+      ctx.textAlign = 'center'
+      ctx.fillText('SHOOT', fx, fy + 26)
+    } else if (tier === 'IN') {
+      ctx.font = '10px monospace'
+      ctx.fillStyle = HUD_GREEN
+      ctx.textAlign = 'center'
+      ctx.fillText('IN RNG', fx, fy + 25)
+    }
     ctx.restore()
   }
 

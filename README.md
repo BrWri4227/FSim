@@ -130,6 +130,26 @@ Default keyboard bindings are defined in [`src/renderer/input/ControlMapping.ts`
 | **Wingmen** | 1 engage, 2 cover, 3 RTB, 4 rejoin |
 | **Targeting pod** | P toggle, O lock, K unlock |
 
+### Controllers
+
+Xbox and PlayStation gamepads are supported via the W3C standard gamepad mapping
+(no configuration — just connect and press a button). The map lives in
+[`DEFAULT_GAMEPAD_BINDINGS`](src/renderer/input/ControlMapping.ts).
+
+| Control | Action |
+|---------|--------|
+| Left stick | Roll / pitch |
+| Right stick | Yaw (X), throttle (push up / pull down) |
+| RT / LT | Fire gun / fire missile |
+| RB / LB | Cycle missile / countermeasures |
+| A / B / X / Y | Gear / speed brake / flaps / wheel brakes |
+| D-pad | Radar mode · select next · unlock · lock |
+| L3 / R3 | TGP power / TGP lock |
+| View / Menu | Camera toggle / pause |
+
+Wingman calls, TGP unlock, and eject stay on the keyboard. HOTAS sticks that
+don't report the standard mapping get best-effort stick + button handling.
+
 ## Scripts
 
 | Command | Description |

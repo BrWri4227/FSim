@@ -57,6 +57,20 @@ export const CONTROLS_REFERENCE: ControlGroup[] = [
       ['` (backtick)', 'Eject'],
     ],
   },
+  {
+    label: 'CONTROLLER (Xbox / PlayStation)',
+    bindings: [
+      ['Left stick', 'Roll / pitch'],
+      ['Right stick', 'Yaw (X) · throttle (push up / pull down)'],
+      ['RT / LT', 'Fire gun / fire missile'],
+      ['RB / LB', 'Cycle missile / countermeasures'],
+      ['A / B / X / Y', 'Gear / speed brake / flaps / wheel brakes'],
+      ['D-pad', 'Radar mode · select · unlock · lock'],
+      ['L3 / R3', 'TGP power / TGP lock'],
+      ['View / Menu', 'Camera toggle / pause'],
+      ['Mouse (right-drag)', 'Cockpit freelook'],
+    ],
+  },
 ]
 
 /** Build the controls-reference grid as a detached element. */

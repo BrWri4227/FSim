@@ -4,6 +4,7 @@ import type { EntityManager } from '../entities/EntityManager'
 import type { Aircraft } from '../entities/Aircraft'
 import type { AircraftState } from '../types/aircraft'
 import { mToFt } from '../utils/Units'
+import { getAGLM } from '../scene/Terrain'
 import { drawHeadingTape } from '../ui/HUDElements/HeadingTape'
 import { drawAttitudeIndicator } from '../ui/HUDElements/AttitudeIndicator'
 import { boresightAngles, HudProjection } from '../ui/HUDElements/angleProject'
@@ -84,10 +85,15 @@ export class GlassHUD {
     c.fillText(`M ${s.mach.toFixed(2)}`, 12, boxY + 30)
     c.fillText(`${s.gCurrent.toFixed(1)}G`, 12, boxY + 46)
 
-    const altFt = Math.round(mToFt(-s.positionNED[2]))
+    // Radar altitude (height above terrain, less ~5 ft gear height) while in
+    // range, else barometric.
+    const baroFt = Math.round(mToFt(-s.positionNED[2]))
+    const aglFt = mToFt(getAGLM(s.positionNED)) - 5
+    const radarFt = Math.max(0, Math.round(aglFt))
+    const onRadar = aglFt <= 5000 && getAGLM(s.positionNED) > -3
     c.strokeRect(HUD_W - 82, boxY - 12, 72, 22)
     c.textAlign = 'right'
-    c.fillText(`${altFt}`, HUD_W - 16, boxY + 4)
+    c.fillText(`${onRadar ? 'R' : 'B'}${onRadar ? radarFt : baroFt}`, HUD_W - 16, boxY + 4)
     const vsFpm = Math.round(s.vviMps * 196.85)
     c.fillText(`${vsFpm >= 0 ? '+' : ''}${vsFpm}`, HUD_W - 16, boxY + 30)
     c.textAlign = 'left'

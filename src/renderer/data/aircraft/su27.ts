@@ -73,6 +73,8 @@ export const SU27: AircraftSpec = {
   hardpoints: SU27_HARDPOINTS,
   maxAoADeg: 30, maxGPositive: 9.0, maxGNegative: -3.0,
   gunSpec: GSH301,
+  // GSh-301 in the starboard LERX root, right of the canopy.
+  gunMuzzleBodyM: [2.6, 1.3, -0.5],
   heatSignatureBaseKW: 70,
   rcsTableM2: [10.0, 16.0, 25.0, 18.0, 8.0, 18.0, 25.0, 16.0],
   pilotEyePointM: [4.2, 0, -1.5],

@@ -114,10 +114,11 @@ export class CockpitController {
 
     const state = player.state
 
-    // Animate the 3D stick + throttle from the pilot's smoothed control axes.
+    // Animate the 3D stick + throttle + rudder pedals from the pilot's smoothed
+    // control axes (yaw includes any auto-rudder / FCS contribution).
     if (this.detailedCockpit) {
       const axes = player.controlAxes
-      this.detailedCockpit.setControls(axes.pitch, axes.roll, state.throttle)
+      this.detailedCockpit.setControls(axes.pitch, axes.roll, state.throttle, axes.yaw)
     }
 
     this.glassHUD.update(player, entityManager)
