@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { AircraftSpec, AircraftState, ControlInputs } from '../types/aircraft'
 import type { LoadedStore } from '../types/weapons'
-import type { DamageState } from '../types/damage'
+import type { DamageState, DamageZone } from '../types/damage'
 import type { Radar } from '../avionics/Radar'
 import { defaultDamageState } from '../types/damage'
 import { stepRK4, computeDerivedState, computeActualThrustN, updateEngineDynamics, type EngineDynamicsState } from '../physics/FlightModel'
@@ -9,7 +9,7 @@ import { computeMassProperties, computeTotalMass, computeStoreDrag } from '../ph
 import { getTerrainHeightAtNED } from '../scene/Terrain'
 import { createPlaceholderAircraftMesh, buildDistantAircraftMesh, buildStoreMesh, createNozzlePoints, getThrusterScale, applyDamageTint, setGearAnimT, setFlapsVisible, getGroundClearance } from '../scene/PlaceholderMeshes'
 import { nedToThree, nedQuatToThree, makeStateVec, quatFromEulerZYX, clamp, MESH_BIAS_QUAT, RAD2DEG } from '../utils/MathUtils'
-import { computeFlightPenalties, overallDamage } from '../systems/DamageModel'
+import { applyHit, computeFlightPenalties, overallDamage } from '../systems/DamageModel'
 import { ThrusterEffect } from '../scene/ThrusterEffect'
 import { ContrailEffect } from '../scene/ContrailEffect'
 import { applyFCSLimits } from '../avionics/FCS'
@@ -27,6 +27,13 @@ export class Aircraft {
   state: AircraftState
   damage: DamageState
   radar: Radar | null = null
+
+  /**
+   * Fired on the *receiving* side of a hit, whoever inflicted it and whatever
+   * weapon did it. The session uses this on the player to drive the hit flash,
+   * the hit sound and (in multiplayer) kill attribution.
+   */
+  onHitTaken: ((zone: DamageZone, severity: number) => void) | null = null
 
   mesh: THREE.Group
   protected lodMesh: THREE.Group
@@ -293,6 +300,24 @@ export class Aircraft {
     this.shapedAxes.pitch = 0
     this.shapedAxes.roll = 0
     this.shapedAxes.yaw = 0
+  }
+
+  /**
+   * Single entry point for damage arriving from anywhere — guns, missiles,
+   * fragmentation, or a replicated multiplayer hit. Returns true if the hit
+   * destroyed the aircraft. Prefer this over calling `applyHit` directly so
+   * that `onHitTaken` observers see every hit.
+   *
+   * `notify` exists for the secondary fragmentation zones of a single missile
+   * detonation: they are one event to the pilot, so only the primary zone
+   * should raise feedback or four sounds stack on one impact.
+   */
+  applyIncomingHit(zone: DamageZone, severity: number, notify = true): boolean {
+    const destroyed = applyHit(this.damage, zone, severity, this.state.invincible)
+    // No feedback while invincible — applyHit was a no-op, so reporting a hit
+    // would tell the player about damage they did not take.
+    if (notify && !this.state.invincible) this.onHitTaken?.(zone, severity)
+    return destroyed
   }
 
   /**

@@ -5,8 +5,6 @@ import type { Aircraft } from '../entities/Aircraft'
 import type { DamageZone } from '../types/damage'
 import { updateGunRound } from './GunRound'
 import { v3add, v3scale, quatRotateVec, nedToThree, segmentPointDistance } from '../utils/MathUtils'
-import { applyHit } from '../systems/DamageModel'
-
 const HIT_RADIUS = 5  // meters for gun kill
 
 function makeMuzzleFlashTex(): THREE.Texture {
@@ -128,7 +126,7 @@ export class GunSystem {
           else if (dx > 3.0) zone = 'COCKPIT'                     // nose-on
           else if (dx < -3.0) zone = 'TAIL'
           const severity = 0.22
-          applyHit(enemy.damage, zone, severity, enemy.state.invincible)
+          enemy.applyIncomingHit(zone, severity)
           this.onTargetHit?.(enemy, zone, severity)
           // Stop after the first hit so a round can't damage two enemies standing
           // within HIT_RADIUS of each other.

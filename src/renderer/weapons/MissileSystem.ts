@@ -11,7 +11,6 @@ import { checkProximityFuse, computeLethality, hitZoneFromMissileApproach } from
 import { v3add, v3scale, v3norm, v3sub, v3dist, v3dot, nedToThree, v3len, quatRotateVec } from '../utils/MathUtils'
 import type { MissileSpec } from '../types/weapons'
 import { MISSILE_SPECS } from '../data/weapons/catalog'
-import { applyHit } from '../systems/DamageModel'
 import { ExplosionManager } from '../scene/ExplosionEffect'
 import { ThrusterEffect, RocketTrail } from '../scene/ThrusterEffect'
 import { computeAtmosphere } from '../physics/Atmosphere'
@@ -442,13 +441,14 @@ export class MissileSystem {
               // A dead-centre hit (lethality 1.0) is a kill; falloff is steep so a
               // near-miss stays a scratch rather than a guaranteed mission kill.
               const severity = lethality * lethality * 1.15
-              applyHit(target.damage, zone, severity, target.state.invincible)
+              target.applyIncomingHit(zone, severity)
               this.onTargetHit?.(target, zone, severity)
-              // Proximity blast: secondary fragments can hit adjacent zones
+              // Proximity blast: secondary fragments can hit adjacent zones.
+              // Silent — the primary zone above already reported the detonation.
               if (lethality > 0.7 && !target.state.invincible) {
                 const secondary: DamageZone[] = ['FUSELAGE', 'ENGINE', 'WING_LEFT', 'WING_RIGHT']
                 for (const sz of secondary) {
-                  if (sz !== zone) applyHit(target.damage, sz, lethality * 0.15)
+                  if (sz !== zone) target.applyIncomingHit(sz, lethality * 0.15, false)
                 }
               }
             }

@@ -13,7 +13,6 @@ import { MultiplayerClient } from './network/MultiplayerClient'
 import type { MultiplayerConfig } from './network/MultiplayerTypes'
 import type { AircraftSpec } from './types/aircraft'
 import type { LoadedStore } from './types/weapons'
-import { applyHit } from './systems/DamageModel'
 import { getAircraftById } from './data/aircraft/catalog'
 import type { FlightResult, MissionOutcome, ScenarioDescriptor } from './types/mission'
 import { MissionTracker } from './mission/MissionTracker'
@@ -180,6 +179,12 @@ export class FlightSession {
       this.hud.notifyDecoySuccess(type)
       this.sortieStats.onDecoySuccess()
     })
+    // Receiving side: the damage model already drove real flight consequences,
+    // the player just had no way to know they had been hit.
+    this.player.onHitTaken = (zone, severity) => {
+      this.hud.notifyHitTaken(zone, severity)
+      this.audioManager.play('HIT')
+    }
     this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
       this.sortieStats.onWeaponHit(weapon)
       if (!this.multiplayer || !this.localNetworkId) return
@@ -600,7 +605,7 @@ export class FlightSession {
     if (!this.localNetworkId) return
     for (const hit of this.multiplayer.consumeInboundHits()) {
       if (hit.targetId !== this.localNetworkId) continue
-      applyHit(this.player.damage, hit.zone, hit.severity, this.player.state.invincible)
+      this.player.applyIncomingHit(hit.zone, hit.severity)
     }
   }
 
