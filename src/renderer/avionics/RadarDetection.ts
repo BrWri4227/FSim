@@ -1,6 +1,6 @@
 import type { AircraftSpec, AircraftState } from '../types/aircraft'
 import type { RadarState } from '../types/radar'
-import { v3sub, v3norm, v3dot, DEG2RAD } from '../utils/MathUtils'
+import { v3sub } from '../utils/MathUtils'
 import { quatRotateVec, quatConjugate } from '../utils/MathUtils'
 
 // Blake radar range equation (simplified)

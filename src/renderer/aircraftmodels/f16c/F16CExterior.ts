@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { Materials, loft, prismXZ, box, cylinder, capsule, verticalFin, canopyWedge, wheel } from "../core/MeshTools";
+import { Materials, loft, prismXZ, box, cylinder, verticalFin, canopyWedge, wheel } from "../core/MeshTools";
 
 export interface F16CExteriorOptions { landingGearDown?: boolean; canopyOpen?: boolean; }
 

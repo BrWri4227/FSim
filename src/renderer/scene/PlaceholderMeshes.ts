@@ -483,7 +483,6 @@ function buildGeneric(_nation: 'USA' | 'RUS'): THREE.Group {
   addWing(g, wm, 1, 1.5, wingY, sideZ(fW, 0.10), 2.4, 1.0, 2.6, 0.8, 0.13)
   addWing(g, wm, -1, 1.5, wingY, sideZ(fW, 0.10), 2.4, 1.0, 2.6, 0.8, 0.13)
 
-  const stabZ = sideZ(fW, 3.2)
   addBox(g, wm, 0.9, 0.12, 3.2, -3.5, wingY + 0.20, 0)
   addBox(g, wm, 0.9, 1.4, 0.13, -3.5, fH / 2 + 0.70, 0)
 

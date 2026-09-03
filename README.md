@@ -6,7 +6,7 @@ Combat flight simulator pitting US and Russian fighters against each other. Fly 
 
 ## Features
 
-- **Aircraft roster** — F-22, F-35A, F-16C, F-15C, FA-18C, MiG-29, Su-57, Su-27, Su-35
+- **Aircraft roster** — F-22, F-35A, F-16C, F-15C, FA-18C, FA-18E, MiG-29, Su-57, Su-27, Su-35
 - **Combat systems** — guns, IR and radar-guided missiles, countermeasures (flares/chaff), RWR, targeting pod
 - **Avionics & HUD** — attitude indicator, radar scope, threat display, GPWS callouts
 - **AI & wingmen** — enemy AI, wingman radio commands (engage, cover, RTB, rejoin)
@@ -129,6 +129,32 @@ Default keyboard bindings are defined in [`src/renderer/input/ControlMapping.ts`
 | **Misc** | Tab camera, F12 debug overlay, ` eject |
 | **Wingmen** | 1 engage, 2 cover, 3 RTB, 4 rejoin |
 | **Targeting pod** | P toggle, O lock, K unlock |
+
+## Changelog
+
+### Combat Core Fixes (Stage 1-2 of `FRIENDS_RELEASE_AUDIT.md`)
+
+A release-readiness audit ([`FRIENDS_RELEASE_AUDIT.md`](FRIENDS_RELEASE_AUDIT.md)) identified a CI-blocking test failure plus several mechanical combat bugs. Stages 1-2 (the release blockers) have been implemented:
+
+**Build gate**
+- Added the missing `fa18e` sustained turn-rate reference band (`{ min: 12, max: 20 }` deg/s) to [`turnPerformance.ts`](src/renderer/data/aircraft/turnPerformance.ts) — the F/A-18E had been added to the aircraft roster without a corresponding regression band, so `TurnRateRegression.test.ts` failed and `npm run ci` never went green.
+- Cleared all 16 `no-unused-vars` lint warnings (dead imports, two dead computations, two intentionally-unused params renamed with a `_` prefix). No behavior changes.
+
+**Missile proximity fuse — was tunneling through targets**
+- `Warhead.checkProximityFuse` previously tested only the missile's end-of-tick distance against a 9-12 m fuse radius, with a "closest-approach" fallback that could never fire because the field it depended on (`prevMissDistanceM`) was only ever written on the branch where it was already too late to help. At realistic head-on closure speeds (~1200 m/s, ~20 m of relative travel per 1/60 s tick) this let missiles fly clean through a target.
+- Rewrote it as a swept closest-approach test: treats missile and target as moving in straight lines for the tick, solves for the time of minimum relative separation (clamped to `[0, dt]`), and detonates if that minimum distance is within the fuse gate. It now returns the true miss distance instead of forcing callers to re-derive it from end-of-tick positions.
+- `computeLethality` was changed to take that miss distance directly rather than two position vectors.
+
+**Missile lethality — a single hit could never kill**
+- Primary-hit severity was raised from `lethality * 0.65` to `lethality² * 1.15` (clamped to 1.0 by the existing damage-zone clamp), so a dead-centre hit now destroys the target in one shot instead of requiring two.
+
+**Gun rounds — tunneling through targets**
+- `GunSystem` tested only each round's post-integration position against a 5 m sphere; at ~21 m of travel per tick this missed roughly half of well-aimed shots. It now sweeps the segment between the round's pre- and post-tick positions against the target sphere (new `segmentPointDistance` helper in [`MathUtils.ts`](src/renderer/utils/MathUtils.ts)), and stops checking further enemies after the first hit so one round can no longer damage two aircraft standing close together.
+
+**Explosion visuals — lasted a fraction of a second instead of ~2.2 s**
+- The explosion particle pool is shared per-scene, but every `MissileSystem` and `BombSystem` instance (player, each AI aircraft, SAMs, debug spawns) was independently advancing it every tick — in a multi-bandit scenario the pool could be stepped 5-6× per tick, shrinking a 2.2 s explosion to well under half a second. Added an exported `stepExplosionPool(scene, dt)` in [`ExplosionEffect.ts`](src/renderer/scene/ExplosionEffect.ts) that is now called exactly once per tick from `FlightSession.tick()`, and removed the redundant per-system calls.
+
+**Tests**: extended `Warhead.test.ts` with a hand-verified high-closure fly-through case (both tick endpoints outside the fuse gate, true closest approach inside it) and added a `DamageModel.test.ts` case confirming a lethality-1.0 hit destroys. `npm run ci` passes with 169/169 tests.
 
 ## Scripts
 

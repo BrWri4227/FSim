@@ -8,6 +8,7 @@ const SUSTAINED_TURN_RATE_DEG_S: Record<string, { min: number; max: number }> = 
   f16c:  { min: 16, max: 26 },
   f15c:  { min: 14, max: 24 },
   fa18c: { min: 12, max: 21 },
+  fa18e: { min: 12, max: 20 },
   mig29: { min: 17, max: 27 },
   su57:  { min: 17, max: 28 },
   su27:  { min: 16, max: 26 },

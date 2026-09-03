@@ -1,5 +1,4 @@
 import type {
-  LoseCondition,
   MissionObjective,
   MissionOutcome,
   ScenarioDescriptor,
