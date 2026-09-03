@@ -22,10 +22,11 @@ import { FlareEffect } from './scene/FlareEffect'
 import { ChaffEffect } from './scene/ChaffEffect'
 import { setLODCamera } from './entities/Aircraft'
 import { warmupMissileVisuals } from './weapons/MissileSystem'
-import { warmupExplosionVisuals, stepExplosionPool } from './scene/ExplosionEffect'
+import { warmupExplosionVisuals, stepExplosionPool, setExplosionAudioHook } from './scene/ExplosionEffect'
 import { CockpitController } from './cockpit/CockpitController'
 import { PauseMenu } from './ui/PauseMenu'
 import { SortieStats } from './mission/SortieStats'
+import { saveSettings } from './persistence'
 import { getAGLM } from './scene/Terrain'
 import { applyWeatherPreset, type WeatherPreset } from './physics/WeatherPresets'
 import type { TimeOfDayPreset } from './scene/TimeOfDay'
@@ -141,8 +142,14 @@ export class FlightSession {
     this.cameraManager = new CameraManager(this.sceneManager.camera)
     this.inputManager = new InputManager({ invertPitch: options.invertPitch })
     this.audioManager = new AudioManager()
+    this.audioManager.setMasterVolume(options.masterVolume)
     // Attempt to load real sound files from public/sounds/. Falls back to synthesis silently.
     void this.audioManager.loadSounds('sounds/')
+
+    setExplosionAudioHook(worldPos => {
+      const cam = this.sceneManager.camera
+      this.audioManager.playExplosionAt(cam.position.distanceTo(worldPos))
+    })
 
     this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene, this.autoRudder, this.glocEnabled)
     const [bodyMat, finMat] = this.player.missiles.getWarmupMaterials()
@@ -254,7 +261,7 @@ export class FlightSession {
     this.paused = isSingle
     if (isSingle) this.audioManager.setPaused(true)
     this.pauseMenu = new PauseMenu(
-      { multiplayer: !isSingle },
+      { multiplayer: !isSingle, masterVolume: this.audioManager.getMasterVolume() },
       {
         onResume: () => this.resumeFromPause(),
         onRestart: () => {
@@ -264,6 +271,10 @@ export class FlightSession {
         onAbort: () => {
           this.resumeFromPause()
           if (!this.completionScheduled) this.missionAbortRequested = true
+        },
+        onVolumeChange: volume => {
+          this.audioManager.setMasterVolume(volume)
+          saveSettings({ masterVolume: volume })
         },
       }
     )
@@ -646,6 +657,8 @@ export class FlightSession {
     }
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('resize',  this.onResize)
+    // Module-level, so it must be released or it closes over a dead session.
+    setExplosionAudioHook(null)
     this.inputManager.dispose()
     this.entityManager.dispose()
     this.player.dispose()

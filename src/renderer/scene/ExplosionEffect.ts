@@ -16,6 +16,19 @@ interface ExplosionSlot {
 
 const explosionPools = new WeakMap<THREE.Scene, ExplosionSlot[]>()
 
+type ExplosionAudioHook = (worldPos: THREE.Vector3) => void
+let explosionAudioHook: ExplosionAudioHook | null = null
+
+/**
+ * Route detonation audio through a single hook. `ExplosionManager` has no
+ * `AudioManager` reference and there is one manager per weapon system, so the
+ * session sets this once and every detonation — player, AI, SAM or bomb — is
+ * heard through it. Pass `null` on teardown.
+ */
+export function setExplosionAudioHook(hook: ExplosionAudioHook | null): void {
+  explosionAudioHook = hook
+}
+
 function ensureExplosionPool(scene: THREE.Scene): ExplosionSlot[] {
   let pool = explosionPools.get(scene)
   if (pool) return pool
@@ -144,6 +157,8 @@ export class ExplosionManager {
     slot.active = true
     slot.particles.position.set(0, 0, 0)
     slot.particles.visible = true
+
+    explosionAudioHook?.(worldPos)
 
     // No PointLight — adding one per detonation recompiles every lit MeshStandardMaterial.
   }

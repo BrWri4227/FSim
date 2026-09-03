@@ -4,11 +4,14 @@ export interface PauseMenuCallbacks {
   onResume: () => void
   onRestart: () => void
   onAbort: () => void
+  /** 0..1. Applied live and persisted by the session. */
+  onVolumeChange: (volume: number) => void
 }
 
 export interface PauseMenuOptions {
   /** LAN session — the sim keeps running behind the overlay, so warn the pilot. */
   multiplayer: boolean
+  masterVolume: number
 }
 
 /**
@@ -62,6 +65,32 @@ export class PauseMenu {
     const ctrlBtn = mkBtn('CONTROLS', () => this.toggleControls())
     this.el.appendChild(ctrlBtn)
     this.el.appendChild(mkBtn('ABORT TO DEBRIEF', cb.onAbort))
+
+    // Mid-session volume control — otherwise the only way to turn the game down
+    // is to quit to the loadout screen or mute the whole app at the OS level.
+    const volRow = document.createElement('div')
+    volRow.style.cssText = 'display:flex;align-items:center;gap:10px;min-width:240px;margin-top:4px'
+    const volLbl = document.createElement('span')
+    volLbl.textContent = 'VOLUME'
+    volLbl.style.cssText = 'font-size:11px;color:#88bb88;letter-spacing:1px'
+    const volSlider = document.createElement('input')
+    volSlider.type = 'range'
+    volSlider.min = '0'
+    volSlider.max = '100'
+    volSlider.step = '1'
+    volSlider.value = String(Math.round(opts.masterVolume * 100))
+    volSlider.style.cssText = 'flex:1;accent-color:#00ff88'
+    const volReadout = document.createElement('span')
+    volReadout.textContent = `${Math.round(opts.masterVolume * 100)}%`
+    volReadout.style.cssText = 'font-size:11px;color:#00ff88;min-width:38px;text-align:right'
+    volSlider.oninput = () => {
+      volReadout.textContent = `${volSlider.value}%`
+      cb.onVolumeChange(Number(volSlider.value) / 100)
+    }
+    volRow.appendChild(volLbl)
+    volRow.appendChild(volSlider)
+    volRow.appendChild(volReadout)
+    this.el.appendChild(volRow)
 
     this.controlsPanel = document.createElement('div')
     this.controlsPanel.style.cssText =
