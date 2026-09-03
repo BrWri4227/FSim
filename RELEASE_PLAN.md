@@ -8,6 +8,97 @@ the uncommitted Stage 1–2 changes present on 2026-09-03** (see the preconditio
 
 ---
 
+## Status — 2026-09-03 (Stages 1–4 landed, Stage 5 not run)
+
+Implemented on `BW/Cursor-Opus-Implement-Sanity`. `npm run ci` exits 0 — **186/186 tests**, 0 lint
+warnings. The original plan's "all of it is uncommitted" note is stale: Stages 1–4 are committed
+as the log below. Stage 5 (packaged build, two-client rehearsal, audit §15 checklist) was **not**
+executed in this session.
+
+```
+664b3e9 S4-D/E: kill feed, scoreboard, and in-flight respawn
+e119812 S4-C: death events and server-authoritative scoring
+5609d60 S4-B: callsigns, so players can tell each other apart
+7247e3e S4-A: give multiplayer a scenario that makes sense
+8636964 S3-F: graphics quality, store visibility, RWR gating and copy fixes
+8e68904 S3-E: tell the player when they are being shot
+cc4a26e S3-D: give the player a volume control and combat some weight
+b79a355 S3-C: stop a connected gamepad from disabling keyboard flight
+f9b8de1 S3-B: fit the window on a 1080p screen and add F11 fullscreen
+c3a0d01 S3-A: settings foundation for the usability work
+75bfb84 Stage 2: make missiles and guns actually connect
+5ce3621 Stage 1: unbreak the CI gate
+```
+
+Work stayed on this branch rather than splitting `release/stage-3-usability` /
+`release/stage-4-multiplayer`.
+
+### How each item landed
+
+**Stage 1** — `fa18e` turn-rate band, README roster, lint clean-up. Unblocked `npm run ci`.
+
+**Stage 2** — Swept closest-approach fuse (`Warhead.checkProximityFuse` returns
+`{ detonate, missDistanceM }`), missile severity `lethality² × 1.15`, swept gun hits via
+`segmentPointDistance` with `break` after a hit, explosion pool stepped once from
+`FlightSession.tick`.
+
+**S3-A** — `PilotSettings` gained `invertPitch` / `callsign`; defaults `masterVolume: 0.8`,
+`glocEnabled: false`. `FlightOptions` carries volume, quality, invert-pitch. Loadout SETTINGS
+section (slider + graphics select) between ENVIRONMENT and FLIGHT OPTIONS.
+
+**S3-B** — Window 1600×900. F11 toggles fullscreen via `before-input-event` in `src/main/index.ts`
+(not a global shortcut).
+
+**S3-C** — `InputManager` takes `{ invertPitch }`. Keyboard axes always live; pad overlays per-axis
+when its deadzoned magnitude wins. RT/RB gun, A missile, B flares. Keyboard throttle always works.
+
+**S3-D** — `setMasterVolume` called on session start and from the pause slider. Speech uses
+`utt.volume`. `HIT` / `EXPLOSION` events with synth fallback. Explosions fire through
+`setExplosionAudioHook` from `ExplosionManager.spawn`.
+
+**S3-E** — `Aircraft.applyIncomingHit` is the single damage choke point (guns, missiles, frag, MP
+inbound). HUD red vignette + damage panel + `NO LOCK` caution with numeric priority so it cannot
+outrank `BREAK`.
+
+**S3-F** — Graphics quality drives bloom, shadows and pixel ratio. Fired stores hide when
+`remainingRounds === 0`. RWR range-gated. G-LOC default off and relabelled. Wingman keys / F11 /
+F12 copy. Free Flight briefing rewritten for a player.
+
+**S4-A** — New `DOGFIGHT` scenario with real lose conditions. `updateMissionEnd` ejected fallback
+is unconditional. Lobby locks time-of-day / weather. MP suppresses scenario AI.
+
+**S4-B** — `callsign` on `NetPlayerProfile`, sanitized (1–24 chars, no control characters).
+Loadout input, lobby list, HUD marker via `NetworkAircraft.displayName`.
+
+**S4-C** — `{ type: 'death' }` client/server messages. Server stamps victim id, keeps `kills` /
+`deaths` on `PeerRecord`, includes scores in `welcome`. Victim attributes killer from last inbound
+hit within 10 s.
+
+**S4-D** — Kill feed (4 lines, 6 s fade, below the FLIR's max extent) and hold-**N** scoreboard
+(Tab stays camera). Both timers are in the HUD `needsFlash` check. Inbound-missile markers now
+query `['player', localNetworkId]` so MP shots are visible.
+
+**S4-E** — MP death intercepts `scheduleMissionEnd` and shows `RespawnOverlay` (5 s, standings,
+Esc still opens pause). `PlayerAircraft.respawn()` resets damage / stores / G-LOC / FCS / STT and
+calls `MissileSystem.clear()` / `BombSystem.clear()` (not `dispose()`). Respawn scatters ±3 km at
+scenario altitude with a random heading. Respawn timer is cleared in `dispose()`. Single-player
+death still goes to debrief.
+
+### Stage 5 — still to do (no code, verification only)
+
+1. Two-client rehearsal against `npm run server` (callsigns, kill feed, respawn, scoreboard, late
+   join, Alt-F4).
+2. Bump version in **both** `package.json` and `src/preload/index.ts` (the on-screen badge is
+   hard-coded separately), then `npm run dist:win`.
+3. Fresh-install test: sounds under `app.asar.unpacked`, DevTools closed, firewall prompt, audit
+   §15 checklist.
+
+Still out of scope: the P2 IR seeker quaternion-as-direction bug at `IRSeeker.ts` (`forward =
+[attitudeQuat[0], attitudeQuat[1], attitudeQuat[2]]` — fix is `quatRotateVec(state.attitudeQuat,
+[1, 0, 0])`), server-authoritative damage, AI replication, teams, full keybind remapping.
+
+---
+
 ## Precondition — Stages 1 and 2 are already done ✅
 
 Verified in the working tree on 2026-09-03. `npm run ci` exits 0 — **169/169 tests, 18/18 files,
