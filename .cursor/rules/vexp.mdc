@@ -3,6 +3,11 @@ description: vexp code-graph orientation for this workspace
 alwaysApply: true
 ---
 
+---
+description: vexp code-graph orientation for this workspace
+alwaysApply: true
+---
+
 ## vexp rules for Cursor <!-- vexp v3.1.1 -->
 
 ### Context strategy: call run_pipeline ONCE at task start
