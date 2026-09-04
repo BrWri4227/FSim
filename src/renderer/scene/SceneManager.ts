@@ -5,6 +5,7 @@ import { Scenery } from './Scenery'
 import { WeatherVisuals } from './WeatherVisuals'
 import { getWeather } from '../physics/WeatherState'
 import { getTimeOfDayConfig, type TimeOfDayPreset } from './TimeOfDay'
+import { RENDER_QUALITY, type PostFXQuality } from '../postfx/PostFXManager'
 
 export class SceneManager {
   readonly scene: THREE.Scene
@@ -22,12 +23,17 @@ export class SceneManager {
   private timeOfDay: TimeOfDayPreset = 'DAY'
   private fogColor = 0x9fd0e6
 
-  constructor(canvas: HTMLCanvasElement, timeOfDay: TimeOfDayPreset = 'DAY') {
+  constructor(
+    canvas: HTMLCanvasElement,
+    timeOfDay: TimeOfDayPreset = 'DAY',
+    quality: PostFXQuality = 'HIGH',
+  ) {
     this.scene = new THREE.Scene()
+    const rq = RENDER_QUALITY[quality]
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: quality !== 'LOW',
       powerPreference: 'high-performance',
       // View distance is ~200 km but ground detail (runway markings, lights,
       // parked jets) sits centimetres above the terrain. A linear depth buffer
@@ -35,10 +41,10 @@ export class SceneManager {
       // a logarithmic buffer keeps precision usable across the whole frustum.
       logarithmicDepthBuffer: true,
     })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, rq.maxPixelRatio))
     this.renderer.setSize(window.innerWidth, window.innerHeight)
-    this.renderer.shadowMap.enabled = true
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    this.renderer.shadowMap.enabled = rq.shadows
+    this.renderer.shadowMap.type = rq.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.1
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -48,8 +54,8 @@ export class SceneManager {
     // Sun — tight shadow frustum centred on the player (updated each frame by updateSunFollow)
     const sun = new THREE.DirectionalLight(0xfff8e8, 3.0)
     sun.position.set(50000, 80000, -20000)
-    sun.castShadow = true
-    sun.shadow.mapSize.set(2048, 2048)
+    sun.castShadow = rq.shadows
+    sun.shadow.mapSize.set(rq.shadowMapSize, rq.shadowMapSize)
     sun.shadow.camera.near   = 1
     sun.shadow.camera.far    = 50000
     sun.shadow.camera.left   = -4000

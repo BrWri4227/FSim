@@ -17,22 +17,30 @@ export interface PilotSettings {
   lastScenarioId: string | null
   glocEnabled: boolean
   autoRudder: boolean
+  invertPitch: boolean
   masterVolume: number
   postFXQuality: PostFXQuality
   lastTimeOfDay: TimeOfDayPreset
   lastWeatherPreset: WeatherPreset
+  /** Shown to other players in LAN sessions. Empty falls back to the peer id. */
+  callsign: string
   loadoutByAircraft: LoadoutMap
 }
 
 export const DEFAULT_SETTINGS: PilotSettings = {
   lastAircraftId: null,
   lastScenarioId: null,
-  glocEnabled: true,
+  // Off by default: a newcomer who greys out in their first hard turn has no way
+  // to connect the blackout to the G they pulled. Opt in once they know the game.
+  glocEnabled: false,
   autoRudder: true,
-  masterVolume: 1.0,
+  invertPitch: false,
+  // Leaves headroom over the voice chat the group will be on.
+  masterVolume: 0.8,
   postFXQuality: 'HIGH',
   lastTimeOfDay: 'DAY',
   lastWeatherPreset: 'CLEAR',
+  callsign: '',
   loadoutByAircraft: {},
 }
 

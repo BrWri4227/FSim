@@ -10,12 +10,6 @@ export function computeHeatSignatureKW(
   seekerToTargetNED: Vec3
 ): number {
   const dir = v3norm(seekerToTargetNED)
-  // tail-on: seeker sees nozzle
-  const bodyForwardNED = [
-    2*state.attitudeQuat[0]*state.attitudeQuat[1],
-    state.attitudeQuat[0]**2 - state.attitudeQuat[1]**2,
-    0
-  ] as Vec3 // approximate
 
   // Aspect: dot of missile-to-target with target's forward
   const forward = [state.attitudeQuat[0], state.attitudeQuat[1], state.attitudeQuat[2]] as Vec3

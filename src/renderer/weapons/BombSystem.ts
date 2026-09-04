@@ -110,7 +110,8 @@ export class BombSystem {
   }
 
   update(dt: number, groundTargets: GroundTarget[]): void {
-    this.explosions.update(dt)
+    // Explosion particle pool is shared per-scene and stepped once per tick from
+    // FlightSession.tick() via stepExplosionPool — see the note in MissileSystem.update.
     for (let i = this.bombs.length - 1; i >= 0; i--) {
       const b = this.bombs[i]!
       if (!b.active) continue
@@ -206,9 +207,13 @@ export class BombSystem {
     return this.bombs
   }
 
-  dispose(): void {
+  clear(): void {
     for (const b of this.bombs) this.scene.remove(b.mesh)
     this.bombs.length = 0
+  }
+
+  dispose(): void {
+    this.clear()
     this.bombGeo.dispose()
     this.bombMat.dispose()
     this.explosions.dispose()

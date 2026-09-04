@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyHit, computeFlightPenalties } from './DamageModel'
 import { defaultDamageState } from '../types/damage'
+import type { DamageZone } from '../types/damage'
+import { Aircraft } from '../entities/Aircraft'
 
 describe('DamageModel.applyHit', () => {
   it('accumulates zone damage and clamps to 1', () => {
@@ -49,6 +51,15 @@ describe('DamageModel.applyHit', () => {
     applyHit(dmg, 'WING_LEFT', 1.0)
     expect(applyHit(dmg, 'WING_RIGHT', 1.0)).toBe(true)
   })
+
+  it('a dead-centre missile hit (lethality 1.0) destroys in one shot', () => {
+    // MissileSystem severity formula: lethality^2 * 1.15, clamped to 1.0 by applyHit.
+    const dmg = defaultDamageState()
+    const lethality = 1.0
+    const severity = lethality * lethality * 1.15
+    expect(applyHit(dmg, 'FUSELAGE', severity)).toBe(true)
+    expect(dmg.zones.FUSELAGE).toBe(1)
+  })
 })
 
 describe('DamageModel.computeFlightPenalties', () => {
@@ -86,5 +97,72 @@ describe('DamageModel.computeFlightPenalties', () => {
     const dmg = defaultDamageState()
     applyHit(dmg, 'ENGINE', 0.4)
     expect(computeFlightPenalties(dmg).fuelLeakMultiplier).toBeGreaterThan(1)
+  })
+})
+
+/**
+ * `applyIncomingHit` is exercised against a minimal target rather than a real
+ * `Aircraft`. The constructor builds canvas-backed thruster textures and so
+ * needs a DOM, and the method itself touches only `damage`, `state.invincible`
+ * and `onHitTaken` — the call below runs the real implementation.
+ */
+type HitTarget = Pick<Aircraft, 'damage' | 'onHitTaken'> & { state: { invincible: boolean } }
+
+function mkTarget(invincible = false): HitTarget {
+  return { damage: defaultDamageState(), state: { invincible }, onHitTaken: null }
+}
+
+function applyIncomingHit(t: HitTarget, zone: DamageZone, severity: number, notify?: boolean): boolean {
+  return Aircraft.prototype.applyIncomingHit.call(
+    t as unknown as Aircraft,
+    zone,
+    severity,
+    notify ?? true,
+  )
+}
+
+describe('Aircraft.applyIncomingHit', () => {
+  it('applies the damage and reports it to the observer', () => {
+    const t = mkTarget()
+    const seen: Array<[DamageZone, number]> = []
+    t.onHitTaken = (zone, severity) => { seen.push([zone, severity]) }
+
+    expect(applyIncomingHit(t, 'WING_LEFT', 0.4)).toBe(false)
+    expect(t.damage.zones.WING_LEFT).toBeCloseTo(0.4)
+    expect(seen).toEqual([['WING_LEFT', 0.4]])
+  })
+
+  it('returns true when the hit destroys the aircraft', () => {
+    const t = mkTarget()
+    expect(applyIncomingHit(t, 'ENGINE', 1.0)).toBe(true)
+    expect(t.damage.structuralFailure).toBe(true)
+  })
+
+  it('reports nothing while invincible, and applies nothing either', () => {
+    const t = mkTarget(true)
+    let calls = 0
+    t.onHitTaken = () => { calls++ }
+
+    expect(applyIncomingHit(t, 'ENGINE', 1.0)).toBe(false)
+    expect(t.damage.zones.ENGINE).toBe(0)
+    expect(calls).toBe(0)
+  })
+
+  it('stays silent when notify is false but still applies the damage', () => {
+    // Secondary fragmentation zones of a single detonation are one event to the
+    // pilot, so only the primary zone raises feedback.
+    const t = mkTarget()
+    let calls = 0
+    t.onHitTaken = () => { calls++ }
+
+    applyIncomingHit(t, 'FUSELAGE', 0.3, false)
+    expect(t.damage.zones.FUSELAGE).toBeCloseTo(0.3)
+    expect(calls).toBe(0)
+  })
+
+  it('works with no observer attached', () => {
+    const t = mkTarget()
+    expect(() => applyIncomingHit(t, 'TAIL', 0.5)).not.toThrow()
+    expect(t.damage.zones.TAIL).toBeCloseTo(0.5)
   })
 })

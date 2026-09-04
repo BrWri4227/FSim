@@ -40,6 +40,14 @@ export class NetworkAircraft extends Aircraft {
     getActiveChaffClouds: (): ReadonlyArray<ChaffCloud> => this._netChaffClouds,
   }
 
+  /** Sanitized display name from the peer's profile; null falls back to the id. */
+  callsign: string | null = null
+
+  /** What to label this contact with on the HUD and in the kill feed. */
+  get displayName(): string {
+    return this.callsign ?? this.entityId
+  }
+
   constructor(spec: AircraftSpec, scene: THREE.Scene, entityId: string) {
     super(spec, [], scene, entityId)
     this.state.invincible = true

@@ -9,6 +9,8 @@ import { renderControlsReference } from '../input/controlsReference'
 import { loadSettings, saveSettings, loadoutFor, saveLoadoutFor } from '../persistence'
 import { TIME_OF_DAY, TIME_OF_DAY_PRESETS, type TimeOfDayPreset } from '../scene/TimeOfDay'
 import { WEATHER_PRESETS, WEATHER_PRESET_LABELS, type WeatherPreset } from '../physics/WeatherPresets'
+import { POSTFX_QUALITIES, POSTFX_QUALITY_LABELS, type PostFXQuality } from '../postfx/PostFXManager'
+import { MAX_CALLSIGN_LENGTH, sanitizeCallsign } from '../../shared/network/validation'
 
 import type { LobbyRestoreBundle, FlightOptions } from '../FlightSession'
 import type { ScenarioDescriptor } from '../types/mission'
@@ -36,8 +38,12 @@ export class LoadoutScreen {
   private onLaunch: LaunchCallback
   private glocEnabled = true
   private autoRudder = true
+  private invertPitch = false
   private timeOfDay: TimeOfDayPreset = 'DAY'
   private weatherPreset: WeatherPreset = 'CLEAR'
+  private masterVolume = 0.8
+  private postFXQuality: PostFXQuality = 'HIGH'
+  private callsign = ''
   private multiplayerMode: MultiplayerConfig['mode'] = 'single'
   private joinHost = '127.0.0.1'
   private hostLanIp = '127.0.0.1'
@@ -85,6 +91,10 @@ export class LoadoutScreen {
     const saved = loadSettings()
     this.glocEnabled = saved.glocEnabled
     this.autoRudder = saved.autoRudder
+    this.invertPitch = saved.invertPitch
+    this.masterVolume = saved.masterVolume
+    this.postFXQuality = saved.postFXQuality
+    this.callsign = saved.callsign
     const savedSpec = saved.lastAircraftId ? getAircraftById(saved.lastAircraftId) : null
     if (savedSpec) this.selectedSpec = savedSpec
     this.timeOfDay = this.scenario.timeOfDay ?? saved.lastTimeOfDay
@@ -183,6 +193,21 @@ export class LoadoutScreen {
       `<div style="font-size:14px;color:#00ff88;margin-top:4px">${this.scenario.name}</div>`
     this.contentEl.appendChild(missionBanner)
 
+    // Scenario objectives are scored against locally-spawned AI, which is not
+    // replicated and is suppressed outright in a LAN session. Anything other
+    // than Dogfight therefore has no bandits and no reachable win condition.
+    if (this.lobbyConnected && this.scenario.id !== 'dogfight') {
+      const warn = document.createElement('div')
+      warn.style.cssText =
+        'border:1px solid #aa7722;background:#1a1206;padding:10px 12px;width:100%;' +
+        'box-sizing:border-box;text-align:center;font-size:11px;color:#ffaa44'
+      warn.textContent =
+        `"${this.scenario.name}" is a single-player mission. In a LAN session no AI is ` +
+        'spawned, so there will be nothing to fight but the other pilots and no objectives ' +
+        'to complete. Go back and pick Dogfight (Multiplayer).'
+      this.contentEl.appendChild(warn)
+    }
+
     if (this.onBack) {
       const backBtn = document.createElement('button')
       backBtn.textContent = '← CHANGE MISSION'
@@ -263,11 +288,13 @@ export class LoadoutScreen {
     envSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">ENVIRONMENT</div>'
 
     const mkSelectRow = (
+      parent: HTMLElement,
       label: string,
       values: readonly string[],
       labelFor: (v: string) => string,
       current: string,
       onChange: (v: string) => void,
+      disabled = false,
     ): void => {
       const row = document.createElement('div')
       row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
@@ -283,25 +310,125 @@ export class LoadoutScreen {
         sel.appendChild(opt)
       }
       sel.value = current
+      sel.disabled = disabled
+      if (disabled) sel.style.opacity = '0.5'
       sel.onchange = () => onChange(sel.value)
       row.appendChild(lbl)
       row.appendChild(sel)
-      envSection.appendChild(row)
+      parent.appendChild(row)
     }
 
+    const mkSliderRow = (
+      parent: HTMLElement,
+      label: string,
+      current: number,
+      onChange: (v: number) => void,
+    ): void => {
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
+      const lbl = document.createElement('span')
+      lbl.textContent = label
+      lbl.style.cssText = 'font-size:11px;color:#88bb88;min-width:96px'
+      const slider = document.createElement('input')
+      slider.type = 'range'
+      slider.min = '0'
+      slider.max = '100'
+      slider.step = '1'
+      slider.value = String(Math.round(current * 100))
+      slider.style.cssText = 'flex:1;min-width:0;max-width:210px;accent-color:#00ff88'
+      const readout = document.createElement('span')
+      readout.textContent = `${Math.round(current * 100)}%`
+      readout.style.cssText = 'font-size:11px;color:#00ff88;min-width:38px;text-align:right'
+      slider.oninput = () => {
+        const v = Number(slider.value) / 100
+        readout.textContent = `${slider.value}%`
+        onChange(v)
+      }
+      row.appendChild(lbl)
+      row.appendChild(slider)
+      row.appendChild(readout)
+      parent.appendChild(row)
+    }
+
+    // Time of day and weather are per-client: they change the lighting the
+    // scene is built with and the air the flight model integrates, and neither
+    // is replicated. Two players on different settings would be flying in
+    // measurably different air, so lock them to the scenario in a lobby.
+    const envLocked = this.lobbyConnected
+    if (envLocked) {
+      // Reset to the scenario's canonical conditions rather than this client's
+      // last-used setting — otherwise locking the selects still leaves two
+      // players starting in different weather.
+      this.timeOfDay = this.scenario.timeOfDay ?? 'DAY'
+      this.weatherPreset = this.scenario.weather ?? 'CLEAR'
+    }
     mkSelectRow(
+      envSection,
       'Time of day', TIME_OF_DAY_PRESETS,
       v => TIME_OF_DAY[v as TimeOfDayPreset].label,
       this.timeOfDay,
       v => { this.timeOfDay = v as TimeOfDayPreset },
+      envLocked,
     )
     mkSelectRow(
+      envSection,
       'Weather', WEATHER_PRESETS,
       v => WEATHER_PRESET_LABELS[v as WeatherPreset],
       this.weatherPreset,
       v => { this.weatherPreset = v as WeatherPreset },
+      envLocked,
     )
+    if (envLocked) {
+      const envNote = document.createElement('div')
+      envNote.textContent = 'Locked in multiplayer — all pilots fly the same conditions.'
+      envNote.style.cssText = 'font-size:10px;color:#446644;margin-top:4px'
+      envSection.appendChild(envNote)
+    }
     this.contentEl.appendChild(envSection)
+
+    // ── Settings ────────────────────────────────────────────────────────────
+    const setSection = document.createElement('div')
+    setSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
+    setSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">SETTINGS</div>'
+
+    const csRow = document.createElement('div')
+    csRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
+    const csLbl = document.createElement('span')
+    csLbl.textContent = 'Callsign'
+    csLbl.style.cssText = 'font-size:11px;color:#88bb88;min-width:96px'
+    const csInput = document.createElement('input')
+    csInput.type = 'text'
+    csInput.maxLength = MAX_CALLSIGN_LENGTH
+    csInput.value = this.callsign
+    csInput.placeholder = 'shown to other pilots'
+    csInput.style.cssText =
+      'flex:1;min-width:0;max-width:260px;background:#0a150a;color:#00ff88;' +
+      'border:1px solid #226644;font:11px monospace;padding:3px 5px'
+    csInput.oninput = () => {
+      this.callsign = csInput.value
+    }
+    // Push on blur rather than per keystroke — profile-update goes to every
+    // peer and the server rate-limits inbound messages.
+    csInput.onchange = () => {
+      const clean = sanitizeCallsign(this.callsign)
+      this.callsign = clean
+      csInput.value = clean
+      saveSettings({ callsign: clean })
+      this.lobbyClient?.updateProfile({ callsign: clean })
+    }
+    csRow.appendChild(csLbl)
+    csRow.appendChild(csInput)
+    setSection.appendChild(csRow)
+
+    mkSliderRow(setSection, 'Master volume', this.masterVolume, v => { this.masterVolume = v })
+    mkSelectRow(
+      setSection,
+      'Graphics', POSTFX_QUALITIES,
+      v => POSTFX_QUALITY_LABELS[v as PostFXQuality],
+      this.postFXQuality,
+      v => { this.postFXQuality = v as PostFXQuality },
+    )
+    this.contentEl.appendChild(setSection)
 
     const optSection = document.createElement('div')
     optSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
@@ -315,10 +442,14 @@ export class LoadoutScreen {
     glocChk.style.cssText = 'cursor:pointer;accent-color:#00ff88'
     glocChk.onchange = () => { this.glocEnabled = glocChk.checked }
     const glocLbl = document.createElement('span')
-    glocLbl.textContent = 'G-LOC & AGSM Physiology'
+    glocLbl.textContent = 'G-LOC blackout'
     glocLbl.style.color = '#88bb88'
+    const glocHint = document.createElement('span')
+    glocHint.textContent = '— sustained high-G greys out your vision and can knock you out; off for new pilots'
+    glocHint.style.cssText = 'color:#446644;font-size:10px'
     glocRow.appendChild(glocChk)
     glocRow.appendChild(glocLbl)
+    glocRow.appendChild(glocHint)
     optSection.appendChild(glocRow)
 
     const rudderRow = document.createElement('label')
@@ -338,6 +469,24 @@ export class LoadoutScreen {
     rudderRow.appendChild(rudderLbl)
     rudderRow.appendChild(rudderHint)
     optSection.appendChild(rudderRow)
+
+    const invertRow = document.createElement('label')
+    invertRow.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;margin-top:6px'
+    const invertChk = document.createElement('input')
+    invertChk.type = 'checkbox'
+    invertChk.checked = this.invertPitch
+    invertChk.style.cssText = 'cursor:pointer;accent-color:#00ff88'
+    invertChk.onchange = () => { this.invertPitch = invertChk.checked }
+    const invertLbl = document.createElement('span')
+    invertLbl.textContent = 'Invert pitch'
+    invertLbl.style.color = '#88bb88'
+    const invertHint = document.createElement('span')
+    invertHint.textContent = '— default is sim-style: W pitches down, S pitches up'
+    invertHint.style.cssText = 'color:#446644;font-size:10px'
+    invertRow.appendChild(invertChk)
+    invertRow.appendChild(invertLbl)
+    invertRow.appendChild(invertHint)
+    optSection.appendChild(invertRow)
 
     this.contentEl.appendChild(optSection)
 
@@ -511,15 +660,22 @@ export class LoadoutScreen {
           lastScenarioId: this.scenario.id,
           glocEnabled: this.glocEnabled,
           autoRudder: this.autoRudder,
+          invertPitch: this.invertPitch,
           lastTimeOfDay: this.timeOfDay,
           lastWeatherPreset: this.weatherPreset,
+          masterVolume: this.masterVolume,
+          postFXQuality: this.postFXQuality,
+          callsign: this.callsign,
         })
 
         const options: FlightOptions = {
           glocEnabled: this.glocEnabled,
           autoRudder: this.autoRudder,
+          invertPitch: this.invertPitch,
           timeOfDay: this.timeOfDay,
           weather: this.weatherPreset,
+          masterVolume: this.masterVolume,
+          postFXQuality: this.postFXQuality,
         }
         this.onLaunch(this.selectedSpec, stores, multiplayer, handoffClient, options)
       } catch (err) {
@@ -553,7 +709,10 @@ export class LoadoutScreen {
         this.hostLanIp = hostInfo.hostIp
       }
       const connectHost = mode === 'host' ? '127.0.0.1' : this.joinHost
-      const client = new MultiplayerClient({ aircraftId: this.selectedSpec.id })
+      const client = new MultiplayerClient({
+        aircraftId: this.selectedSpec.id,
+        callsign: sanitizeCallsign(this.callsign),
+      })
       await client.connect({
         mode,
         host: connectHost,
@@ -600,12 +759,15 @@ export class LoadoutScreen {
     const rows: string[] = []
     const localSpec = getAircraftById(this.selectedSpec.id)
     const localName = localSpec?.displayName ?? this.selectedSpec.id.toUpperCase()
-    rows.push(`YOU - ${localName} - IN LOBBY`)
+    const localCallsign = sanitizeCallsign(this.callsign)
+    rows.push(`YOU${localCallsign ? ` (${localCallsign})` : ''} - ${localName} - IN LOBBY`)
     for (const peer of this.lobbyClient.getRemoteSnapshots()) {
       const spec = getAircraftById(peer.profile.aircraftId)
       const aircraftName = spec?.displayName ?? peer.profile.aircraftId.toUpperCase()
       const status = peer.state ? 'IN FLIGHT' : 'IN LOBBY'
-      rows.push(`${peer.playerId} - ${aircraftName} - ${status}`)
+      // Peer id is the fallback: a pilot who set no callsign is still listed.
+      const who = peer.profile.callsign ?? peer.playerId
+      rows.push(`${who} - ${aircraftName} - ${status}`)
     }
     return rows.length > 0 ? rows : ['(no players yet)']
   }

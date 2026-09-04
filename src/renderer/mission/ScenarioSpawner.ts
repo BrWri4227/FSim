@@ -111,15 +111,33 @@ function offsetToWorld(
   ]
 }
 
+export interface SpawnOptions {
+  /**
+   * Suppress AI aircraft and ground targets.
+   *
+   * AI is not replicated: each client runs its own copy from the same
+   * descriptor, diverging within seconds. Two players in the same lobby would
+   * be shooting at private ghosts and reporting kills nobody else saw, and
+   * mission objectives counted against those local spawns would complete at
+   * different times on each machine.
+   */
+  suppressAI?: boolean
+}
+
 /** Spawn all scenario entities relative to the player's current position/heading. */
 export function spawnScenario(
   scenario: ScenarioDescriptor,
   entityManager: EntityManager,
-  player: PlayerAircraft
+  player: PlayerAircraft,
+  options: SpawnOptions = {}
 ): SpawnCounts {
   const ps = player.state.positionNED
   const vel = player.state.velocityNED
   const basis = horizontalBasis(vel)
+
+  if (options.suppressAI) {
+    return { enemies: 0, groundTargets: 0 }
+  }
 
   for (const wingman of scenario.wingmen) {
     const spec =

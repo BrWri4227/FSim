@@ -7,7 +7,7 @@ export class HMS {
     locked: false, lockedEntityId: null, enabled: true
   }
 
-  update(ownState: AircraftState): void {
+  update(_ownState: AircraftState): void {
     // HMS cursor follows cockpit camera head-look direction
     // Actual update driven by CockpitCamera via head az/el
   }

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { Aircraft } from './Aircraft'
 import { PLAYER_EXTERNAL_LAYER } from '../camera/CameraLayers'
 import type { AircraftSpec, ControlInputs } from '../types/aircraft'
-import type { LoadedStore, MissileState, GunRoundState } from '../types/weapons'
+import type { LoadedStore, MissileState } from '../types/weapons'
 import { GunSystem } from '../weapons/GunSystem'
 import { MissileSystem } from '../weapons/MissileSystem'
 import { BombSystem, BOMB_SPECS } from '../weapons/BombSystem'
@@ -15,7 +15,7 @@ import { TargetingPod } from '../avionics/TargetingPod'
 import { GLOCModel } from '../physics/GLOCModel'
 import type { RWRState } from '../types/radar'
 import type { HMSState } from '../types/ir'
-import type { DamageZone } from '../types/damage'
+import { defaultDamageState, type DamageZone } from '../types/damage'
 import { getMissileSpec, getStoreDragPenalty } from '../data/weapons/catalog'
 import { quatRotateVec, clamp } from '../utils/MathUtils'
 
@@ -39,6 +39,12 @@ export class PlayerAircraft extends Aircraft {
 
   selectedWeaponIndex = 0
   autoRudderEnabled: boolean
+  /**
+   * Seconds remaining on the "launch refused" advisory. Set when the trigger is
+   * pulled but the weapon cannot be released, so the HUD can say why instead of
+   * the shot silently doing nothing.
+   */
+  weaponInhibitRemainSec = 0
   private ejectKeyPrev = false
   /** True when the player initiated ejection (survived bailout); false for forced eject. */
   voluntaryEject = false
@@ -159,6 +165,9 @@ export class PlayerAircraft extends Aircraft {
     this.ejectKeyPrev = controls.ejectRequested
 
     this.integrate(this.autoRudderEnabled ? this.applyAutoRudder(controls) : controls, dt)
+
+    if (this.weaponInhibitRemainSec > 0)
+      this.weaponInhibitRemainSec = Math.max(0, this.weaponInhibitRemainSec - dt)
 
     if (controls.fireGun) this.gun.fire(this.state, this.spec)
     this.gun.update(dt, enemies)
@@ -342,6 +351,9 @@ export class PlayerAircraft extends Aircraft {
       const sttTargetId = this.radar.getSttTargetId()
       if (store.weaponId === 'aim120b' && !sttTargetId) {
         // AIM-120 launch requires a valid radar lock for midcourse support.
+        // Silently swallowing the trigger reads as a broken game, so flag it
+        // for the HUD to explain why nothing came off the rail.
+        this.weaponInhibitRemainSec = 1.6
         return
       }
       targetId = sttTargetId ?? this.hms.state.lockedEntityId
@@ -496,6 +508,28 @@ export class PlayerAircraft extends Aircraft {
     this.state.gearCollapsed = false
     this.state.lastTouchdownSinkMS = null
     this.mesh.visible = true
+  }
+
+  /**
+   * Put the pilot back in a fresh jet in the current session. Single-player
+   * never calls this — death there still ends the sortie.
+   */
+  respawn(): void {
+    this.resetPosition()
+    this.damage = defaultDamageState()
+    this.reloadWeapons()
+    this.voluntaryEject = false
+    this.weaponInhibitRemainSec = 0
+    this.resetFlightControlShaping()
+    this.radar.unlockSTT()
+    this.missiles.clear()
+    this.bombs.clear()
+    this.selectedWeaponIndex = 0
+    this.state.onGround = false
+    this.state.gearDown = false
+    this.state.speedBrake = false
+    this.state.flaps = 0
+    this.state.invincible = false
   }
 
   getRWRState(): RWRState { return this.rwr.state }

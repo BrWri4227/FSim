@@ -16,6 +16,8 @@ export type AudioEvent =
   | 'PULL_UP'
   | 'PULL_UP_URGENT'
   | 'ENGINE_FLAMEOUT'
+  | 'HIT'
+  | 'EXPLOSION'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sound file map
@@ -71,9 +73,11 @@ const SOUND_FILES: Record<string, string> = {
   shoot:             'shoot.wav',
   pull_up:           'pull_up.wav',
   pull_up_urgent:    'pull_up_urgent.wav',
+  hit:               'hit.wav',
+  explosion:         'explosion.wav',
 }
 
-const OPTIONAL_SOUND_FILES = new Set(['pitbull', 'shoot', 'gun_20mm_tail', 'gun_30mm_tail'])
+const OPTIONAL_SOUND_FILES = new Set(['pitbull', 'shoot', 'hit', 'explosion', 'gun_20mm_tail', 'gun_30mm_tail'])
 const BINGO_FUEL_FRACTION = 0.20
 const LOW_FUEL_FRACTION = 0.10
 const CALLOUT_COOLDOWN_SEC = 10
@@ -138,6 +142,7 @@ export class AudioManager {
 
   // ── Master gain (global volume) ─────────────────────────────────────────
   private masterGain: GainNode
+  private masterVolumeValue = 1.0
 
   constructor() {
     this.ctx = new AudioContext()
@@ -457,7 +462,23 @@ export class AudioManager {
         if (!this.playOnce('engine_flameout', 0.8)) this.speak('Engine flameout')
         this.fadeEngineOut(0.5)
         break
+      case 'HIT':
+        if (!this.playOnce('hit', 0.9)) this.playTone(140, 0.18, 0.5)
+        break
+      case 'EXPLOSION':
+        if (!this.playOnce('explosion', 0.85)) this.playTone(70, 0.5, 0.6)
+        break
     }
+  }
+
+  /**
+   * Distance-attenuated detonation boom. Keeps a distant kill audible without
+   * letting a furball three km away drown out the cockpit.
+   */
+  playExplosionAt(distanceM: number): void {
+    const gain = clamp01(1 - distanceM / 4000)
+    if (gain <= 0.02) return
+    if (!this.playOnce('explosion', 0.85 * gain)) this.playTone(70, 0.5 * gain, 0.6)
   }
 
   // ── Engine ─────────────────────────────────────────────────────────────────
@@ -824,7 +845,14 @@ export class AudioManager {
   // ── Master volume ────────────────────────────────────────────────────────
 
   setMasterVolume(vol: number): void {
-    this.masterGain.gain.setTargetAtTime(Math.max(0, Math.min(1, vol)), this.ctx.currentTime, 0.05)
+    // Tracked separately because GainNode.gain.value is not a reliable read-back
+    // after setTargetAtTime, and speech synthesis needs the scalar directly.
+    this.masterVolumeValue = clamp01(vol)
+    this.masterGain.gain.setTargetAtTime(this.masterVolumeValue, this.ctx.currentTime, 0.05)
+  }
+
+  getMasterVolume(): number {
+    return this.masterVolumeValue
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -913,18 +941,24 @@ export class AudioManager {
     return this.buffers.get(key)?.duration ?? 0.45
   }
 
+  // Speech synthesis is not routed through masterGain and cannot be attenuated
+  // by it, so the volume has to be stamped onto each utterance instead.
   private speak(text: string): void {
+    if (this.masterVolumeValue <= 0) return
     const utt  = new SpeechSynthesisUtterance(text)
     utt.rate   = 1.2
     utt.pitch  = 0.9
+    utt.volume = this.masterVolumeValue
     speechSynthesis.speak(utt)
   }
 
   /** Public AWACS-style callout — slightly slower / lower pitch than the in-cockpit speak(). */
   speakUtterance(text: string, opts: { rate?: number; pitch?: number } = {}): void {
+    if (this.masterVolumeValue <= 0) return
     const utt  = new SpeechSynthesisUtterance(text)
     utt.rate   = opts.rate ?? 1.05
     utt.pitch  = opts.pitch ?? 1.05
+    utt.volume = this.masterVolumeValue
     speechSynthesis.speak(utt)
   }
 }

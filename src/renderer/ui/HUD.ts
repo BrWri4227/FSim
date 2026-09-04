@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { PlayerAircraft } from '../entities/PlayerAircraft'
 import type { EntityManager } from '../entities/EntityManager'
 import type { Aircraft } from '../entities/Aircraft'
+import { NetworkAircraft } from '../entities/NetworkAircraft'
 import { drawAttitudeIndicator } from './HUDElements/AttitudeIndicator'
 import { drawAirspeed }          from './HUDElements/Airspeed'
 import { drawAltimeter }         from './HUDElements/Altimeter'
@@ -13,6 +14,11 @@ import { drawThrottleBar }       from './HUDElements/ThrottleBar'
 import { drawFuelGauge }         from './HUDElements/FuelGauge'
 import { drawThreatDisplay, createRWRDisplayState, type RWRDisplayState } from './HUDElements/ThreatDisplay'
 import { drawLandingAids } from './HUDElements/LandingAids'
+import { drawDamagePanel } from './HUDElements/DamagePanel'
+import { drawKillFeed, KILL_FEED_LINE_SEC, KILL_FEED_MAX_LINES, type KillFeedEntry } from './HUDElements/KillFeed'
+import { drawScoreboard, type ScoreboardRow } from './HUDElements/Scoreboard'
+import { overallDamage } from '../systems/DamageModel'
+import type { DamageZone } from '../types/damage'
 import { FLAP_PLACARD_KTS } from '../physics/FlapModel'
 import { getAGLM } from '../scene/Terrain'
 import {
@@ -66,6 +72,15 @@ export class HUD {
   private decoyFlashType: 'FLARE' | 'CHAFF' | null = null
   private wmCmdFlashRemainSec = 0
   private lastWmCmdSeen: string | null = null
+  /** Remaining display time (sec) for the red edge vignette after taking a hit. */
+  private hitFlashRemainSec = 0
+  /** Severity of the hit driving the current flash, for vignette intensity. */
+  private hitFlashSeverity = 0
+  private killFeed: KillFeedEntry[] = []
+  private scoreboardRows: ScoreboardRow[] = []
+  private scoreboardHeld = false
+  /** Local peer id so inbound-missile markers resolve MP shots aimed at `peer_N`. */
+  private localNetworkId: string | null = null
   private lastRenderMs = 0
   private lastDrawMs = 0
   /** Minimum interval between full HUD repaints (~30 Hz). */
@@ -108,6 +123,14 @@ export class HUD {
     this.ctx = canvas.getContext('2d')!
     this.player = player
     this.entityManager = entityManager
+    window.addEventListener('keydown', this.onScoreboardKey)
+    window.addEventListener('keyup', this.onScoreboardKey)
+  }
+
+  private onScoreboardKey = (e: KeyboardEvent): void => {
+    if (e.code !== 'KeyN' || e.repeat) return
+    this.scoreboardHeld = e.type === 'keydown'
+    this.forceRedraw = true
   }
 
   /** Called by the missile system when a decoy (flare or chaff) successfully seduces a missile. */
@@ -117,10 +140,45 @@ export class HUD {
     this.forceRedraw = true
   }
 
+  setLocalNetworkId(id: string | null): void {
+    this.localNetworkId = id
+  }
+
+  setScoreboard(rows: ScoreboardRow[]): void {
+    this.scoreboardRows = rows
+  }
+
+  notifyKill(killer: string | null, victim: string, ownKill: boolean, ownDeath: boolean): void {
+    this.killFeed.unshift({
+      victim,
+      killer,
+      ownKill,
+      ownDeath,
+      remainSec: KILL_FEED_LINE_SEC,
+    })
+    if (this.killFeed.length > KILL_FEED_MAX_LINES) this.killFeed.length = KILL_FEED_MAX_LINES
+    this.forceRedraw = true
+  }
+
+  /** Called on the receiving side of a hit — see `Aircraft.onHitTaken`. */
+  notifyHitTaken(_zone: DamageZone, severity: number): void {
+    this.hitFlashRemainSec = 0.45
+    // Keep the worst severity if hits land inside one flash window, so a
+    // burst of cannon fire does not dim the flash from the missile that
+    // arrived with it.
+    this.hitFlashSeverity = Math.max(this.hitFlashSeverity, severity)
+    this.forceRedraw = true
+  }
+
   render(camera?: THREE.PerspectiveCamera, cameraMode: CameraMode = 'COCKPIT'): void {
     this.isExternal = cameraMode === 'EXTERNAL'
     const nowMs = performance.now()
-    const needsFlash = this.decoyFlashRemainSec > 0 || this.wmCmdFlashRemainSec > 0
+    const needsFlash =
+      this.decoyFlashRemainSec > 0 ||
+      this.wmCmdFlashRemainSec > 0 ||
+      this.hitFlashRemainSec > 0 ||
+      this.killFeed.length > 0 ||
+      this.scoreboardHeld
     if (
       !this.forceRedraw &&
       !needsFlash &&
@@ -144,6 +202,14 @@ export class HUD {
     this.lastRenderMs = nowMs
     if (this.decoyFlashRemainSec > 0) this.decoyFlashRemainSec = Math.max(0, this.decoyFlashRemainSec - dtSec)
     if (this.wmCmdFlashRemainSec > 0) this.wmCmdFlashRemainSec = Math.max(0, this.wmCmdFlashRemainSec - dtSec)
+    if (this.hitFlashRemainSec > 0) {
+      this.hitFlashRemainSec = Math.max(0, this.hitFlashRemainSec - dtSec)
+      if (this.hitFlashRemainSec === 0) this.hitFlashSeverity = 0
+    }
+    if (this.killFeed.length > 0) {
+      for (const entry of this.killFeed) entry.remainSec -= dtSec
+      this.killFeed = this.killFeed.filter(e => e.remainSec > 0)
+    }
 
     ctx.clearRect(0, 0, c.width, c.height)
     ctx.strokeStyle = '#00ff44'
@@ -275,8 +341,8 @@ export class HUD {
     this.drawLAR(ctx, larX, larY)
 
     // Targeting pod FLIR view — top-right corner overlay when active
+    const flirSize = Math.round(180 * uiScale)
     if (player.targetingPod.state.active) {
-      const flirSize = Math.round(180 * uiScale)
       const flirX = W - edgePadX - flirSize
       const flirY = headingBandH + edgePadY + 4
       // Draw into a temporary offscreen canvas to keep coordinate math local
@@ -424,6 +490,12 @@ export class HUD {
       }
     }
 
+    // ── Airframe damage readout (upper-left, clear of the wingman badge) ─────
+    if (overallDamage(player.damage) > 0.01 || player.damage.onFire || player.damage.engineFailed) {
+      const dmgY = edgePadY + headingBandH + (this.entityManager.getWingmen().length > 0 ? 46 : 26)
+      drawDamagePanel(ctx, edgePadX, dmgY, player.damage, uiScale)
+    }
+
     ctx.strokeStyle = '#00ff44'
     ctx.fillStyle   = '#00ff44'
     ctx.font        = '12px monospace'
@@ -449,6 +521,44 @@ export class HUD {
 
     // Landing aids — AoA indexer (gear down) + radar altitude (low)
     drawLandingAids(ctx, cx, cy, uiScale, state, getAGLM(state.positionNED))
+
+    // Kill feed sits below the FLIR's maximum extent so it is never covered
+    // when a player turns the targeting pod on.
+    drawKillFeed(
+      ctx,
+      W - edgePadX,
+      headingBandH + edgePadY + 4 + flirSize + Math.round(10 * uiScale),
+      this.killFeed,
+      uiScale,
+    )
+
+    if (this.scoreboardHeld) {
+      drawScoreboard(ctx, cx, edgePadY + headingBandH + Math.round(48 * uiScale), this.scoreboardRows, uiScale)
+    }
+
+    // Drawn last so nothing paints over it.
+    if (this.hitFlashRemainSec > 0) this.drawHitFlash(ctx, W, H)
+  }
+
+  /**
+   * Red edge vignette on taking damage. Around the border rather than over the
+   * centre so it cannot hide the target you are fighting, and short enough that
+   * a sustained gun burst reads as a stutter of impacts.
+   */
+  private drawHitFlash(ctx: CanvasRenderingContext2D, W: number, H: number): void {
+    const t = this.hitFlashRemainSec / 0.45
+    const peak = 0.20 + Math.min(0.35, this.hitFlashSeverity * 0.35)
+    const alpha = peak * t * t
+
+    const inset = Math.min(W, H) * 0.34
+    const grad = ctx.createRadialGradient(W / 2, H / 2, inset, W / 2, H / 2, Math.max(W, H) * 0.62)
+    grad.addColorStop(0, 'rgba(255,32,32,0)')
+    grad.addColorStop(1, `rgba(255,32,32,${alpha.toFixed(3)})`)
+
+    ctx.save()
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, W, H)
+    ctx.restore()
   }
 
   private drawGunFunnel(
@@ -747,21 +857,28 @@ export class HUD {
   ): void {
     const rwr = this.player.rwr.state
     const s = this.player.state
-    const cues: Array<{ text: string; warn: boolean; flash: boolean }> = []
+    // Explicit numeric priority rather than sorting on `warn`: several cues
+    // share a severity, and only one line is ever shown, so ties would resolve
+    // by push order and could hide a BREAK behind an advisory.
+    const cues: Array<{ text: string; warn: boolean; flash: boolean; priority: number }> = []
 
     const inboundMsl = rwr.threats.filter(t => t.type === 'MISSILE')
     if (inboundMsl.length > 0) {
       const closest = Math.min(...inboundMsl.map(t => t.distanceM ?? Infinity))
-      if (closest < 6000) cues.push({ text: 'BREAK', warn: true, flash: true })
-      else cues.push({ text: 'MISSILE', warn: true, flash: true })
+      if (closest < 6000) cues.push({ text: 'BREAK', warn: true, flash: true, priority: 100 })
+      else cues.push({ text: 'MISSILE', warn: true, flash: true, priority: 90 })
     }
-    if (fuelFrac < 0.1) cues.push({ text: 'FUEL EMERG', warn: true, flash: true })
-    else if (fuelFrac < 0.2) cues.push({ text: 'BINGO FUEL', warn: false, flash: true })
-    if (s.alphaDeg > 25) cues.push({ text: 'AOA', warn: false, flash: false })
-    if (s.gearDown && s.iasKts > 300) cues.push({ text: 'GEAR', warn: false, flash: false })
+    if (fuelFrac < 0.1) cues.push({ text: 'FUEL EMERG', warn: true, flash: true, priority: 80 })
+    else if (fuelFrac < 0.2) cues.push({ text: 'BINGO FUEL', warn: false, flash: true, priority: 40 })
+    // Above the airframe advisories because it explains a trigger pull that did
+    // nothing, but below anything that will kill the player in seconds.
+    if (this.player.weaponInhibitRemainSec > 0)
+      cues.push({ text: 'NO LOCK', warn: false, flash: false, priority: 50 })
+    if (s.alphaDeg > 25) cues.push({ text: 'AOA', warn: false, flash: false, priority: 30 })
+    if (s.gearDown && s.iasKts > 300) cues.push({ text: 'GEAR', warn: false, flash: false, priority: 20 })
 
     if (cues.length === 0) return
-    cues.sort((a, b) => Number(b.warn) - Number(a.warn))
+    cues.sort((a, b) => b.priority - a.priority)
     const top = cues[0]!
     const flashOn = (Math.floor(performance.now() / 250) & 1) === 0
     if (top.flash && !flashOn) return
@@ -1229,6 +1346,13 @@ export class HUD {
       ctx.stroke()
       ctx.fillStyle = '#ffd54d'
       ctx.fillText(`${(rangeM / 1000).toFixed(1)}km`, screen.x + r + 4, screen.y - r - 2)
+
+      // Label human opponents. Knowing who you are about to merge with is most
+      // of what makes a LAN dogfight fun, and AI contacts have no name worth
+      // showing, so this is deliberately only for remote players.
+      if (enemy instanceof NetworkAircraft) {
+        ctx.fillText(enemy.displayName, screen.x + r + 4, screen.y + r + 9)
+      }
     }
 
     // Missiles: own missiles and inbound-to-player missiles get distinct marker colors.
@@ -1246,7 +1370,8 @@ export class HUD {
       }
     }
 
-    const inbound = this.entityManager.getInboundMissiles(['player'])
+    const inboundIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
+    const inbound = this.entityManager.getInboundMissiles(inboundIds)
     for (const m of inbound) {
       const screen = this.projectNEDToScreen(camera, m.positionNED, W, H)
       if (!screen) continue
@@ -1337,5 +1462,8 @@ export class HUD {
     this.forceRedraw = true
   }
 
-  dispose(): void { /* canvas managed externally */ }
+  dispose(): void {
+    window.removeEventListener('keydown', this.onScoreboardKey)
+    window.removeEventListener('keyup', this.onScoreboardKey)
+  }
 }

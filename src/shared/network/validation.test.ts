@@ -13,6 +13,9 @@ import {
   isValidProfile,
   isValidRadarState,
   nedDistanceM,
+  MAX_CALLSIGN_LENGTH,
+  sanitizeCallsign,
+  sanitizeProfile,
 } from './validation'
 
 function makeState(pos: [number, number, number], overrides: Partial<NetPlayerState> = {}): NetPlayerState {
@@ -39,6 +42,58 @@ describe('network validation', () => {
     it('rejects empty or oversized aircraft id', () => {
       expect(isValidProfile({ aircraftId: '' })).toBe(false)
       expect(isValidProfile({ aircraftId: 'x'.repeat(65) })).toBe(false)
+    })
+
+    it('accepts a profile with or without a callsign', () => {
+      expect(isValidProfile({ aircraftId: 'f16c', callsign: 'Viper' })).toBe(true)
+      expect(isValidProfile({ aircraftId: 'f16c' })).toBe(true)
+    })
+
+    it('rejects a non-string or absurdly long callsign', () => {
+      expect(isValidProfile({ aircraftId: 'f16c', callsign: 42 })).toBe(false)
+      expect(isValidProfile({ aircraftId: 'f16c', callsign: 'x'.repeat(4000) })).toBe(false)
+    })
+  })
+
+  describe('sanitizeCallsign', () => {
+    it('keeps an ordinary callsign unchanged', () => {
+      expect(sanitizeCallsign('Viper 1-1')).toBe('Viper 1-1')
+    })
+
+    it('truncates to the maximum length', () => {
+      expect(sanitizeCallsign('x'.repeat(50))).toHaveLength(MAX_CALLSIGN_LENGTH)
+    })
+
+    it('strips control characters and collapses whitespace', () => {
+      expect(sanitizeCallsign('  Ghost\n\tRider  ')).toBe('Ghost Rider')
+      expect(sanitizeCallsign('Ma\u0000ve\u001brick')).toBe('Maverick')
+    })
+
+    it('strips bidirectional overrides and zero-width characters', () => {
+      // These render as text on every other client, where they can reorder or
+      // hide the surrounding display.
+      expect(sanitizeCallsign('abc\u202Edef')).toBe('abcdef')
+      expect(sanitizeCallsign('a\u200Bb')).toBe('ab')
+    })
+
+    it('returns empty for non-strings and for input with nothing usable', () => {
+      expect(sanitizeCallsign(undefined)).toBe('')
+      expect(sanitizeCallsign(123)).toBe('')
+      expect(sanitizeCallsign('   ')).toBe('')
+      expect(sanitizeCallsign('\u0000\u0001')).toBe('')
+    })
+  })
+
+  describe('sanitizeProfile', () => {
+    it('drops the callsign entirely when nothing usable remains', () => {
+      // Receivers fall back to the peer id on absent, so a blank name must not
+      // survive as an empty string that renders as nothing at all.
+      expect(sanitizeProfile({ aircraftId: 'f16c', callsign: '  ' })).toEqual({ aircraftId: 'f16c' })
+    })
+
+    it('keeps a sanitized callsign', () => {
+      expect(sanitizeProfile({ aircraftId: 'f16c', callsign: ' Viper ' }))
+        .toEqual({ aircraftId: 'f16c', callsign: 'Viper' })
     })
   })
 

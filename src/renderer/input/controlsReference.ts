@@ -48,10 +48,21 @@ export const CONTROLS_REFERENCE: ControlGroup[] = [
     ],
   },
   {
+    label: 'WINGMEN',
+    bindings: [
+      ['1', 'Engage — attack your target'],
+      ['2', 'Cover me'],
+      ['3', 'Return to base'],
+      ['4', 'Rejoin formation'],
+    ],
+  },
+  {
     label: 'MISC',
     bindings: [
       ['Tab', 'Toggle cockpit / external camera'],
+      ['N (hold)', 'Scoreboard'],
       ['F1 / F2', 'Cycle left / right MFD page'],
+      ['F11', 'Toggle fullscreen'],
       ['F12', 'Toggle debug overlay'],
       ['Esc', 'Pause menu'],
       ['` (backtick)', 'Eject'],

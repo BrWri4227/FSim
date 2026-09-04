@@ -1,4 +1,3 @@
-import * as THREE from 'three'
 import { SceneManager } from './scene/SceneManager'
 import { CameraManager } from './camera/CameraManager'
 import { PlayerAircraft } from './entities/PlayerAircraft'
@@ -8,13 +7,12 @@ import { HUD } from './ui/HUD'
 import { DebugOverlay } from './debug/DebugOverlay'
 import { DebugVisuals } from './debug/DebugVisuals'
 import { AudioManager } from './audio/AudioManager'
-import { PostFXManager } from './postfx/PostFXManager'
+import { PostFXManager, type PostFXQuality } from './postfx/PostFXManager'
 import { AWACS } from './avionics/AWACS'
 import { MultiplayerClient } from './network/MultiplayerClient'
 import type { MultiplayerConfig } from './network/MultiplayerTypes'
 import type { AircraftSpec } from './types/aircraft'
 import type { LoadedStore } from './types/weapons'
-import { applyHit } from './systems/DamageModel'
 import { getAircraftById } from './data/aircraft/catalog'
 import type { FlightResult, MissionOutcome, ScenarioDescriptor } from './types/mission'
 import { MissionTracker } from './mission/MissionTracker'
@@ -23,10 +21,13 @@ import { FlareEffect } from './scene/FlareEffect'
 import { ChaffEffect } from './scene/ChaffEffect'
 import { setLODCamera } from './entities/Aircraft'
 import { warmupMissileVisuals } from './weapons/MissileSystem'
-import { warmupExplosionVisuals } from './scene/ExplosionEffect'
+import { warmupExplosionVisuals, stepExplosionPool, setExplosionAudioHook } from './scene/ExplosionEffect'
 import { CockpitController } from './cockpit/CockpitController'
 import { PauseMenu } from './ui/PauseMenu'
+import { RespawnOverlay } from './ui/RespawnOverlay'
+import type { ScoreboardRow } from './ui/HUDElements/Scoreboard'
 import { SortieStats } from './mission/SortieStats'
+import { saveSettings } from './persistence'
 import { getAGLM } from './scene/Terrain'
 import { applyWeatherPreset, type WeatherPreset } from './physics/WeatherPresets'
 import type { TimeOfDayPreset } from './scene/TimeOfDay'
@@ -37,15 +38,21 @@ const FIXED_DT = 1 / 60
 export interface FlightOptions {
   glocEnabled: boolean
   autoRudder: boolean
+  invertPitch: boolean
   timeOfDay: TimeOfDayPreset
   weather: WeatherPreset
+  masterVolume: number
+  postFXQuality: PostFXQuality
 }
 
 export const DEFAULT_FLIGHT_OPTIONS: FlightOptions = {
-  glocEnabled: true,
+  glocEnabled: false,
   autoRudder: true,
+  invertPitch: false,
   timeOfDay: 'DAY',
   weather: 'CLEAR',
+  masterVolume: 0.8,
+  postFXQuality: 'HIGH',
 }
 
 /** LAN session client + connection settings for restoring the lobby after debrief. */
@@ -83,6 +90,10 @@ export class FlightSession {
   private disposed = false
   private completionScheduled = false
   private completionTimer: ReturnType<typeof setTimeout> | null = null
+  private respawning = false
+  private respawnTimer: ReturnType<typeof setTimeout> | null = null
+  private respawnOverlay: RespawnOverlay | null = null
+  private static readonly RESPAWN_DELAY_SEC = 5
   private frameDt = FIXED_DT
   private glocEnabled: boolean
   private autoRudder: boolean
@@ -102,6 +113,18 @@ export class FlightSession {
   private hasBeenAirborne = false
   private landedSafely = false
   private seenInboundMissileIds = new Set<string>()
+
+  // ── Kill attribution ───────────────────────────────────────────────────────
+  private lastDamageSourceId: string | null = null
+  private lastDamageAtMs = 0
+  /** Deaths this session, including multiplayer respawns, so debrief is honest. */
+  private sessionDeaths = 0
+  /**
+   * How long a hit stays "responsible" for a death. Long enough to cover a
+   * mortally damaged aircraft spiralling into the ground, short enough that a
+   * scratch taken minutes earlier does not steal the credit from terrain.
+   */
+  private static readonly KILL_CREDIT_WINDOW_MS = 10_000
 
   private onComplete: (result: FlightResult) => void
 
@@ -132,12 +155,18 @@ export class FlightSession {
     const threeCanvas = document.getElementById('three-canvas') as HTMLCanvasElement
     const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement
 
-    this.sceneManager = new SceneManager(threeCanvas, options.timeOfDay)
+    this.sceneManager = new SceneManager(threeCanvas, options.timeOfDay, options.postFXQuality)
     this.cameraManager = new CameraManager(this.sceneManager.camera)
-    this.inputManager = new InputManager()
+    this.inputManager = new InputManager({ invertPitch: options.invertPitch })
     this.audioManager = new AudioManager()
+    this.audioManager.setMasterVolume(options.masterVolume)
     // Attempt to load real sound files from public/sounds/. Falls back to synthesis silently.
     void this.audioManager.loadSounds('sounds/')
+
+    setExplosionAudioHook(worldPos => {
+      const cam = this.sceneManager.camera
+      this.audioManager.playExplosionAt(cam.position.distanceTo(worldPos))
+    })
 
     this.player = new PlayerAircraft(spec, stores, this.sceneManager.scene, this.autoRudder, this.glocEnabled)
     const [bodyMat, finMat] = this.player.missiles.getWarmupMaterials()
@@ -168,6 +197,12 @@ export class FlightSession {
       this.hud.notifyDecoySuccess(type)
       this.sortieStats.onDecoySuccess()
     })
+    // Receiving side: the damage model already drove real flight consequences,
+    // the player just had no way to know they had been hit.
+    this.player.onHitTaken = (zone, severity) => {
+      this.hud.notifyHitTaken(zone, severity)
+      this.audioManager.play('HIT')
+    }
     this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
       this.sortieStats.onWeaponHit(weapon)
       if (!this.multiplayer || !this.localNetworkId) return
@@ -181,7 +216,12 @@ export class FlightSession {
       })
     })
 
-    this.postFX = new PostFXManager(this.sceneManager.renderer, this.sceneManager.scene, this.sceneManager.camera)
+    this.postFX = new PostFXManager(
+      this.sceneManager.renderer,
+      this.sceneManager.scene,
+      this.sceneManager.camera,
+      options.postFXQuality,
+    )
     this.postFX.setSize(window.innerWidth, window.innerHeight)
     this.postFX.setBloomStrength(this.sceneManager.getBloomStrength())
     setLODCamera(this.sceneManager.camera)
@@ -249,7 +289,7 @@ export class FlightSession {
     this.paused = isSingle
     if (isSingle) this.audioManager.setPaused(true)
     this.pauseMenu = new PauseMenu(
-      { multiplayer: !isSingle },
+      { multiplayer: !isSingle, masterVolume: this.audioManager.getMasterVolume() },
       {
         onResume: () => this.resumeFromPause(),
         onRestart: () => {
@@ -259,6 +299,10 @@ export class FlightSession {
         onAbort: () => {
           this.resumeFromPause()
           if (!this.completionScheduled) this.missionAbortRequested = true
+        },
+        onVolumeChange: volume => {
+          this.audioManager.setMasterVolume(volume)
+          saveSettings({ masterVolume: volume })
         },
       }
     )
@@ -280,7 +324,10 @@ export class FlightSession {
   private async startInternal(): Promise<void> {
     await this.initMultiplayer()
     this.applyPeerSpawnOffset()
-    const spawnCounts = spawnScenario(this.scenario, this.entityManager, this.player)
+    // initMultiplayer has resolved by here, so `multiplayer` is settled.
+    const spawnCounts = spawnScenario(this.scenario, this.entityManager, this.player, {
+      suppressAI: this.isMultiplayerLive(),
+    })
     this.missionTracker = new MissionTracker(this.scenario, spawnCounts)
     this.sessionStartTime = performance.now()
     this.lastTime = this.sessionStartTime
@@ -298,6 +345,26 @@ export class FlightSession {
     this.player.state.positionNED[1] = eastM
     // Keep state vector consistent with the new position (sv index 1 = East).
     this.player.state.sv[1] = eastM
+  }
+
+  /**
+   * Who to credit for the local player's death, or null for terrain, a stall
+   * or a voluntary eject. The server re-validates that the id is a live peer.
+   */
+  private resolveKillerId(): string | null {
+    if (!this.lastDamageSourceId) return null
+    const ageMs = performance.now() - this.lastDamageAtMs
+    if (ageMs > FlightSession.KILL_CREDIT_WINDOW_MS) return null
+    return this.lastDamageSourceId
+  }
+
+  /** True only when a LAN session was requested *and* the socket is up. */
+  private isMultiplayerLive(): boolean {
+    return (
+      this.multiplayerConfig.mode !== 'single' &&
+      this.multiplayer !== null &&
+      this.multiplayer.isConnected()
+    )
   }
 
   private async initMultiplayer(): Promise<void> {
@@ -365,6 +432,10 @@ export class FlightSession {
     if (controls.wingmanCover)  this.entityManager.commandWingmen('COVER')
     if (controls.wingmanRTB)    this.entityManager.commandWingmen('RTB')
     if (controls.wingmanRejoin) this.entityManager.commandWingmen('REJOIN')
+    // Explosion particle pool is shared per-scene across every MissileSystem/BombSystem
+    // (player, AI, SAMs, debug) — step it exactly once per tick here, not inside each
+    // weapon system's own update().
+    stepExplosionPool(this.sceneManager.scene, dt)
     this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined, this.entityManager.getGroundTargets())
     this.syncMultiplayer(dt)
     this.entityManager.update(dt, this.player)
@@ -418,7 +489,7 @@ export class FlightSession {
   }
 
   private updateMissionEnd(_dt: number): void {
-    if (this.completionScheduled) return
+    if (this.completionScheduled || this.respawning) return
 
     const elapsed = (performance.now() - this.sessionStartTime) / 1000
     const playerKilled = this.player.state.ejected && !this.player.voluntaryEject
@@ -451,17 +522,129 @@ export class FlightSession {
         this.scheduleMissionEnd('failure', 2)
         return
       }
-      if (evaluation.outcome === 'killed') {
-        this.scheduleMissionEnd('killed', 4)
+      if (evaluation.outcome === 'killed' || evaluation.outcome === 'ejected') {
+        this.handlePlayerDown(evaluation.outcome)
         return
       }
-      if (evaluation.outcome === 'ejected') {
-        this.scheduleMissionEnd('ejected', 4)
-        return
-      }
-    } else if (this.player.state.ejected) {
-      this.scheduleMissionEnd(playerKilled ? 'killed' : 'ejected', 4)
     }
+
+    // Unconditional fallback. This used to be the `else` of the branch above,
+    // but startInternal always constructs a tracker, so the branch was dead —
+    // and a scenario with no lose conditions (Free Flight) returns outcome null
+    // forever. Dying there left the player sitting in the wreck with no debrief
+    // and no way out except the pause menu's abort, if they thought to look.
+    if (this.player.state.ejected) {
+      this.handlePlayerDown(playerKilled ? 'killed' : 'ejected')
+    }
+  }
+
+  /**
+   * Single-player: death ends the sortie. Multiplayer: stay in the session and
+   * respawn after a short overlay so a four-player dogfight is not two menus.
+   */
+  private handlePlayerDown(outcome: 'killed' | 'ejected'): void {
+    if (this.isMultiplayerLive()) {
+      this.beginRespawn(outcome)
+      return
+    }
+    this.scheduleMissionEnd(outcome, 4)
+  }
+
+  private beginRespawn(outcome: 'killed' | 'ejected'): void {
+    if (this.respawning) return
+    this.respawning = true
+    this.sessionDeaths++
+    this.multiplayer?.sendDeath(this.resolveKillerId())
+
+    this.respawnOverlay = new RespawnOverlay({
+      killerName: this.displayNameFor(this.resolveKillerId()),
+      outcome,
+      delaySec: FlightSession.RESPAWN_DELAY_SEC,
+      getStandings: () => this.collectStandings(),
+    })
+
+    this.respawnTimer = setTimeout(() => {
+      if (this.disposed) return
+      this.completeRespawn()
+    }, FlightSession.RESPAWN_DELAY_SEC * 1000)
+  }
+
+  private completeRespawn(): void {
+    this.respawnTimer = null
+    this.respawnOverlay?.dispose()
+    this.respawnOverlay = null
+
+    this.player.respawn()
+    applyPlayerSpawn(this.player, this.scenario)
+    this.applyPeerSpawnOffset()
+    this.scatterRespawn()
+
+    this.seenInboundMissileIds.clear()
+    this.lastDamageSourceId = null
+    this.lastDamageAtMs = 0
+    this.respawning = false
+  }
+
+  /** Offset the respawn so we do not stack on the killer or on other peers. */
+  private scatterRespawn(): void {
+    const alt = this.player.state.positionNED[2]
+    const heading = Math.random() * Math.PI * 2
+    const north = (Math.random() * 2 - 1) * 3000
+    const east = (Math.random() * 2 - 1) * 3000
+    const speed = 250
+    const velN = speed * Math.cos(heading)
+    const velE = speed * Math.sin(heading)
+    const half = heading / 2
+    const q: [number, number, number, number] = [Math.cos(half), 0, 0, Math.sin(half)]
+
+    this.player.state.positionNED = [north, east, alt]
+    this.player.state.velocityNED = [velN, velE, 0]
+    this.player.state.attitudeQuat = q
+    this.player.state.sv = [
+      north, east, alt,
+      velN, velE, 0,
+      q[0], q[1], q[2], q[3],
+      0, 0, 0,
+    ]
+  }
+
+  private displayNameFor(playerId: string | null): string | null {
+    if (!playerId || !this.multiplayer) return null
+    if (playerId === this.localNetworkId) {
+      return this.multiplayer.getProfile().callsign || 'You'
+    }
+    const snap = this.multiplayer.getRemoteSnapshots().find(s => s.playerId === playerId)
+    return snap?.profile.callsign || playerId
+  }
+
+  private collectStandings(): ScoreboardRow[] {
+    if (!this.multiplayer) return []
+    const localId = this.localNetworkId
+    const rows: ScoreboardRow[] = []
+    if (localId) {
+      const score = this.multiplayer.getScore(localId)
+      rows.push({
+        playerId: localId,
+        name: this.multiplayer.getProfile().callsign || 'You',
+        aircraft: this.player.spec.displayName,
+        kills: score.kills,
+        deaths: score.deaths,
+        isLocal: true,
+      })
+    }
+    for (const snap of this.multiplayer.getRemoteSnapshots()) {
+      const score = this.multiplayer.getScore(snap.playerId)
+      const spec = getAircraftById(snap.profile.aircraftId)
+      rows.push({
+        playerId: snap.playerId,
+        name: snap.profile.callsign || snap.playerId,
+        aircraft: spec?.displayName ?? snap.profile.aircraftId.toUpperCase(),
+        kills: score.kills,
+        deaths: score.deaths,
+        isLocal: false,
+      })
+    }
+    return rows
   }
 
   private scheduleMissionEnd(outcome: MissionOutcome, delaySec: number): void {
@@ -491,7 +674,7 @@ export class FlightSession {
     }
     const completedIds = tracker?.evaluate(tickState).completedObjectiveIds ?? []
     const objectivesTotal = tracker?.primaryObjectiveCount ?? 0
-    const deaths = outcome === 'killed' || outcome === 'ejected' ? 1 : 0
+    const deaths = this.sessionDeaths + (outcome === 'killed' || outcome === 'ejected' ? 1 : 0)
 
     const spec = this.player.spec
     const s = this.player.state
@@ -576,7 +759,12 @@ export class FlightSession {
       if (!snap.state) continue
       const remoteSpec = getAircraftById(snap.profile.aircraftId)
       if (!remoteSpec) continue
-      this.entityManager.upsertRemotePlayer(snap.playerId, remoteSpec, snap.state)
+      this.entityManager.upsertRemotePlayer(
+        snap.playerId,
+        remoteSpec,
+        snap.state,
+        snap.profile.callsign,
+      )
     }
     for (const trackedId of prev) {
       if (!seen.has(trackedId)) this.entityManager.removeRemotePlayer(trackedId)
@@ -585,9 +773,25 @@ export class FlightSession {
     this.trackedRemoteIds    = seen
 
     if (!this.localNetworkId) return
+    this.hud.setLocalNetworkId(this.localNetworkId)
+    this.hud.setScoreboard(this.collectStandings())
+
     for (const hit of this.multiplayer.consumeInboundHits()) {
       if (hit.targetId !== this.localNetworkId) continue
-      applyHit(this.player.damage, hit.zone, hit.severity, this.player.state.invincible)
+      this.player.applyIncomingHit(hit.zone, hit.severity)
+      // Remember who last hurt us so a death can be attributed. Damage is
+      // client-authoritative, so the victim is the only one who can say.
+      this.lastDamageSourceId = hit.sourceId
+      this.lastDamageAtMs = performance.now()
+    }
+
+    for (const death of this.multiplayer.consumeInboundDeaths()) {
+      this.hud.notifyKill(
+        this.displayNameFor(death.killerId),
+        this.displayNameFor(death.victimId) ?? death.victimId,
+        death.killerId === this.localNetworkId,
+        death.victimId === this.localNetworkId,
+      )
     }
   }
 
@@ -637,13 +841,21 @@ export class FlightSession {
     this.paused = false
     this.pauseMenu?.dispose()
     this.pauseMenu = null
+    this.respawnOverlay?.dispose()
+    this.respawnOverlay = null
     cancelAnimationFrame(this.rafId)
     if (this.completionTimer !== null) {
       clearTimeout(this.completionTimer)
       this.completionTimer = null
     }
+    if (this.respawnTimer !== null) {
+      clearTimeout(this.respawnTimer)
+      this.respawnTimer = null
+    }
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('resize',  this.onResize)
+    // Module-level, so it must be released or it closes over a dead session.
+    setExplosionAudioHook(null)
     this.inputManager.dispose()
     this.entityManager.dispose()
     this.player.dispose()
@@ -658,11 +870,7 @@ export class FlightSession {
     this.sceneManager.dispose()
     this.audioManager.dispose()
 
-    const preserve =
-      Boolean(options?.preserveMultiplayer) &&
-      this.multiplayerConfig.mode !== 'single' &&
-      this.multiplayer !== null &&
-      this.multiplayer.isConnected()
+    const preserve = Boolean(options?.preserveMultiplayer) && this.isMultiplayerLive()
 
     let restored: LobbyRestoreBundle | undefined
     if (preserve && this.multiplayer) {

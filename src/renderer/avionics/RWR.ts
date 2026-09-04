@@ -3,6 +3,13 @@ import type { AircraftState } from '../types/aircraft'
 import type { Aircraft } from '../entities/Aircraft'
 import { v3sub, v3len, RAD2DEG, quatRotateVec, quatConjugate } from '../utils/MathUtils'
 
+/**
+ * Beyond this the emitter is too weak to register. Generous relative to the
+ * ~12 km engagement ranges the sim actually flies at, so it only trims the
+ * far-side-of-the-map contacts that made the scope unreadable.
+ */
+const RWR_MAX_DETECTION_RANGE_M = 150_000
+
 export class RWR {
   state: RWRState = { threats: [], hasMissileLaunch: false }
   private seenMissileIds = new Set<string>()
@@ -16,13 +23,20 @@ export class RWR {
     this.state.hasMissileLaunch = false  // reset each tick; addMissileThreats may set it
 
     for (const enemy of enemies) {
+      // An RWR is a passive receiver: with the hostile radar off there is
+      // nothing to receive. Every enemy used to appear as a SEARCH contact
+      // regardless, so the scope was a permanent map of everyone alive.
+      const ri = enemy.getRadarInfo()
+      if (ri === null) continue
+
       const toEnemy = v3sub(enemy.state.positionNED, ownState.positionNED)
+      if (v3len(toEnemy) > RWR_MAX_DETECTION_RANGE_M) continue
+
       const bodyVec = quatRotateVec(quatConjugate(ownState.attitudeQuat), toEnemy)
       const azDeg = Math.atan2(bodyVec[1], bodyVec[0]) * RAD2DEG
 
-      const ri = enemy.getRadarInfo()
-      const isTracked = ri !== null && ri.tracksPlayer(ownId)
-      const isSTT = isTracked && ri!.mode === 'STT'
+      const isTracked = ri.tracksPlayer(ownId)
+      const isSTT = isTracked && ri.mode === 'STT'
 
       this.state.threats.push({
         entityId: enemy.entityId,

@@ -417,7 +417,8 @@ export class EntityManager {
   upsertRemotePlayer(
     playerId: string,
     aircraftSpec: AircraftSpec,
-    state: NetPlayerState
+    state: NetPlayerState,
+    callsign?: string
   ): void {
     let remote = this.remotePlayers.get(playerId)
     if (!remote) {
@@ -425,6 +426,8 @@ export class EntityManager {
       this.remotePlayers.set(playerId, remote)
       this._enemyCache = null  // new remote player — invalidate cache
     }
+    // Refreshed every tick, so a mid-session rename lands without a respawn.
+    remote.callsign = callsign ?? null
     remote.applyNetworkState(state)
   }
 

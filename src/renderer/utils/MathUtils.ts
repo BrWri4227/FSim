@@ -62,6 +62,15 @@ export function v3dist(a: Vec3, b: Vec3): number {
   return v3len(v3sub(a, b))
 }
 
+/** Shortest distance from point `p` to the segment `a`-`b` (clamped closest point). */
+export function segmentPointDistance(a: Vec3, b: Vec3, p: Vec3): number {
+  const seg = v3sub(b, a)
+  const segLenSq = v3dot(seg, seg)
+  const t = segLenSq > 1e-9 ? clamp(v3dot(v3sub(p, a), seg) / segLenSq, 0, 1) : 0
+  const closest = v3add(a, v3scale(seg, t))
+  return v3dist(closest, p)
+}
+
 // Rotate a vector by quaternion
 export function quatRotateVec(q: Quat, v: Vec3): Vec3 {
   const [qw, qx, qy, qz] = q

@@ -453,6 +453,65 @@ function gen_pull_up() {
   return normalise(s)
 }
 
+// hit.wav — taking a hit on your own airframe (0.45 s, one-shot)
+// Sharp metallic impact: a hard transient over a short low-frequency thud, so it
+// reads as damage rather than as a distant explosion.
+function gen_hit() {
+  const s = alloc(0.45)
+
+  for (let i = 0; i < s.length; i++) {
+    const t = i / SR
+
+    // Impact transient — very fast decay, broadband.
+    const strike = Math.exp(-t * 90) * noise() * 0.9
+
+    // Metallic ring — two inharmonic partials give it a shell-like character.
+    const ring = (sin_(t, 430) * 0.5 + sin_(t, 611) * 0.35) * Math.exp(-t * 22)
+
+    // Body thud so it has weight in the low end.
+    const thud = sin_(t, 95) * Math.exp(-t * 14) * 0.7
+
+    s[i] = strike + ring * 0.55 + thud
+  }
+
+  // Trim the very top end — a fully broadband transient sounds like static.
+  return normalise(lpf(s, 5200))
+}
+
+// explosion.wav — detonation / kill (1.4 s, one-shot)
+// Noise burst shaped by a fast attack and long decay, with a descending
+// low-frequency body for the concussion.
+function gen_explosion() {
+  const s = alloc(1.4)
+  const rumble = alloc(1.4)
+
+  for (let i = 0; i < s.length; i++) {
+    const t = i / SR
+
+    // Blast: broadband noise, near-instant attack, exponential tail.
+    const attack = t < 0.008 ? t / 0.008 : 1
+    const blast  = noise() * attack * Math.exp(-t * 3.4)
+
+    // Concussion: pitch drops from 110 Hz to ~35 Hz as the shockwave expands.
+    const f = 110 * Math.exp(-t * 2.2) + 35
+    rumble[i] = sin_(t, f) * attack * Math.exp(-t * 2.0)
+
+    s[i] = blast
+  }
+
+  // Split the noise into a bright crack and a dark roar, then recombine — a
+  // single flat noise burst reads as white noise rather than as an explosion.
+  const crack = hpf(s, 900)
+  const roar  = lpf(s, 320)
+
+  const out = alloc(1.4)
+  for (let i = 0; i < out.length; i++) {
+    out[i] = roar[i] * 1.0 + crack[i] * 0.35 + rumble[i] * 0.85
+  }
+
+  return normalise(out)
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 const GENERATORS = {
@@ -465,6 +524,8 @@ const GENERATORS = {
   'rwr_track.wav':       gen_rwr_track,
   'missile_launch.wav':  gen_missile_launch,
   'pull_up.wav':         gen_pull_up,
+  'hit.wav':             gen_hit,
+  'explosion.wav':       gen_explosion,
 }
 
 // Files whose canonical source is this script — always regenerated, even if a

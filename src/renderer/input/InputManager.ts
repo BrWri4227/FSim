@@ -8,6 +8,14 @@ import {
 } from './GamepadManager'
 import { clamp } from '../utils/MathUtils'
 
+export interface InputOptions {
+  /** Flip the pitch axis for players who expect pull-back-to-climb on W. */
+  invertPitch?: boolean
+  gamepad?: GamepadManager
+  gamepadAxes?: GamepadAxisConfig
+  gamepadBindings?: GamepadBindings
+}
+
 /**
  * Merges keyboard and controller input into a single {@link ControlInputs} frame.
  *
@@ -19,6 +27,7 @@ import { clamp } from '../utils/MathUtils'
 export class InputManager {
   private keys = new Set<string>()
   private throttle = 0.3
+  private opts: InputOptions
 
   private readonly pad: GamepadManager
   private readonly gpAxis: GamepadAxisConfig
@@ -47,11 +56,8 @@ export class InputManager {
 
   private onContextMenu = (e: Event): void => { e.preventDefault() }
 
-  constructor(opts: {
-    gamepad?: GamepadManager
-    gamepadAxes?: GamepadAxisConfig
-    gamepadBindings?: GamepadBindings
-  } = {}) {
+  constructor(opts: InputOptions = {}) {
+    this.opts = opts
     this.gpAxis = opts.gamepadAxes ?? DEFAULT_GAMEPAD_AXES
     this.gpBind = opts.gamepadBindings ?? DEFAULT_GAMEPAD_BINDINGS
     this.pad = opts.gamepad ?? new GamepadManager({ axisConfig: this.gpAxis })
@@ -62,6 +68,8 @@ export class InputManager {
       window.addEventListener('contextmenu', this.onContextMenu)
     }
   }
+
+  setInvertPitch(invert: boolean): void { this.opts.invertPitch = invert }
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.ctrlKey && (e.code === 'KeyW' || e.code === 'KeyS' || e.code === 'KeyR')) e.preventDefault()
@@ -86,13 +94,6 @@ export class InputManager {
     const pos = this.keys.has(posCode) ? 1 : 0
     const neg = this.keys.has(negCode) ? 1 : 0
     return pos - neg
-  }
-
-  private applyAxisDeadzone(v: number, deadzone: number): number {
-    const av = Math.abs(v)
-    if (av <= deadzone) return 0
-    const scaled = (av - deadzone) / (1 - deadzone)
-    return Math.sign(v) * scaled
   }
 
   /** A gamepad button/trigger counts as held once past the trigger threshold. */
@@ -134,6 +135,8 @@ export class InputManager {
       this.throttle = clamp(this.throttle + 0.25 * dt, 0, 1)
     if (this.keys.has(DEFAULT_BINDINGS.throttleDown) && this.throttle > 0)
       this.throttle = clamp(this.throttle - 0.25 * dt, 0, 1)
+
+    if (this.opts.invertPitch) pitch = -pitch
 
     const gb = this.gpBind
     const fireGun      = this.keys.has(DEFAULT_BINDINGS.fireGun)      || this.padDown(gb.fireGun)

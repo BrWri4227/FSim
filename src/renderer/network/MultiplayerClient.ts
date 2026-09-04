@@ -1,8 +1,13 @@
-import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent } from './MultiplayerTypes'
+import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent, NetScore } from './MultiplayerTypes'
+
+/** The server's `death` broadcast, as handed to the session. */
+export type DeathEvent = Extract<ServerMessage, { type: 'death' }>
 import { quantizePlayerState, missileSetKey } from '../../shared/network/serialization'
 
 const CONNECT_TIMEOUT_MS = 8000
 const MAX_INBOUND_HITS = 256
+/** Deaths are far rarer than hits, but the queue still needs a ceiling. */
+const MAX_INBOUND_DEATHS = 64
 /** Outbound state snapshots — 20 Hz instead of sim rate (60 Hz). */
 const STATE_SEND_INTERVAL_SEC = 1 / 20
 /** Full countermeasure re-sync cadence while flares/chaff are active (they age locally between). */
@@ -26,6 +31,9 @@ export class MultiplayerClient {
   private ws: WebSocket | null = null
   private remotePlayers = new Map<string, RemoteSnapshot>()
   private inboundHits: HitEvent[] = []
+  private inboundDeaths: DeathEvent[] = []
+  /** Server-authoritative standings, keyed by player id (local player included). */
+  private scores = new Map<string, NetScore>()
   private connected = false
   private localPlayerId: string | null = null
   private profile: NetPlayerProfile
@@ -91,12 +99,15 @@ export class MultiplayerClient {
       if (msg.type === 'welcome') {
         this.localPlayerId = msg.playerId
         this.remotePlayers.clear()
+        this.scores.clear()
+        this.scores.set(msg.playerId, msg.score)
         for (const peer of msg.peers) {
           this.remotePlayers.set(peer.playerId, {
             playerId: peer.playerId,
             profile: peer.profile,
             state: peer.state ?? null,
           })
+          this.scores.set(peer.playerId, peer.score)
         }
         this.notifyRosterChanged()
         return
@@ -108,12 +119,14 @@ export class MultiplayerClient {
           profile: msg.profile,
           state: null,
         })
+        this.scores.set(msg.playerId, { kills: 0, deaths: 0 })
         this.notifyRosterChanged()
         return
       }
 
       if (msg.type === 'peer-leave') {
         this.remotePlayers.delete(msg.playerId)
+        this.scores.delete(msg.playerId)
         this.notifyRosterChanged()
         return
       }
@@ -145,12 +158,23 @@ export class MultiplayerClient {
         if (this.inboundHits.length < MAX_INBOUND_HITS) {
           this.inboundHits.push(msg.hit)
         }
+        return
+      }
+
+      if (msg.type === 'death') {
+        this.scores.set(msg.victimId, msg.victimScore)
+        if (msg.killerId && msg.killerScore) this.scores.set(msg.killerId, msg.killerScore)
+        if (this.inboundDeaths.length < MAX_INBOUND_DEATHS) {
+          this.inboundDeaths.push(msg)
+        }
+        this.notifyRosterChanged()
       }
     })
 
     this.ws.addEventListener('close', () => {
       this.connected = false
       this.remotePlayers.clear()
+      this.scores.clear()
       this.localPlayerId = null
       this.notifyRosterChanged()
     })
@@ -175,9 +199,18 @@ export class MultiplayerClient {
     }
   }
 
-  updateProfile(profile: NetPlayerProfile): void {
-    this.profile = profile
-    this.send({ type: 'profile-update', profile })
+  /**
+   * Merge a partial profile update. Callers only ever know about the one field
+   * they changed — picking an aircraft used to replace the whole profile and
+   * silently drop the callsign with it.
+   */
+  updateProfile(patch: Partial<NetPlayerProfile>): void {
+    this.profile = { ...this.profile, ...patch }
+    this.send({ type: 'profile-update', profile: this.profile })
+  }
+
+  getProfile(): NetPlayerProfile {
+    return this.profile
   }
 
   /** Queue state for throttled send — call flushStateSend each sim tick. */
@@ -237,6 +270,30 @@ export class MultiplayerClient {
     return out
   }
 
+  /**
+   * Report being shot down. Damage is client-authoritative, so only the victim
+   * knows it happened. The server stamps the victim id and keeps the score.
+   */
+  sendDeath(killerId: string | null): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'death', killerId })
+  }
+
+  consumeInboundDeaths(): DeathEvent[] {
+    const out = [...this.inboundDeaths]
+    this.inboundDeaths.length = 0
+    return out
+  }
+
+  /** Server-authoritative standings for one player. Zeroes if not yet known. */
+  getScore(playerId: string): NetScore {
+    return this.scores.get(playerId) ?? { kills: 0, deaths: 0 }
+  }
+
+  getScores(): ReadonlyMap<string, NetScore> {
+    return this.scores
+  }
+
   disconnect(): void {
     if (this.ws) this.ws.close()
     this.ws = null
@@ -244,6 +301,8 @@ export class MultiplayerClient {
     this.remotePlayers.clear()
     this.localPlayerId = null
     this.inboundHits.length = 0
+    this.inboundDeaths.length = 0
+    this.scores.clear()
     this.stateSendAccumSec = 0
     this.cmSendAccumSec = 0
     this.pendingState = null
