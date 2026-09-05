@@ -2,6 +2,7 @@ import type { ControlInputs } from '../../types/aircraft'
 import type { AIAircraft } from '../AIAircraft'
 import type { Aircraft } from '../../entities/Aircraft'
 import { v3sub, v3len, v3add, v3scale, quatRotateVec, quatConjugate, RAD2DEG, clamp } from '../../utils/MathUtils'
+import { neutralControls } from '../../input/neutralControls'
 
 const MERGE_RANGE_M = 5000
 const IR_FIRE_RANGE_M = 3500
@@ -81,31 +82,5 @@ export function wvrEngage(self: AIAircraft, target: Aircraft, _dt: number): Cont
   const pitch = clamp(pitchTarget / 16, -0.5, 0.95)
   const roll = clamp(rollTarget / 16, -1, 1)
 
-  return {
-    pitch,
-    roll,
-    yaw: 0,
-    throttle,
-    fireMissile,
-    fireGun: onGunSolution,
-    cycleMissile: false,
-    dispenseFlare: false,
-    dispenseChaff: false,
-    toggleGear: false,
-    cycleFlaps: false,
-    brakeHeld: false,
-    speedBrakeToggle: false,
-    radarModeNext: false,
-    radarSelectNext: false,
-    radarLockTarget: false,
-    radarUnlock: false,
-    ejectRequested: false,
-    tgpToggle: false,
-    tgpLock: false,
-    tgpUnlock: false,
-    wingmanEngage: false,
-    wingmanCover: false,
-    wingmanRTB: false,
-    wingmanRejoin: false,
-  }
+  return neutralControls({ pitch, roll, throttle, fireMissile, fireGun: onGunSolution })
 }

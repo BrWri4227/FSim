@@ -256,8 +256,10 @@ export class PlayerAircraft extends Aircraft {
     // via aerodynamic blow-back (see computeFlapAero) rather than snapping back a
     // detent, so the selected position is left exactly where the pilot put it.
 
-    // Avionics
-    this.radar.update(dt, this.state, enemies, controls.radarModeNext, false, groundTargets)
+    // Avionics. The mode toggle runs before the scan so the new mode's tracks
+    // are built this tick rather than the next one.
+    if (controls.radarAirGroundToggle) this.radar.toggleAirGround()
+    this.radar.update(dt, this.state, enemies, false, groundTargets)
     if (controls.radarSelectNext) this.radar.selectNextTrack()
     if (controls.radarLockTarget) this.radar.lockSelectedTarget()
     if (controls.radarUnlock)     this.radar.unlockSTT()

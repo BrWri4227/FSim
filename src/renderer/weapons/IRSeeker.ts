@@ -2,7 +2,7 @@ import type { IRSeekerSpec } from '../types/weapons'
 import type { AircraftState } from '../types/aircraft'
 import type { AircraftSpec } from '../types/aircraft'
 import type { Vec3 } from '../types/common'
-import { v3norm, v3dot, RAD2DEG } from '../utils/MathUtils'
+import { v3norm, v3dot, quatRotateVec, RAD2DEG } from '../utils/MathUtils'
 
 export function computeHeatSignatureKW(
   spec: AircraftSpec,
@@ -11,8 +11,14 @@ export function computeHeatSignatureKW(
 ): number {
   const dir = v3norm(seekerToTargetNED)
 
-  // Aspect: dot of missile-to-target with target's forward
-  const forward = [state.attitudeQuat[0], state.attitudeQuat[1], state.attitudeQuat[2]] as Vec3
+  // Aspect: dot of missile-to-target with the target's forward.
+  //
+  // This used to read the first three components of the attitude quaternion as
+  // if they were a direction. They are (w, x, y), which is not a vector at all:
+  // a target heading due south produced [0, 0, 0], so the hottest possible
+  // aspect — straight up the tailpipe — scored as neutral, and every heading
+  // other than due north was simply wrong.
+  const forward = quatRotateVec(state.attitudeQuat, [1, 0, 0])
   const aspect = v3dot(dir, forward)   // 1=head-on, -1=tail-on
 
   // Tail-on has highest signature

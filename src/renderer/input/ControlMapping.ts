@@ -18,10 +18,12 @@ export interface KeyBindings {
   flaps:      string
   brake:      string
   speedBrake: string
-  radarMode:  string
+  radarAirGround: string
   radarSelectNext: string
   radarLockTarget: string
   radarUnlock: string
+  lookBack:   string
+  padlock:    string
   eject:      string
   tgpToggle:  string
   tgpLock:    string
@@ -45,15 +47,19 @@ export const DEFAULT_BINDINGS: KeyBindings = {
   fireMissile:  'KeyF',
   cycleMissile: 'KeyC',
   flare:        'KeyZ',
-  chaff:        'KeyZ',
+  // Separate from flares on purpose: an IR shot and a radar shot want different
+  // decoys, and sharing one key meant defending one always spent both.
+  chaff:        'KeyH',
   gear:         'KeyG',
   flaps:        'KeyV',
   brake:        'KeyB',
   speedBrake:   'KeyX',
-  radarMode:    'KeyR',
+  radarAirGround: 'KeyR',
   radarSelectNext: 'KeyT',
   radarLockTarget: 'KeyL',
   radarUnlock:  'KeyU',
+  lookBack:     'KeyJ',
+  padlock:      'KeyM',
   eject:        'Backquote',
   tgpToggle:    'KeyP',
   tgpLock:      'KeyO',
@@ -70,8 +76,10 @@ export const DEFAULT_BINDINGS: KeyBindings = {
  * {@link ../input/GamepadManager}:
  *   - Left stick   → roll (X) / pitch (Y)
  *   - Right stick  → yaw (X) / throttle (Y, push up for more thrust)
- * Actions with no controller binding (wingman calls, TGP unlock, eject) stay
- * keyboard-only by design.
+ * Actions with no controller binding (wingman calls, TGP unlock, eject,
+ * look-back, padlock) stay keyboard-only by design — the standard layout has no
+ * free buttons left. `countermeasures` still dispenses flares *and* chaff on the
+ * pad for the same reason, though the keyboard now separates them.
  */
 export interface GamepadBindings {
   fireGun: number
@@ -82,7 +90,7 @@ export interface GamepadBindings {
   speedBrake: number
   cycleFlaps: number
   wheelBrake: number
-  radarModeNext: number
+  radarAirGround: number
   radarSelectNext: number
   radarUnlock: number
   radarLockTarget: number
@@ -101,7 +109,7 @@ export const DEFAULT_GAMEPAD_BINDINGS: GamepadBindings = {
   speedBrake:      PAD.B,
   cycleFlaps:      PAD.X,
   wheelBrake:      PAD.Y,
-  radarModeNext:   PAD.DPAD_UP,
+  radarAirGround:  PAD.DPAD_UP,
   radarSelectNext: PAD.DPAD_DOWN,
   radarUnlock:     PAD.DPAD_LEFT,
   radarLockTarget: PAD.DPAD_RIGHT,

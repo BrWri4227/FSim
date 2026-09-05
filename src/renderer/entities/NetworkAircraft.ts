@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { AircraftSpec } from '../types/aircraft'
-import type { NetPlayerState, NetRadarState, NetMissileState } from '../network/MultiplayerTypes'
+import type { NetPlayerState, NetRadarState, NetMissileState, Team } from '../network/MultiplayerTypes'
+import { DEFAULT_TEAM } from '../network/MultiplayerTypes'
 import { cloneNetPlayerState } from '../../shared/network/MultiplayerTypes'
 import { Aircraft } from './Aircraft'
 import type { ChaffCloud } from '../avionics/CMDS'
@@ -42,6 +43,14 @@ export class NetworkAircraft extends Aircraft {
 
   /** Sanitized display name from the peer's profile; null falls back to the id. */
   callsign: string | null = null
+
+  /**
+   * Side this peer is fighting for. Drives whether we can lock and shoot them —
+   * see [EntityManager.getHostiles]. Defaults to BLUE so a peer on an older
+   * build that sends no team is still classified deterministically rather than
+   * being hostile on one client and friendly on another.
+   */
+  team: Team = DEFAULT_TEAM
 
   /** What to label this contact with on the HUD and in the kill feed. */
   get displayName(): string {

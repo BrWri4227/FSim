@@ -91,4 +91,11 @@ export interface FlightResult {
   stats?: SortieStatsResult
   /** Present when the sortie ended with the aircraft on the ground after a landing. */
   landing?: { sinkMS: number; gearIntact: boolean }
+  /**
+   * The sortie ended because the *match* did, and the pilot has already seen the
+   * end-of-match board. The sortie is still logged, but showing a personal
+   * debrief on top of that board would put a second click in front of REMATCH —
+   * the one path that has to stay quick.
+   */
+  fromMatchEnd?: boolean
 }

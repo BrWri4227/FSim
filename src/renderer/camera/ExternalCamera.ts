@@ -13,6 +13,16 @@ export class ExternalCamera {
   private isDragging = false
   private lastMouse = { x: 0, y: 0 }
   private active = true
+  /** World position of the padlocked bandit, or null when nothing is designated. */
+  private padlockTarget: THREE.Vector3 | null = null
+  private lookBack = false
+
+  /** Keep this world point in frame with our own aircraft. Null releases it. */
+  setPadlockTarget(worldPos: THREE.Vector3 | null): void {
+    this.padlockTarget = worldPos
+  }
+
+  setLookBack(held: boolean): void { this.lookBack = held }
 
   constructor() {
     window.addEventListener('mousedown', this.onMouseDown)
@@ -45,10 +55,33 @@ export class ExternalCamera {
 
   update(camera: THREE.PerspectiveCamera, player: PlayerAircraft): void {
     const target = nedToThree(player.state.positionNED)
+
+    // Padlock: sit on the far side of our own aircraft from the bandit, so both
+    // are in frame with the bandit beyond the nose. This is the answer to "I
+    // lost him" — the chase view has no idea where the fight went otherwise.
+    if (this.padlockTarget) {
+      const toBandit = this.padlockTarget.clone().sub(target)
+      if (toBandit.lengthSq() > 1) {
+        toBandit.normalize()
+        camera.position
+          .copy(target)
+          .addScaledVector(toBandit, -this.distance)
+          .addScaledVector(new THREE.Vector3(0, 1, 0), this.distance * 0.22)
+        camera.lookAt(target)
+        camera.near = 0.5
+        camera.fov = 60
+        camera.updateProjectionMatrix()
+        return
+      }
+    }
+
+    // Look-back swings the orbit round the nose without disturbing the pilot's
+    // chosen azimuth, so releasing the key puts the view back where it was.
+    const azimuth = this.lookBack ? this.azimuth + Math.PI : this.azimuth
     const offset = new THREE.Vector3(
-      Math.sin(this.azimuth) * Math.cos(this.elevation),
+      Math.sin(azimuth) * Math.cos(this.elevation),
       Math.sin(this.elevation),
-      Math.cos(this.azimuth) * Math.cos(this.elevation)
+      Math.cos(azimuth) * Math.cos(this.elevation)
     ).multiplyScalar(this.distance)
 
     camera.position.copy(target).add(offset)

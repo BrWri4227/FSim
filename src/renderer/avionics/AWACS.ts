@@ -2,6 +2,8 @@ import type { Vec3 } from '../types/common'
 import type { DataLinkContact } from '../types/radar'
 import type { Aircraft } from '../entities/Aircraft'
 import { v3dist } from '../utils/MathUtils'
+import type { Team } from '../network/MultiplayerTypes'
+import { DEFAULT_TEAM } from '../network/MultiplayerTypes'
 
 const ORBIT_RADIUS_M = 80000
 const ORBIT_ALT_M    = 10000
@@ -37,6 +39,9 @@ export class AWACS {
     playerEntityId: string,
     playerPositionNED?: Vec3,
     playerNation: 'USA' | 'RUS' = 'USA',
+    playerTeam: Team = DEFAULT_TEAM,
+    /** Side of a contact, or null when it has none (AI). */
+    teamOf: (entityId: string) => Team | null = () => null,
   ): void {
     // Figure-8 orbit approximated as a circle for simplicity
     this.orbitAngle += ORBIT_SPEED * dt
@@ -57,7 +62,13 @@ export class AWACS {
       const dist = v3dist(this.positionNED, ac.state.positionNED)
       if (dist > RADAR_RANGE_M) continue
 
-      const classification = ac.spec.nation !== playerNation ? 'HOSTILE' : 'FRIENDLY'
+      // A declared side always wins. Nation is the fallback for AI, which has
+      // no team — and it used to be the only IFF concept in the game, which is
+      // why two friends in the same jet were "friendly" and still shootable.
+      const team = teamOf(ac.entityId)
+      const classification = team !== null
+        ? (team === playerTeam ? 'FRIENDLY' : 'HOSTILE')
+        : (ac.spec.nation !== playerNation ? 'HOSTILE' : 'FRIENDLY')
       contacts.push({
         entityId:       ac.entityId,
         positionNED:    [...ac.state.positionNED],

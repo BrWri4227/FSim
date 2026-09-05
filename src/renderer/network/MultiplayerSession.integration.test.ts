@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createGameServer, type GameServer } from '../../server/GameServer'
 import { MultiplayerClient } from './MultiplayerClient'
-import type { NetPlayerState } from './MultiplayerTypes'
+import type { NetPlayerState, Team } from './MultiplayerTypes'
 
 const servers: GameServer[] = []
 const clients: MultiplayerClient[] = []
@@ -31,8 +31,13 @@ async function startServer(): Promise<GameServer> {
   return srv
 }
 
-async function joinClient(port: number, callsign: string, aircraftId = 'f16c'): Promise<MultiplayerClient> {
-  const client = new MultiplayerClient({ aircraftId, callsign })
+async function joinClient(
+  port: number,
+  callsign: string,
+  aircraftId = 'f16c',
+  team: Team = 'BLUE',
+): Promise<MultiplayerClient> {
+  const client = new MultiplayerClient({ aircraftId, callsign, team })
   clients.push(client)
   await client.connect({ mode: 'join', host: '127.0.0.1', port })
   await waitFor(() => client.getLocalPlayerId() !== null, `${callsign} never received a welcome`)
@@ -102,8 +107,8 @@ describe('multiplayer session (client ↔ server, end to end)', () => {
 
   it('delivers a hit only to the player it targets', async () => {
     const srv = await startServer()
-    const alice = await joinClient(srv.port, 'Alice')
-    const bob = await joinClient(srv.port, 'Bob')
+    const alice = await joinClient(srv.port, 'Alice', 'f16c', 'BLUE')
+    const bob = await joinClient(srv.port, 'Bob', 'f16c', 'RED')
     await waitFor(() => alice.getRemoteSnapshots().length === 1, 'Alice never saw Bob')
 
     // Both must have known state for the server's plausibility check to pass.
@@ -130,10 +135,38 @@ describe('multiplayer session (client ↔ server, end to end)', () => {
     expect(alice.consumeInboundHits()).toHaveLength(0)
   })
 
+  it('drops a hit between two players on the same side', async () => {
+    // An honest client cannot even lock a teammate — [EntityManager.getHostiles]
+    // filters them out before the gun or the missile system ever sees them.
+    // This is the server refusing to take a modified client's word for it.
+    const srv = await startServer()
+    const alice = await joinClient(srv.port, 'Alice', 'f16c', 'BLUE')
+    const ally = await joinClient(srv.port, 'Ally', 'f16c', 'BLUE')
+    await waitFor(() => alice.getRemoteSnapshots().length === 1, 'Alice never saw Ally')
+
+    pushState(alice, [0, 0, -5000])
+    pushState(ally, [400, 0, -5000])
+    await waitFor(() => ally.getRemoteSnapshots()[0]?.state !== null, 'state never propagated')
+
+    alice.sendHit({
+      sourceId: alice.getLocalPlayerId()!,
+      targetId: ally.getLocalPlayerId()!,
+      zone: 'FUSELAGE',
+      severity: 0.4,
+      weapon: 'GUN',
+    })
+
+    // Nothing to await on for a message that must never arrive, so give the
+    // relay the same window the positive case needs and confirm it stayed empty.
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(ally.consumeInboundHits()).toHaveLength(0)
+  })
+
   it('scores a kill on both clients from the victim report', async () => {
     const srv = await startServer()
-    const alice = await joinClient(srv.port, 'Alice')
-    const bob = await joinClient(srv.port, 'Bob')
+    // Opposite sides — a kill claimed against a teammate is refused outright.
+    const alice = await joinClient(srv.port, 'Alice', 'f16c', 'BLUE')
+    const bob = await joinClient(srv.port, 'Bob', 'f16c', 'RED')
     await waitFor(() => alice.getRemoteSnapshots().length === 1, 'Alice never saw Bob')
 
     const aliceId = alice.getLocalPlayerId()!
@@ -157,8 +190,8 @@ describe('multiplayer session (client ↔ server, end to end)', () => {
 
   it('gives a late joiner the standings that already happened', async () => {
     const srv = await startServer()
-    const alice = await joinClient(srv.port, 'Alice')
-    const bob = await joinClient(srv.port, 'Bob')
+    const alice = await joinClient(srv.port, 'Alice', 'f16c', 'BLUE')
+    const bob = await joinClient(srv.port, 'Bob', 'f16c', 'RED')
     await waitFor(() => alice.getRemoteSnapshots().length === 1, 'Alice never saw Bob')
 
     const aliceId = alice.getLocalPlayerId()!

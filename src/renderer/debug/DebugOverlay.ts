@@ -433,7 +433,7 @@ export class DebugOverlay {
   }
 
   private nearestEnemy(): Aircraft | null {
-    const enemies = this.entityManager.getEnemies()
+    const enemies = this.entityManager.getHostiles()
     if (enemies.length === 0) return null
     const p = this.player.state.positionNED
     let best: Aircraft = enemies[0]!

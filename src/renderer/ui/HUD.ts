@@ -19,6 +19,7 @@ import { drawKillFeed, KILL_FEED_LINE_SEC, KILL_FEED_MAX_LINES, type KillFeedEnt
 import { drawScoreboard, type ScoreboardRow } from './HUDElements/Scoreboard'
 import { overallDamage } from '../systems/DamageModel'
 import type { DamageZone } from '../types/damage'
+import type { Team, TeamScores } from '../network/MultiplayerTypes'
 import { FLAP_PLACARD_KTS } from '../physics/FlapModel'
 import { getAGLM } from '../scene/Terrain'
 import {
@@ -57,6 +58,8 @@ const HUD_AMBER = '#ffb000'
 const HUD_RED = '#ff2020'
 const HUD_BLUE = '#66ccff'
 const HUD_PITBULL = '#ffe66d'
+/** Teammate markers. Distinct from HUD_BLUE so a wingman is not read as a missile. */
+const HUD_FRIENDLY = '#4d9dff'
 
 const MAX_HUD_TTI_LINES = 3
 /** Duration of the gun-funnel "just entered a firing zone" attention flash. */
@@ -76,9 +79,21 @@ export class HUD {
   private hitFlashRemainSec = 0
   /** Severity of the hit driving the current flash, for vignette intensity. */
   private hitFlashSeverity = 0
+  /** Remaining display time (sec) for the marker confirming a hit we landed. */
+  private hitDealtRemainSec = 0
+  /** The full duration the current marker started with, so it can fade proportionally. */
+  private hitDealtHoldSec = 0.25
+  private hitDealtWeapon: 'GUN' | 'MISSILE' = 'GUN'
+  /** Remaining display time (sec) for the kill confirmation. */
+  private killFlashRemainSec = 0
+  private static readonly KILL_FLASH_SEC = 1.4
   private killFeed: KillFeedEntry[] = []
   private scoreboardRows: ScoreboardRow[] = []
   private scoreboardHeld = false
+  /** Team score while a match is LIVE; null in single-player or in the lobby. */
+  private matchScores: TeamScores | null = null
+  private localTeam: Team = 'BLUE'
+  private matchScoreLimit = 0
   /** Local peer id so inbound-missile markers resolve MP shots aimed at `peer_N`. */
   private localNetworkId: string | null = null
   private lastRenderMs = 0
@@ -148,6 +163,21 @@ export class HUD {
     this.scoreboardRows = rows
   }
 
+  /**
+   * Live team score, or null outside a running match.
+   *
+   * Without this the score only existed behind a held key, so the kills that
+   * decided a match felt no different from the first one of the session.
+   */
+  setMatchStatus(scores: TeamScores | null, localTeam: Team, scoreLimit: number): void {
+    const changed =
+      this.matchScores?.BLUE !== scores?.BLUE || this.matchScores?.RED !== scores?.RED
+    this.matchScores = scores
+    this.localTeam = localTeam
+    this.matchScoreLimit = scoreLimit
+    if (changed) this.forceRedraw = true
+  }
+
   notifyKill(killer: string | null, victim: string, ownKill: boolean, ownDeath: boolean): void {
     this.killFeed.unshift({
       victim,
@@ -157,6 +187,28 @@ export class HUD {
       remainSec: KILL_FEED_LINE_SEC,
     })
     if (this.killFeed.length > KILL_FEED_MAX_LINES) this.killFeed.length = KILL_FEED_MAX_LINES
+    this.forceRedraw = true
+  }
+
+  /**
+   * Called on the *delivering* side of a hit — see `PlayerAircraft.setOnTargetHit`.
+   *
+   * The damage we take has always flashed the screen and thumped; the damage we
+   * deal did nothing at all, which made our own weapons feel weaker than they
+   * are modelled to be. A gun round is a quick tick so a burst reads as a
+   * stream; a missile impact holds longer.
+   */
+  notifyHitDealt(weapon: 'GUN' | 'MISSILE'): void {
+    const holdSec = weapon === 'GUN' ? 0.25 : 0.6
+    this.hitDealtRemainSec = Math.max(this.hitDealtRemainSec, holdSec)
+    this.hitDealtHoldSec = holdSec
+    this.hitDealtWeapon = weapon
+    this.forceRedraw = true
+  }
+
+  /** Called when something we shot at came apart. */
+  notifyKillScored(): void {
+    this.killFlashRemainSec = HUD.KILL_FLASH_SEC
     this.forceRedraw = true
   }
 
@@ -177,6 +229,8 @@ export class HUD {
       this.decoyFlashRemainSec > 0 ||
       this.wmCmdFlashRemainSec > 0 ||
       this.hitFlashRemainSec > 0 ||
+      this.hitDealtRemainSec > 0 ||
+      this.killFlashRemainSec > 0 ||
       this.killFeed.length > 0 ||
       this.scoreboardHeld
     if (
@@ -206,6 +260,8 @@ export class HUD {
       this.hitFlashRemainSec = Math.max(0, this.hitFlashRemainSec - dtSec)
       if (this.hitFlashRemainSec === 0) this.hitFlashSeverity = 0
     }
+    if (this.hitDealtRemainSec > 0) this.hitDealtRemainSec = Math.max(0, this.hitDealtRemainSec - dtSec)
+    if (this.killFlashRemainSec > 0) this.killFlashRemainSec = Math.max(0, this.killFlashRemainSec - dtSec)
     if (this.killFeed.length > 0) {
       for (const entry of this.killFeed) entry.remainSec -= dtSec
       this.killFeed = this.killFeed.filter(e => e.remainSec > 0)
@@ -502,7 +558,7 @@ export class HUD {
 
     // STT lock cues — world-space projection
     if (camera && radar.mode === 'STT' && radar.sttTargetId) {
-      const enemies = this.entityManager.getEnemies()
+      const enemies = this.entityManager.getHostiles()
       const target = enemies.find(e => e.entityId === radar.sttTargetId)
       // Play the lock-acquisition animation once when a new STT lock is taken.
       if (radar.sttTargetId !== this.sttAcquire.id) {
@@ -532,12 +588,102 @@ export class HUD {
       uiScale,
     )
 
+    if (this.matchScores) {
+      this.drawMatchScore(ctx, cx, edgePadY + headingBandH + Math.round(18 * uiScale), uiScale)
+    }
+
     if (this.scoreboardHeld) {
       drawScoreboard(ctx, cx, edgePadY + headingBandH + Math.round(48 * uiScale), this.scoreboardRows, uiScale)
     }
 
-    // Drawn last so nothing paints over it.
+    // Drawn last so nothing paints over them.
+    if (this.hitDealtRemainSec > 0) this.drawHitDealtMarker(ctx, cx, cy, uiScale)
+    if (this.killFlashRemainSec > 0) this.drawKillConfirmation(ctx, cx, cy, uiScale)
     if (this.hitFlashRemainSec > 0) this.drawHitFlash(ctx, W, H)
+  }
+
+  /**
+   * Confirmation that our rounds connected: four ticks converging on the aim
+   * point. Deliberately the inverse of [drawHitFlash] — that one is red and at
+   * the edges, this one is white and at the centre — so "I hit him" and "he hit
+   * me" can never be confused at a glance.
+   */
+  private drawHitDealtMarker(ctx: CanvasRenderingContext2D, cx: number, cy: number, uiScale: number): void {
+    const t = this.hitDealtRemainSec / this.hitDealtHoldSec
+    const missile = this.hitDealtWeapon === 'MISSILE'
+    // The marker springs outward as it fades, so overlapping gun hits still read
+    // as separate impacts rather than one static cross.
+    const inner = Math.round((missile ? 13 : 8) * uiScale) + (1 - t) * 5 * uiScale
+    const len = Math.round((missile ? 11 : 6) * uiScale)
+
+    ctx.save()
+    ctx.globalAlpha = Math.min(1, t * 1.4)
+    ctx.strokeStyle = missile ? '#ffdd55' : '#ffffff'
+    ctx.lineWidth = Math.max(1, Math.round((missile ? 2.5 : 1.6) * uiScale))
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+      const x = cx + sx * inner
+      const y = cy + sy * inner
+      ctx.moveTo(x, y)
+      ctx.lineTo(x + sx * len, y + sy * len)
+    }
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /**
+   * `BLUE 12 — 9 RED  /25` under the heading tape. Our own side is brightened
+   * so the number that matters is findable without reading both.
+   */
+  private drawMatchScore(ctx: CanvasRenderingContext2D, cx: number, y: number, uiScale: number): void {
+    const scores = this.matchScores
+    if (!scores) return
+    const fontPx = Math.round(14 * uiScale)
+
+    ctx.save()
+    ctx.font = `bold ${fontPx}px monospace`
+    ctx.textBaseline = 'alphabetic'
+    const gap = Math.round(10 * uiScale)
+
+    ctx.textAlign = 'right'
+    ctx.fillStyle = this.localTeam === 'BLUE' ? '#9ccbff' : '#5f86b5'
+    ctx.fillText(`BLUE ${scores.BLUE}`, cx - gap, y + fontPx)
+
+    ctx.textAlign = 'center'
+    ctx.fillStyle = '#66aa88'
+    ctx.fillText('—', cx, y + fontPx)
+
+    ctx.textAlign = 'left'
+    ctx.fillStyle = this.localTeam === 'RED' ? '#ffa0a0' : '#b56f6f'
+    ctx.fillText(`${scores.RED} RED`, cx + gap, y + fontPx)
+
+    if (this.matchScoreLimit > 0) {
+      ctx.textAlign = 'center'
+      ctx.font = `${Math.round(9 * uiScale)}px monospace`
+      ctx.fillStyle = '#66aa88'
+      ctx.fillText(`FIRST TO ${this.matchScoreLimit}`, cx, y + fontPx + Math.round(11 * uiScale))
+    }
+    ctx.restore()
+  }
+
+  /** Expanding ring + callout when something we shot at comes apart. */
+  private drawKillConfirmation(ctx: CanvasRenderingContext2D, cx: number, cy: number, uiScale: number): void {
+    const t = this.killFlashRemainSec / HUD.KILL_FLASH_SEC
+    ctx.save()
+    ctx.globalAlpha = t
+    ctx.strokeStyle = '#ffdd55'
+    ctx.lineWidth = Math.max(1, Math.round(2 * uiScale))
+    ctx.beginPath()
+    ctx.arc(cx, cy, (18 + (1 - t) * 46) * uiScale, 0, Math.PI * 2)
+    ctx.stroke()
+
+    ctx.fillStyle = '#ffdd55'
+    ctx.font = `bold ${Math.round(15 * uiScale)}px monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillText('SPLASH', cx, cy - Math.round(74 * uiScale))
+    ctx.restore()
   }
 
   /**
@@ -1209,7 +1355,7 @@ export class HUD {
   isRadarShootCueActive(): boolean {
     const radar = this.player.radar.state
     if (radar.mode !== 'STT' || !radar.sttTargetId) return false
-    const target = this.entityManager.getEnemies().find(e => e.entityId === radar.sttTargetId)
+    const target = this.entityManager.getHostiles().find(e => e.entityId === radar.sttTargetId)
     if (!target) return false
     return isShootCue(this.computeShootCue(target))
   }
@@ -1304,7 +1450,7 @@ export class HUD {
     const hmsTargetId = this.player.hms.state.lockedEntityId
     const targetId = sttTargetId ?? hmsTargetId
     if (!targetId) return null
-    return this.entityManager.getEnemies().find(e => e.entityId === targetId) ?? null
+    return this.entityManager.getHostiles().find(e => e.entityId === targetId) ?? null
   }
 
   private getSelectedMissileStore(): LoadedStore | null {
@@ -1329,7 +1475,7 @@ export class HUD {
     ctx.font = '10px monospace'
 
     // Enemy aircraft markers: yellow square + range text.
-    for (const enemy of this.entityManager.getEnemies()) {
+    for (const enemy of this.entityManager.getHostiles()) {
       const screen = this.projectNEDToScreen(camera, enemy.state.positionNED, W, H)
       if (!screen) continue
 
@@ -1352,6 +1498,31 @@ export class HUD {
       // showing, so this is deliberately only for remote players.
       if (enemy instanceof NetworkAircraft) {
         ctx.fillText(enemy.displayName, screen.x + r + 4, screen.y + r + 9)
+      }
+    }
+
+    // Teammates: blue circle + callsign. They are filtered out of the hostile
+    // list so they cannot be locked or shot, which would also have erased them
+    // from the screen entirely — and a team you cannot see is not a team.
+    for (const friendly of this.entityManager.getFriendlies()) {
+      const screen = this.projectNEDToScreen(camera, friendly.state.positionNED, W, H)
+      if (!screen) continue
+
+      const dx = friendly.state.positionNED[0] - ownPos[0]
+      const dy = friendly.state.positionNED[1] - ownPos[1]
+      const dz = friendly.state.positionNED[2] - ownPos[2]
+      const rangeM = Math.hypot(dx, dy, dz)
+      if (rangeM > 120000) continue
+
+      const r = THREE.MathUtils.clamp(11 - rangeM / 12000, 4, 11)
+      ctx.strokeStyle = HUD_FRIENDLY
+      ctx.beginPath()
+      ctx.arc(screen.x, screen.y, r, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.fillStyle = HUD_FRIENDLY
+      ctx.fillText(`${(rangeM / 1000).toFixed(1)}km`, screen.x + r + 4, screen.y - r - 2)
+      if (friendly instanceof NetworkAircraft) {
+        ctx.fillText(friendly.displayName, screen.x + r + 4, screen.y + r + 9)
       }
     }
 
@@ -1434,7 +1605,7 @@ export class HUD {
   }
 
   private collectMissileTTIInfo(): MissileTTIEntry[] {
-    const enemies = this.entityManager.getEnemies()
+    const enemies = this.entityManager.getHostiles()
     return collectMissileTTI(
       this.player.missiles.getMissiles(),
       id => enemies.find(e => e.entityId === id)?.state ?? null,

@@ -2,6 +2,7 @@ import type { ControlInputs } from '../../types/aircraft'
 import type { AIAircraft } from '../AIAircraft'
 import type { Aircraft } from '../../entities/Aircraft'
 import { v3sub, v3len, quatRotateVec, quatConjugate, RAD2DEG } from '../../utils/MathUtils'
+import { neutralControls } from '../../input/neutralControls'
 
 const COVER_DIST_M = 650
 const COVER_LATERAL_M = 380
@@ -37,31 +38,5 @@ export function coverLeader(self: AIAircraft, leader: Aircraft, _dt: number): Co
   const pitch = Math.max(-1, Math.min(1, elErr / 18))
   const roll = Math.max(-1, Math.min(1, azErr / 18))
 
-  return {
-    pitch,
-    roll,
-    yaw: 0,
-    throttle,
-    fireMissile: false,
-    fireGun: false,
-    cycleMissile: false,
-    dispenseFlare: false,
-    dispenseChaff: false,
-    toggleGear: false,
-    cycleFlaps: false,
-    brakeHeld: false,
-    speedBrakeToggle: false,
-    radarModeNext: false,
-    radarSelectNext: false,
-    radarLockTarget: false,
-    radarUnlock: false,
-    ejectRequested: false,
-    tgpToggle: false,
-    tgpLock: false,
-    tgpUnlock: false,
-    wingmanEngage: false,
-    wingmanCover: false,
-    wingmanRTB: false,
-    wingmanRejoin: false,
-  }
+  return neutralControls({ pitch, roll, throttle })
 }

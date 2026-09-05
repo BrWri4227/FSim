@@ -48,10 +48,8 @@ export class Radar {
    * @param skipBeamCheck — When true (AI prosecuting a priority bandit), any target in kinematic range
    *   can be tracked without lying in the instantaneous scan beam. Player radar keeps default false.
    */
-  update(dt: number, ownState: AircraftState, enemies: Aircraft[], cycleMode: boolean, skipBeamCheck = false, groundTargets: GroundTarget[] = []): void {
+  update(dt: number, ownState: AircraftState, enemies: Aircraft[], skipBeamCheck = false, groundTargets: GroundTarget[] = []): void {
     this.time += dt
-
-    if (cycleMode) this.cycleMode()
 
     if (this.state.mode === 'OFF') return
 
@@ -205,17 +203,22 @@ export class Radar {
     return enemy.spec.rcsTableM2[0] ?? 5.0  // head-on RCS
   }
 
-  cycleMode(): void {
-    const modes = ['OFF', 'RWS', 'TWS', 'STT', 'GMTI'] as const
-    const idx = modes.indexOf(this.state.mode)
-    this.state.mode = modes[(idx + 1) % modes.length]!
-    // Switching modes drops the previous track set so air/ground tracks don't mix on screen.
-    if (this.state.mode === 'GMTI' || this.state.mode === 'OFF') {
-      this.state.tracks = []
-      this.trackById.clear()
-      this.state.selectedTrackId = null
-      this.state.sttTargetId = null
-    }
+  /**
+   * Air ⇄ ground search toggle — the only radar mode control the pilot needs.
+   *
+   * This replaces a five-state ring (`OFF → RWS → TWS → STT → GMTI`) that could
+   * blind the radar or drop every aircraft track with one extra keypress in a
+   * merge. Nothing is lost: RWS auto-promotes to TWS on first contact (see
+   * [updateTrack]), and STT is entered and left through [lockSelectedTarget] /
+   * [unlockSTT], so those three were never worth a manual cycle.
+   */
+  toggleAirGround(): void {
+    this.state.mode = this.state.mode === 'GMTI' ? 'RWS' : 'GMTI'
+    // Air and ground tracks must not mix on screen, so the previous set is dropped.
+    this.state.tracks = []
+    this.trackById.clear()
+    this.state.selectedTrackId = null
+    this.state.sttTargetId = null
   }
 
   /** GMTI scan: detects ground targets within range (uses ground RCS, ignores aspect). */

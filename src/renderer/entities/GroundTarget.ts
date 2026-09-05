@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { GroundTargetSpec, GroundTargetState } from '../types/groundTarget'
 import { nedToThree } from '../utils/MathUtils'
+import { SPAWN_FIRE_DELAY_SEC } from '../mission/spawnRules'
 
 let _gtCounter = 0
 
@@ -16,7 +17,16 @@ export class GroundTarget {
   mesh: THREE.Group
   private scene: THREE.Scene
   private healthBarSprite: THREE.Sprite | null = null
-  private samCooldownRemainingSec = 0
+  /**
+   * Seconds until this site may launch again.
+   *
+   * Seeded so a SAM cannot fire on the frame it spawns. Strike Package puts an
+   * SA-10 8 km along the player's route, and it used to loose its first round on
+   * tick zero — the mission opened with a missile already in the air, from well
+   * inside its own no-escape zone, before the player had touched anything. Same
+   * spawn artifact the BVR bandits had.
+   */
+  private samCooldownRemainingSec = SPAWN_FIRE_DELAY_SEC
   private radarDish: THREE.Object3D | null = null   // SAM rotating dish
   private turret:    THREE.Object3D | null = null   // ARMOR turret + barrel group
   private radarRotSpeed = 1.2 + Math.random() * 0.6  // rad/s, slightly randomised

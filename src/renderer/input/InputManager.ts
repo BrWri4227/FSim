@@ -38,7 +38,8 @@ export class InputManager {
   private cycleMissilePrev = false
   private gearPrev = false
   private flapsPrev = false
-  private radarModePrev = false
+  private radarAirGroundPrev = false
+  private padlockPrev = false
   private radarSelectPrev = false
   private radarLockPrev = false
   private radarUnlockPrev = false
@@ -142,11 +143,15 @@ export class InputManager {
     const fireGun      = this.keys.has(DEFAULT_BINDINGS.fireGun)      || this.padDown(gb.fireGun)
     const fireMissile  = this.keys.has(DEFAULT_BINDINGS.fireMissile)  || this.padDown(gb.fireMissile)
     const cycleMissile = this.keys.has(DEFAULT_BINDINGS.cycleMissile) || this.padDown(gb.cycleMissile)
-    const countermeasures = this.keys.has(DEFAULT_BINDINGS.flare)
-      || this.keys.has(DEFAULT_BINDINGS.chaff) || this.padDown(gb.countermeasures)
+    // The pad has no free button to separate them, so its one countermeasure
+    // button still dispenses both. The keyboard treats them as distinct
+    // decisions — see the note on DEFAULT_BINDINGS.chaff.
+    const padCM = this.padDown(gb.countermeasures)
+    const flare = this.keys.has(DEFAULT_BINDINGS.flare) || padCM
+    const chaff = this.keys.has(DEFAULT_BINDINGS.chaff) || padCM
     const gear        = this.keys.has(DEFAULT_BINDINGS.gear)            || this.padDown(gb.toggleGear)
     const flaps       = this.keys.has(DEFAULT_BINDINGS.flaps)           || this.padDown(gb.cycleFlaps)
-    const radarMode   = this.keys.has(DEFAULT_BINDINGS.radarMode)       || this.padDown(gb.radarModeNext)
+    const radarAirGnd = this.keys.has(DEFAULT_BINDINGS.radarAirGround)  || this.padDown(gb.radarAirGround)
     const radarSelect = this.keys.has(DEFAULT_BINDINGS.radarSelectNext) || this.padDown(gb.radarSelectNext)
     const radarLock   = this.keys.has(DEFAULT_BINDINGS.radarLockTarget) || this.padDown(gb.radarLockTarget)
     const radarUnlock = this.keys.has(DEFAULT_BINDINGS.radarUnlock)     || this.padDown(gb.radarUnlock)
@@ -159,13 +164,16 @@ export class InputManager {
     const wmCover  = this.keys.has(DEFAULT_BINDINGS.wingmanCover)
     const wmRtb    = this.keys.has(DEFAULT_BINDINGS.wingmanRTB)
     const wmRejoin = this.keys.has(DEFAULT_BINDINGS.wingmanRejoin)
+    const lookBack = this.keys.has(DEFAULT_BINDINGS.lookBack)
+    const padlock  = this.keys.has(DEFAULT_BINDINGS.padlock)
 
     // Edge detection for one-shot actions
     const fireMissileEdge = fireMissile && !this.fireMissilePrev
     const cycleMissileEdge = cycleMissile && !this.cycleMissilePrev
     const gearEdge = gear && !this.gearPrev
     const flapsEdge = flaps && !this.flapsPrev
-    const radarModeEdge = radarMode && !this.radarModePrev
+    const radarAirGndEdge = radarAirGnd && !this.radarAirGroundPrev
+    const padlockEdge = padlock && !this.padlockPrev
     const radarSelectEdge = radarSelect && !this.radarSelectPrev
     const radarLockEdge = radarLock && !this.radarLockPrev
     const radarUnlockEdge = radarUnlock && !this.radarUnlockPrev
@@ -182,7 +190,8 @@ export class InputManager {
     this.cycleMissilePrev = cycleMissile
     this.gearPrev = gear
     this.flapsPrev = flaps
-    this.radarModePrev = radarMode
+    this.radarAirGroundPrev = radarAirGnd
+    this.padlockPrev = padlock
     this.radarSelectPrev = radarSelect
     this.radarLockPrev = radarLock
     this.radarUnlockPrev = radarUnlock
@@ -203,13 +212,13 @@ export class InputManager {
       fireGun,
       fireMissile: fireMissileEdge,
       cycleMissile: cycleMissileEdge,
-      dispenseFlare: countermeasures,
-      dispenseChaff: countermeasures,
+      dispenseFlare: flare,
+      dispenseChaff: chaff,
       toggleGear: gearEdge,
       cycleFlaps: flapsEdge,
       brakeHeld,
       speedBrakeToggle,
-      radarModeNext: radarModeEdge,
+      radarAirGroundToggle: radarAirGndEdge,
       radarSelectNext: radarSelectEdge,
       radarLockTarget: radarLockEdge,
       radarUnlock: radarUnlockEdge,
@@ -221,6 +230,8 @@ export class InputManager {
       wingmanCover: wmCoverEdge,
       wingmanRTB: wmRtbEdge,
       wingmanRejoin: wmRejoinEdge,
+      lookBack,
+      padlockToggle: padlockEdge,
     }
   }
 

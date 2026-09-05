@@ -131,14 +131,14 @@ export class CockpitController {
       state.loadedStores, gunRounds, selectedWeapon,
       player.cmds.flareCount, player.cmds.chaffCount,
       dataLink, player.targetingPod.state, entityManager.getGroundTargets(),
-      entityManager.getEnemies(),
+      entityManager.getHostiles(),
     )
     this.mfdRight?.update(
       state, player.radar.state, player.rwr.state,
       state.loadedStores, gunRounds, selectedWeapon,
       player.cmds.flareCount, player.cmds.chaffCount,
       dataLink, player.targetingPod.state, entityManager.getGroundTargets(),
-      entityManager.getEnemies(),
+      entityManager.getHostiles(),
     )
   }
 

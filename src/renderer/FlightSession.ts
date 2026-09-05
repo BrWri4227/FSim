@@ -11,6 +11,8 @@ import { PostFXManager, type PostFXQuality } from './postfx/PostFXManager'
 import { AWACS } from './avionics/AWACS'
 import { MultiplayerClient } from './network/MultiplayerClient'
 import type { MultiplayerConfig } from './network/MultiplayerTypes'
+import { DEFAULT_TEAM, opposingTeam } from './network/MultiplayerTypes'
+import type { MatchState } from './network/MultiplayerTypes'
 import type { AircraftSpec } from './types/aircraft'
 import type { LoadedStore } from './types/weapons'
 import { getAircraftById } from './data/aircraft/catalog'
@@ -25,6 +27,7 @@ import { warmupExplosionVisuals, stepExplosionPool, setExplosionAudioHook } from
 import { CockpitController } from './cockpit/CockpitController'
 import { PauseMenu } from './ui/PauseMenu'
 import { RespawnOverlay } from './ui/RespawnOverlay'
+import { MatchEndScreen } from './ui/MatchEndScreen'
 import type { ScoreboardRow } from './ui/HUDElements/Scoreboard'
 import { SortieStats } from './mission/SortieStats'
 import { saveSettings } from './persistence'
@@ -93,6 +96,8 @@ export class FlightSession {
   private respawning = false
   private respawnTimer: ReturnType<typeof setTimeout> | null = null
   private respawnOverlay: RespawnOverlay | null = null
+  /** Up once the server declares the match over; blocks a second board. */
+  private matchEndScreen: MatchEndScreen | null = null
   private static readonly RESPAWN_DELAY_SEC = 5
   private frameDt = FIXED_DT
   private glocEnabled: boolean
@@ -127,6 +132,11 @@ export class FlightSession {
   private static readonly KILL_CREDIT_WINDOW_MS = 10_000
 
   private onComplete: (result: FlightResult) => void
+  /**
+   * Called when a sortie that was meant to be multiplayer could not reach the
+   * session. Never fires for single-player.
+   */
+  private onMultiplayerFailed: ((message: string) => void) | null
 
   constructor(
     spec: AircraftSpec,
@@ -136,10 +146,12 @@ export class FlightSession {
     existingMultiplayerClient: MultiplayerClient | null,
     onComplete: (result: FlightResult) => void,
     options: FlightOptions = DEFAULT_FLIGHT_OPTIONS,
-    onRestart: (() => void) | null = null
+    onRestart: (() => void) | null = null,
+    onMultiplayerFailed: ((message: string) => void) | null = null
   ) {
     this.onComplete = onComplete
     this.onRestart = onRestart
+    this.onMultiplayerFailed = onMultiplayerFailed
     this.scenario = scenario
     this.glocEnabled = options.glocEnabled
     this.autoRudder = options.autoRudder
@@ -193,6 +205,12 @@ export class FlightSession {
       this.audioManager.play(event)
     })
     this.entityManager = new EntityManager(this.sceneManager.scene, this.player)
+    // AI and ground kills were silent — only multiplayer deaths reached the feed.
+    this.entityManager.onEnemyDestroyed = victimName => {
+      this.hud.notifyKillScored()
+      this.hud.notifyKill(this.localDisplayName(), victimName, true, false)
+      this.audioManager.play('KILL_CONFIRMED')
+    }
     this.player.missiles.setOnDecoySuccess(type => {
       this.hud.notifyDecoySuccess(type)
       this.sortieStats.onDecoySuccess()
@@ -205,6 +223,10 @@ export class FlightSession {
     }
     this.player.setOnTargetHit((targetId, zone, severity, weapon) => {
       this.sortieStats.onWeaponHit(weapon)
+      // Delivering side. This callback already fed the stats and the network;
+      // the one party it never told was the pilot who pulled the trigger.
+      this.hud.notifyHitDealt(weapon)
+      this.audioManager.play(weapon === 'GUN' ? 'HIT_DEALT_GUN' : 'HIT_DEALT_MISSILE')
       if (!this.multiplayer || !this.localNetworkId) return
       if (!targetId.startsWith('peer_')) return
       this.multiplayer.sendHit({
@@ -322,7 +344,13 @@ export class FlightSession {
   }
 
   private async startInternal(): Promise<void> {
-    await this.initMultiplayer()
+    const mpError = await this.initMultiplayer()
+    if (mpError !== null) {
+      // Bail before building a world nobody else is in. Continuing here is what
+      // used to drop the player into a silent, empty solo sortie.
+      this.onMultiplayerFailed?.(mpError)
+      return
+    }
     this.applyPeerSpawnOffset()
     // initMultiplayer has resolved by here, so `multiplayer` is settled.
     const spawnCounts = spawnScenario(this.scenario, this.entityManager, this.player, {
@@ -367,15 +395,25 @@ export class FlightSession {
     )
   }
 
-  private async initMultiplayer(): Promise<void> {
-    if (this.multiplayerConfig.mode === 'single') return
+  /**
+   * Returns null on success, or a player-readable reason the session could not
+   * be reached.
+   *
+   * It used to swallow every failure into a `console.warn` and continue, so a
+   * player whose host had gone away launched into an empty sky with no way to
+   * tell that from "nobody else has taken off yet".
+   */
+  private async initMultiplayer(): Promise<string | null> {
+    if (this.multiplayerConfig.mode === 'single') return null
     try {
       if (this.multiplayer && this.multiplayer.isConnected()) {
         this.localNetworkId = this.multiplayer.getLocalPlayerId()
-        return
+        return null
       }
       if (this.multiplayerConfig.mode === 'host') {
-        await window.fsim.multiplayer.startHost(this.multiplayerConfig.port)
+        const bridge = window.fsim?.multiplayer
+        if (!bridge) throw new Error('The desktop bridge is not loaded, so a session cannot be hosted.')
+        await bridge.startHost(this.multiplayerConfig.port)
       }
       const connectHost = this.multiplayerConfig.mode === 'host' ? '127.0.0.1' : this.multiplayerConfig.host
       this.multiplayer = new MultiplayerClient({ aircraftId: this.player.spec.id })
@@ -385,10 +423,12 @@ export class FlightSession {
         port: this.multiplayerConfig.port,
       })
       this.localNetworkId = this.multiplayer.getLocalPlayerId()
+      return null
     } catch (err) {
-      console.warn('LAN multiplayer unavailable, continuing single-player:', err)
+      this.multiplayer?.disconnect()
       this.multiplayer = null
       this.localNetworkId = null
+      return err instanceof Error ? err.message : 'Could not reach the session.'
     }
   }
 
@@ -432,14 +472,27 @@ export class FlightSession {
     if (controls.wingmanCover)  this.entityManager.commandWingmen('COVER')
     if (controls.wingmanRTB)    this.entityManager.commandWingmen('RTB')
     if (controls.wingmanRejoin) this.entityManager.commandWingmen('REJOIN')
+    // View aids. The target itself is resolved in render(), where the camera runs.
+    this.cameraManager.setLookBack(controls.lookBack)
+    if (controls.padlockToggle) this.cameraManager.togglePadlock()
     // Explosion particle pool is shared per-scene across every MissileSystem/BombSystem
     // (player, AI, SAMs, debug) — step it exactly once per tick here, not inside each
     // weapon system's own update().
     stepExplosionPool(this.sceneManager.scene, dt)
-    this.player.update(dt, controls, this.entityManager.getEnemies(), this.localNetworkId ?? undefined, this.entityManager.getGroundTargets())
+    this.player.update(dt, controls, this.entityManager.getHostiles(), this.localNetworkId ?? undefined, this.entityManager.getGroundTargets())
     this.syncMultiplayer(dt)
     this.entityManager.update(dt, this.player)
-    this.awacs.update(dt, this.entityManager.getEnemies(), 'player', this.player.state.positionNED, this.player.spec.nation)
+    // AWACS builds the whole picture and colours it itself, so it needs both
+    // sides — handing it only hostiles would erase teammates from the datalink.
+    this.awacs.update(
+      dt,
+      this.entityManager.getAllAircraft(),
+      'player',
+      this.player.state.positionNED,
+      this.player.spec.nation,
+      this.entityManager.getLocalTeam(),
+      id => this.entityManager.teamOf(id),
+    )
     const targetIds = this.localNetworkId ? ['player', this.localNetworkId] : ['player']
     const inboundMissiles = this.entityManager.getInboundMissiles(targetIds)
     this.player.rwr.addMissileThreats(inboundMissiles, this.player.state)
@@ -449,7 +502,7 @@ export class FlightSession {
         this.sortieStats.onIncomingMissile()
       }
     }
-    this.audioManager.update(this.player, controls, this.entityManager.getEnemies())
+    this.audioManager.update(this.player, controls, this.entityManager.getHostiles())
     const radarShootCueActive = this.hud.isRadarShootCueActive()
     if (radarShootCueActive && !this.wasRadarShootCueActive) {
       this.audioManager.play('SHOOT')
@@ -608,6 +661,30 @@ export class FlightSession {
     ]
   }
 
+  /**
+   * Where the padlock should point: the locked bandit, else the radar cursor's
+   * contact. Returns null when the radar has nothing, which releases the view
+   * rather than leaving it staring at empty sky.
+   *
+   * Deliberately sourced from the radar rather than from raw entity positions —
+   * padlock can only follow something the aircraft has actually detected, so it
+   * cannot be used to see through terrain or find an undetected bandit.
+   */
+  private resolvePadlockTargetNED(): [number, number, number] | null {
+    if (!this.cameraManager.isPadlockEnabled()) return null
+    const radar = this.player.radar
+    const id = radar.getSttTargetId() ?? radar.state.selectedTrackId
+    if (!id) return null
+    const track = radar.getTrack(id)
+    if (!track) return null
+    return [track.positionNED[0], track.positionNED[1], track.positionNED[2]]
+  }
+
+  /** What to call the local pilot in the kill feed. Falls back to "You" solo. */
+  private localDisplayName(): string {
+    return this.multiplayer?.getProfile().callsign || 'You'
+  }
+
   private displayNameFor(playerId: string | null): string | null {
     if (!playerId || !this.multiplayer) return null
     if (playerId === this.localNetworkId) {
@@ -630,6 +707,7 @@ export class FlightSession {
         kills: score.kills,
         deaths: score.deaths,
         isLocal: true,
+        team: this.multiplayer.getProfile().team ?? DEFAULT_TEAM,
       })
     }
     for (const snap of this.multiplayer.getRemoteSnapshots()) {
@@ -642,6 +720,7 @@ export class FlightSession {
         kills: score.kills,
         deaths: score.deaths,
         isLocal: false,
+        team: snap.profile.team ?? DEFAULT_TEAM,
       })
     }
     return rows
@@ -656,7 +735,7 @@ export class FlightSession {
     }, delaySec * 1000)
   }
 
-  private finishMission(outcome: MissionOutcome): void {
+  private finishMission(outcome: MissionOutcome, fromMatchEnd = false): void {
     if (this.disposed) return
     const elapsed = (performance.now() - this.sessionStartTime) / 1000
     const tracker = this.missionTracker
@@ -689,6 +768,7 @@ export class FlightSession {
         : undefined
 
     this.onComplete({
+      fromMatchEnd,
       kills: this.entityManager.killCount,
       groundKills: this.entityManager.groundKillCount,
       deaths,
@@ -710,6 +790,9 @@ export class FlightSession {
     if (!this.multiplayer || !this.multiplayer.isConnected()) return
 
     this.localNetworkId = this.multiplayer.getLocalPlayerId() ?? this.localNetworkId
+    // Our own side comes from the profile we joined with, and is re-read each
+    // tick so a lobby-side switch takes effect without relaunching the flight.
+    this.entityManager.setLocalTeam(this.multiplayer.getProfile().team ?? DEFAULT_TEAM)
     const radarState = this.player.radar.state
     this.multiplayer.queueState({
       positionNED: [...this.player.state.positionNED] as [number, number, number],
@@ -764,6 +847,7 @@ export class FlightSession {
         remoteSpec,
         snap.state,
         snap.profile.callsign,
+        snap.profile.team ?? DEFAULT_TEAM,
       )
     }
     for (const trackedId of prev) {
@@ -786,19 +870,95 @@ export class FlightSession {
     }
 
     for (const death of this.multiplayer.consumeInboundDeaths()) {
+      const ownKill = death.killerId === this.localNetworkId
       this.hud.notifyKill(
         this.displayNameFor(death.killerId),
         this.displayNameFor(death.victimId) ?? death.victimId,
-        death.killerId === this.localNetworkId,
+        ownKill,
         death.victimId === this.localNetworkId,
       )
+      // Same confirmation a bandit kill gets — the server is just the one
+      // telling us this time.
+      if (ownKill) {
+        this.hud.notifyKillScored()
+        this.audioManager.play('KILL_CONFIRMED')
+      }
     }
+
+    // Live team score on the HUD, so the closing kills of a match feel like
+    // they matter rather than disappearing into a held-N tally.
+    const matchState = this.multiplayer.getMatchState()
+    this.hud.setMatchStatus(
+      matchState.phase === 'LIVE' ? matchState.teamScores : null,
+      this.entityManager.getLocalTeam(),
+      this.multiplayer.getMatchConfig().scoreLimit,
+    )
+
+    const ended = this.multiplayer.consumeMatchEnd()
+    if (ended) this.showMatchEnd(ended)
+  }
+
+  /**
+   * Freeze the fight and put the board up. The session stays connected, because
+   * REMATCH has to come back to the same lobby — that flow already exists for
+   * the debrief and is what makes "again" a single click.
+   */
+  private showMatchEnd(match: MatchState): void {
+    if (this.matchEndScreen || !this.multiplayer) return
+    // Nobody gets a post-buzzer kill.
+    this.player.weaponInhibitRemainSec = Number.POSITIVE_INFINITY
+
+    const spec = this.player.spec
+    const stats = this.sortieStats.finalize({
+      gunRoundsFired: (spec.gunSpec?.totalRounds ?? 0) - this.player.gun.getRoundsRemaining(),
+      flaresUsed: (spec.cmdsFlareCount ?? 120) - this.player.cmds.flareCount,
+      chaffUsed: (spec.cmdsChaffCount ?? 120) - this.player.cmds.chaffCount,
+    })
+
+    this.matchEndScreen = new MatchEndScreen(
+      {
+        match,
+        standings: this.collectStandings(),
+        ownStats: stats,
+        isHost: this.multiplayer.isHost(),
+      },
+      {
+        onRematch: () => {
+          this.multiplayer?.requestRematch()
+          this.leaveToLobby('aborted')
+        },
+        onShuffleAndRematch: () => {
+          this.shuffleOwnTeam()
+          this.multiplayer?.requestRematch()
+          this.leaveToLobby('aborted')
+        },
+        onLeave: () => this.leaveToLobby('aborted'),
+      },
+    )
+  }
+
+  /**
+   * Flip our own side. Each client shuffles itself rather than the host
+   * dictating a full assignment — the roster is small, and a peer that owns its
+   * own profile field is one less thing for the protocol to arbitrate.
+   */
+  private shuffleOwnTeam(): void {
+    if (!this.multiplayer) return
+    const current = this.multiplayer.getProfile().team ?? DEFAULT_TEAM
+    this.multiplayer.updateProfile({ team: opposingTeam(current) })
+  }
+
+  private leaveToLobby(outcome: MissionOutcome): void {
+    this.matchEndScreen?.dispose()
+    this.matchEndScreen = null
+    this.finishMission(outcome, true)
   }
 
   private render(): void {
     const playerState = this.player.state
     const cockpitView = this.cameraManager.getMode() === 'COCKPIT'
     this.player.setCockpitViewActive(cockpitView)
+    this.cameraManager.setPadlockTarget(this.resolvePadlockTargetNED(), playerState)
     this.cameraManager.update(this.player, this.frameDt)
     this.player.hms.setHeadDir(this.cameraManager.getHeadAzDeg(), this.cameraManager.getHeadElDeg())
 
@@ -843,6 +1003,8 @@ export class FlightSession {
     this.pauseMenu = null
     this.respawnOverlay?.dispose()
     this.respawnOverlay = null
+    this.matchEndScreen?.dispose()
+    this.matchEndScreen = null
     cancelAnimationFrame(this.rafId)
     if (this.completionTimer !== null) {
       clearTimeout(this.completionTimer)
@@ -879,7 +1041,7 @@ export class FlightSession {
     } else {
       this.multiplayer?.disconnect()
       this.multiplayer = null
-      if (this.multiplayerConfig.mode === 'host') void window.fsim.multiplayer.stopHost()
+      if (this.multiplayerConfig.mode === 'host') void window.fsim?.multiplayer?.stopHost()
     }
 
     return restored

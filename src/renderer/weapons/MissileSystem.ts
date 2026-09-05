@@ -5,10 +5,10 @@ import type { DamageZone } from '../types/damage'
 import type { Aircraft } from '../entities/Aircraft'
 import type { GroundTarget } from '../entities/GroundTarget'
 import { guideMissile, guideMissileCoast, checkIRSeekerLock } from './MissileGuidance'
-import { checkARHLock } from './ActiveRadarSeeker'
+import { checkARHLock, targetRadialSpeedMS } from './ActiveRadarSeeker'
 import { evaluateFlareSeduction, selectBestFlare, computeHeatSignatureKW } from './IRSeeker'
 import { checkProximityFuse, computeLethality, hitZoneFromMissileApproach } from './Warhead'
-import { v3add, v3scale, v3norm, v3sub, v3dist, v3dot, nedToThree, v3len, quatRotateVec } from '../utils/MathUtils'
+import { v3add, v3scale, v3norm, v3sub, v3dist, nedToThree, v3len, quatRotateVec } from '../utils/MathUtils'
 import type { MissileSpec } from '../types/weapons'
 import { MISSILE_SPECS } from '../data/weapons/catalog'
 import { ExplosionManager } from '../scene/ExplosionEffect'
@@ -21,6 +21,17 @@ const _missileDir    = new THREE.Vector3()
 const _missileLookAt = new THREE.Vector3()
 
 const G0 = 9.80665
+
+/**
+ * How long a seeker stays committed to a decoy once seduced.
+ *
+ * Long enough to matter: at terminal closure a couple of seconds chasing a
+ * flare or a chaff cloud is the difference between a hit and a clean miss.
+ * Chaff holds slightly longer because the cloud persists and keeps returning
+ * energy, where a flare burns down fast.
+ */
+const FLARE_SEDUCTION_HOLD_SEC = 1.8
+const CHAFF_SEDUCTION_HOLD_SEC = 2.5
 
 interface CountermeasureProvider {
   cmds?: {
@@ -143,6 +154,28 @@ export class MissileSystem {
 
   setOnDecoySuccess(cb: ((type: 'FLARE' | 'CHAFF') => void) | null): void {
     this.onDecoySuccess = cb
+  }
+
+  /**
+   * Latch the seeker onto a decoy for a fixed hold.
+   *
+   * A seeker already chasing a decoy stays on *that* decoy. Re-aiming at each
+   * newer flare or chaff cloud would defeat the whole mechanism: decoys are
+   * dispensed from the aircraft, so a missile that keeps re-committing to the
+   * freshest one is being walked back onto the target every half second. The
+   * separation that makes a decoy work only accumulates if the seeker commits
+   * and stays committed while the aircraft flies away from it.
+   */
+  private commitToDecoy(
+    m: MissileState,
+    posNED: readonly [number, number, number],
+    velNED: readonly [number, number, number],
+    holdSec: number,
+  ): void {
+    if ((m.decoyRemainSec ?? 0) > 0) return
+    m.decoyTargetPos = [posNED[0], posNED[1], posNED[2]]
+    m.decoyTargetVel = [velNED[0], velNED[1], velNED[2]]
+    m.decoyRemainSec = holdSec
   }
 
   launch(
@@ -302,10 +335,12 @@ export class MissileSystem {
               ]
               const instantHeatKW = computeHeatSignatureKW(target.spec, target.state, seekerToTarget)
               if (evaluateFlareSeduction(seeker, Math.max(1, instantHeatKW), bestFlare.heatSignatureKW)) {
-                guidanceTargetPos = [...bestFlare.positionNED] as [number, number, number]
-                guidanceTargetVel = bestFlare.velocityNED
-                  ? [...bestFlare.velocityNED] as [number, number, number]
-                  : [0, 0, 0]
+                this.commitToDecoy(
+                  m,
+                  bestFlare.positionNED,
+                  bestFlare.velocityNED ?? [0, 0, 0],
+                  FLARE_SEDUCTION_HOLD_SEC,
+                )
                 this.onDecoySuccess?.('FLARE')
               }
             }
@@ -347,7 +382,7 @@ export class MissileSystem {
             const arSeeker = m.spec.arSeeker
             const missileFwd = v3norm(m.velocityNED) as [number, number, number]
             const hasLock = arSeeker && checkARHLock(
-              arSeeker, m.positionNED, m.velocityNED, missileFwd, target.state, target.spec,
+              arSeeker, m.positionNED, missileFwd, target.state, target.spec,
             )
             m.locked = Boolean(hasLock)
             if (!hasLock) {
@@ -393,22 +428,26 @@ export class MissileSystem {
                 if (d2 < nearestChaffDist2) { nearestChaffDist2 = d2; nearestChaff = chaff }
               }
               if (nearestChaff && nearestChaff.rcsM2 > 2.0) {
-                // Beam-aspect factor: the notch manoeuvre (target perpendicular to LOS)
-                // drops closing speed toward zero, making chaff far more convincing.
-                // At closing speed ≥400 m/s (head-on pursuit) the factor floors at 0.25.
-                const losDir = v3norm(v3sub(tPos, m.positionNED)) as [number, number, number]
-                const relVel: [number, number, number] = [
-                  m.velocityNED[0] - tVel[0],
-                  m.velocityNED[1] - tVel[1],
-                  m.velocityNED[2] - tVel[2],
-                ]
-                const closingSpeed = v3dot(relVel, losDir)
-                const beamFactor = Math.max(0.25, 1.0 - Math.min(1, closingSpeed / 400))
+                // Beam-aspect factor: the notch manoeuvre drives the target's own
+                // radial velocity toward zero, at which point its return sits in
+                // the same Doppler bin as the chaff and the seeker cannot tell
+                // them apart.
+                //
+                // This used to be computed from missile-minus-target closure,
+                // which is ~1000 m/s in any real engagement — the factor was
+                // pinned at its 0.25 floor even during a perfect beam, so
+                // notching never made chaff any more convincing.
+                const targetRadial = Math.abs(targetRadialSpeedMS(m.positionNED, target.state))
+                const beamFactor = Math.max(0.25, 1.0 - Math.min(1, targetRadial / 250))
                 const eccmResist = m.spec.eccmResistance ?? 0
                 const seductionP = Math.min(1, dt * 3.2) * beamFactor * (1 - eccmResist)
                 if (Math.random() < seductionP) {
-                  guidanceTargetPos = [...nearestChaff.positionNED] as [number, number, number]
-                  guidanceTargetVel = [...nearestChaff.velocityNED] as [number, number, number]
+                  this.commitToDecoy(
+                    m,
+                    nearestChaff.positionNED,
+                    nearestChaff.velocityNED,
+                    CHAFF_SEDUCTION_HOLD_SEC,
+                  )
                   this.onDecoySuccess?.('CHAFF')
                 }
               }
@@ -420,6 +459,26 @@ export class MissileSystem {
         if (m.guidanceMode !== 'COAST') {
           m.guidanceMode = 'COAST'
           m.locked = false
+        }
+      }
+
+      // ── Decoy hold ─────────────────────────────────────────────────────────
+      // A committed seeker chases the decoy, not the aircraft, until the hold
+      // expires. The decoy is carried forward on its own velocity so the missile
+      // follows a falling flare or a drifting chaff cloud away from the target
+      // rather than sitting on a fixed point the aircraft is still next to.
+      if ((m.decoyRemainSec ?? 0) > 0 && m.decoyTargetPos && m.decoyTargetVel) {
+        m.decoyRemainSec = Math.max(0, (m.decoyRemainSec ?? 0) - dt)
+        m.decoyTargetPos = [
+          m.decoyTargetPos[0] + m.decoyTargetVel[0] * dt,
+          m.decoyTargetPos[1] + m.decoyTargetVel[1] * dt,
+          m.decoyTargetPos[2] + m.decoyTargetVel[2] * dt,
+        ]
+        guidanceTargetPos = [...m.decoyTargetPos] as [number, number, number]
+        guidanceTargetVel = [...m.decoyTargetVel] as [number, number, number]
+        if (m.decoyRemainSec === 0) {
+          m.decoyTargetPos = undefined
+          m.decoyTargetVel = undefined
         }
       }
 

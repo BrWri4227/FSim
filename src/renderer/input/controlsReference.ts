@@ -34,17 +34,27 @@ export const CONTROLS_REFERENCE: ControlGroup[] = [
   {
     label: 'COUNTERMEASURES',
     bindings: [
-      ['Z', 'Dispense countermeasures (flare + chaff)'],
+      ['Z', 'Flares — defeat an IR missile'],
+      ['H', 'Chaff — defeat a radar missile'],
     ],
   },
   {
     label: 'RADAR / AVIONICS',
     bindings: [
-      ['R', 'Radar mode cycle'],
+      ['R', 'Radar air ⇄ ground search'],
       ['T', 'Radar select next track'],
       ['L', 'Lock selected target (STT)'],
       ['U', 'Unlock STT'],
       ['P / O / K', 'TGP power / lock / unlock'],
+    ],
+  },
+  {
+    label: 'VIEW',
+    bindings: [
+      ['Tab', 'Toggle cockpit / external camera'],
+      ['J (hold)', 'Look back over your shoulder'],
+      ['M', 'Padlock the locked bandit'],
+      ['Right-drag', 'Free look'],
     ],
   },
   {
@@ -59,7 +69,6 @@ export const CONTROLS_REFERENCE: ControlGroup[] = [
   {
     label: 'MISC',
     bindings: [
-      ['Tab', 'Toggle cockpit / external camera'],
       ['N (hold)', 'Scoreboard'],
       ['F1 / F2', 'Cycle left / right MFD page'],
       ['F11', 'Toggle fullscreen'],
@@ -76,7 +85,7 @@ export const CONTROLS_REFERENCE: ControlGroup[] = [
       ['RT / LT', 'Fire gun / fire missile'],
       ['RB / LB', 'Cycle missile / countermeasures'],
       ['A / B / X / Y', 'Gear / speed brake / flaps / wheel brakes'],
-      ['D-pad', 'Radar mode · select · unlock · lock'],
+      ['D-pad', 'Radar air/ground · select · unlock · lock'],
       ['L3 / R3', 'TGP power / TGP lock'],
       ['View / Menu', 'Camera toggle / pause'],
       ['Mouse (right-drag)', 'Cockpit freelook'],
