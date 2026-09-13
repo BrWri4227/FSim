@@ -1,11 +1,17 @@
-import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent, NetScore, MatchConfig, MatchState, JoinRejectionReason } from './MultiplayerTypes'
+import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent, NetScore, MatchConfig, MatchState, JoinRejectionReason, NetAIEntity } from './MultiplayerTypes'
 import { DEFAULT_MATCH_CONFIG, PROTOCOL_VERSION, lobbyMatchState } from './MultiplayerTypes'
 
 /** The server's `death` broadcast, as handed to the session. */
 export type DeathEvent = Extract<ServerMessage, { type: 'death' }>
+/** The server's `ai-death` broadcast, as handed to the session. */
+export type AIDeathEvent = Extract<ServerMessage, { type: 'ai-death' }>
 import { quantizePlayerState, missileSetKey } from '../../shared/network/serialization'
 
 const CONNECT_TIMEOUT_MS = 8000
+/** App-level latency probe cadence. Cheap: two tiny frames a second. */
+const PING_INTERVAL_MS = 1000
+/** Smoothing on the RTT readout, so the HUD number does not flicker. */
+const RTT_SMOOTHING = 0.3
 const MAX_INBOUND_HITS = 256
 /** Deaths are far rarer than hits, but the queue still needs a ceiling. */
 const MAX_INBOUND_DEATHS = 64
@@ -24,6 +30,39 @@ export class JoinRejectedError extends Error {
   constructor(readonly reason: JoinRejectionReason) {
     super(describeJoinRejection(reason))
     this.name = 'JoinRejectedError'
+  }
+}
+
+/** Why a session ended, in words a player can act on. */
+export interface DisconnectInfo {
+  code: number
+  reason: string
+  /** False for a drop; true when either side closed deliberately. */
+  wasClean: boolean
+  /** Ready to show on screen. */
+  message: string
+}
+
+/**
+ * Turn a close code into something meaningful.
+ *
+ * 1006 is the important one: browsers report it for every abnormal closure —
+ * the server process dying, the Wi-Fi dropping, a router forgetting the NAT
+ * mapping — with no reason string at all, so the message has to cover the case
+ * without pretending to know which it was.
+ */
+export function describeClose(code: number, reason: string): string {
+  if (reason) return reason
+  switch (code) {
+    case 1000: return 'Disconnected from the session.'
+    case 1001: return 'The session went away.'
+    case 1002: return 'The session closed the connection: nothing was sent in time.'
+    case 1013: return 'That session is full.'
+    case 4003: return 'Wrong password for that session.'
+    case 4004: return 'This build does not match the server.'
+    case 1006:
+    default:
+      return 'Lost contact with the session. It may have stopped, or the network dropped.'
   }
 }
 
@@ -66,6 +105,24 @@ export class MultiplayerClient {
   /** Set once when the match ends; drained by the session. */
   private pendingMatchEnd: MatchState | null = null
   private connected = false
+  /** Smoothed round-trip time in ms; null until the first pong lands. */
+  private rttMs: number | null = null
+  /**
+   * `performance.now()` of the newest peer snapshot. The session hands the same
+   * snapshot to the renderer every tick, so only the client can tell "a fresh
+   * one arrived" from "still showing the last one".
+   */
+  private lastStateArrivalMs = 0
+  /**
+   * AI the host is simulating, as of its last frame. Empty on the host itself —
+   * it owns the real aircraft and never renders its own replicas.
+   */
+  private remoteAI: NetAIEntity[] = []
+  private inboundAIDeaths: AIDeathEvent[] = []
+  private pingTimer: ReturnType<typeof setInterval> | null = null
+  private disconnectListeners: Array<(info: DisconnectInfo) => void> = []
+  /** True once disconnect() was called, so a deliberate close is not reported as a drop. */
+  private closingDeliberately = false
   private localPlayerId: string | null = null
   private profile: NetPlayerProfile
   private rosterListeners: Array<() => void> = []
@@ -169,6 +226,16 @@ export class MultiplayerClient {
         return
       }
 
+      if (msg.type === 'pong') {
+        const sample = Date.now() - msg.t
+        // Exponential smoothing: one slow frame should nudge the readout, not
+        // redefine it, or the HUD number is unreadable on a normal link.
+        this.rttMs = this.rttMs === null
+          ? sample
+          : this.rttMs * (1 - RTT_SMOOTHING) + sample * RTT_SMOOTHING
+        return
+      }
+
       if (msg.type === 'join-rejected') {
         // Handled by the connect() handshake. Nothing to do here.
         return
@@ -213,6 +280,7 @@ export class MultiplayerClient {
       }
 
       if (msg.type === 'state') {
+        this.lastStateArrivalMs = performance.now()
         const prev = this.remotePlayers.get(msg.playerId)
         const wasInLobby = !prev?.state
         const nowInLobby = !msg.state
@@ -239,6 +307,22 @@ export class MultiplayerClient {
         if (this.inboundHits.length < MAX_INBOUND_HITS) {
           this.inboundHits.push(msg.hit)
         }
+        return
+      }
+
+      if (msg.type === 'ai-state') {
+        // The whole live set each frame, so anything missing has gone.
+        this.remoteAI = msg.entities
+        this.lastStateArrivalMs = performance.now()
+        return
+      }
+
+      if (msg.type === 'ai-death') {
+        if (msg.killerId && msg.killerScore) this.scores.set(msg.killerId, msg.killerScore)
+        if (this.inboundAIDeaths.length < MAX_INBOUND_DEATHS) {
+          this.inboundAIDeaths.push(msg)
+        }
+        this.notifyRosterChanged()
         return
       }
 
@@ -276,15 +360,77 @@ export class MultiplayerClient {
       }
     })
 
-    this.ws.addEventListener('close', () => {
+    this.ws.addEventListener('close', event => {
+      const wasConnected = this.connected
       this.connected = false
+      this.stopPinging()
       this.remotePlayers.clear()
       this.scores.clear()
       this.localPlayerId = null
+      this.rttMs = null
+      this.remoteAI = []
       this.notifyRosterChanged()
+
+      // A close we asked for is not news. One we did not is the thing that used
+      // to look, mid-flight, like everyone quietly leaving at once.
+      if (this.closingDeliberately || !wasConnected) return
+      const code = event.code
+      const reason = String(event.reason ?? '')
+      const info: DisconnectInfo = {
+        code,
+        reason,
+        wasClean: event.wasClean === true,
+        message: describeClose(code, reason),
+      }
+      for (const listener of [...this.disconnectListeners]) listener(info)
     })
 
     await handshake
+    this.startPinging()
+  }
+
+  private startPinging(): void {
+    this.stopPinging()
+    const timer = setInterval(() => {
+      if (!this.isConnected()) return
+      this.send({ type: 'ping', t: Date.now() })
+    }, PING_INTERVAL_MS)
+    // Node's timer keeps a test process alive otherwise; the browser has no unref.
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    this.pingTimer = timer
+  }
+
+  private stopPinging(): void {
+    if (this.pingTimer !== null) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = null
+    }
+  }
+
+  /** Smoothed round-trip time in ms, or null before the first reply. */
+  getRttMs(): number | null {
+    return this.rttMs
+  }
+
+  /**
+   * Seconds since the last snapshot from any peer, or 0 when none is expected.
+   * Rising while peers are present means the link has stalled and remote
+   * aircraft are being extrapolated.
+   */
+  secondsSinceLastPeerState(): number {
+    if (this.lastStateArrivalMs === 0) return 0
+    return Math.max(0, (performance.now() - this.lastStateArrivalMs) / 1000)
+  }
+
+  /**
+   * Called when the session drops for a reason the player did not ask for.
+   * Returns an unsubscribe function.
+   */
+  onDisconnected(cb: (info: DisconnectInfo) => void): () => void {
+    this.disconnectListeners.push(cb)
+    return () => {
+      this.disconnectListeners = this.disconnectListeners.filter(l => l !== cb)
+    }
   }
 
   isConnected(): boolean {
@@ -392,6 +538,31 @@ export class MultiplayerClient {
     return out
   }
 
+  // ── AI (host-simulated) ────────────────────────────────────────────────────
+
+  /** The host's live AI set. Empty on the host, which has the real aircraft. */
+  getRemoteAI(): readonly NetAIEntity[] {
+    return this.remoteAI
+  }
+
+  consumeInboundAIDeaths(): AIDeathEvent[] {
+    const out = [...this.inboundAIDeaths]
+    this.inboundAIDeaths.length = 0
+    return out
+  }
+
+  /** Host only — the server drops these from anyone else. */
+  sendAIState(entities: NetAIEntity[]): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'ai-state', entities })
+  }
+
+  /** Host only. Reports an AI destroyed, and who to credit. */
+  sendAIDeath(aiId: string, killerId: string | null): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'ai-death', aiId, killerId })
+  }
+
   // ── Match ──────────────────────────────────────────────────────────────────
 
   getMatchConfig(): MatchConfig { return this.matchConfig }
@@ -436,6 +607,9 @@ export class MultiplayerClient {
   }
 
   disconnect(): void {
+    // Marks the close as expected so listeners are not told the link dropped.
+    this.closingDeliberately = true
+    this.stopPinging()
     if (this.ws) this.ws.close()
     this.ws = null
     this.connected = false
@@ -454,6 +628,10 @@ export class MultiplayerClient {
     this.lastSentRadarMode = null
     this.lastSentMissileKey = ''
     this.lastCmSignature = '0:0'
+    this.rttMs = null
+    this.lastStateArrivalMs = 0
+    this.remoteAI = []
+    this.inboundAIDeaths.length = 0
     this.notifyRosterChanged()
   }
 

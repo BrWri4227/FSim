@@ -94,6 +94,10 @@ export class HUD {
   private matchScores: TeamScores | null = null
   private localTeam: Team = 'BLUE'
   private matchScoreLimit = 0
+  /** Smoothed round-trip time to the session, or null in single-player. */
+  private linkRttMs: number | null = null
+  /** Seconds since the newest snapshot from any peer. Rises when the link stalls. */
+  private linkStaleSec = 0
   /** Local peer id so inbound-missile markers resolve MP shots aimed at `peer_N`. */
   private localNetworkId: string | null = null
   private lastRenderMs = 0
@@ -176,6 +180,18 @@ export class HUD {
     this.localTeam = localTeam
     this.matchScoreLimit = scoreLimit
     if (changed) this.forceRedraw = true
+  }
+
+  /**
+   * Connection quality, drawn as a small readout in the corner.
+   *
+   * Over a LAN this is noise; across the internet to a Pi it is the difference
+   * between "my aim is off" and "the link is 300 ms behind", which the player
+   * otherwise has no way to tell apart.
+   */
+  setLinkQuality(rttMs: number | null, staleSec: number): void {
+    this.linkRttMs = rttMs
+    this.linkStaleSec = staleSec
   }
 
   notifyKill(killer: string | null, victim: string, ownKill: boolean, ownDeath: boolean): void {
@@ -592,6 +608,10 @@ export class HUD {
       this.drawMatchScore(ctx, cx, edgePadY + headingBandH + Math.round(18 * uiScale), uiScale)
     }
 
+    if (this.linkRttMs !== null) {
+      this.drawLinkQuality(ctx, edgePadX, H - edgePadY, uiScale)
+    }
+
     if (this.scoreboardHeld) {
       drawScoreboard(ctx, cx, edgePadY + headingBandH + Math.round(48 * uiScale), this.scoreboardRows, uiScale)
     }
@@ -664,6 +684,31 @@ export class HUD {
       ctx.fillStyle = '#66aa88'
       ctx.fillText(`FIRST TO ${this.matchScoreLimit}`, cx, y + fontPx + Math.round(11 * uiScale))
     }
+    ctx.restore()
+  }
+
+  /**
+   * `LINK 42ms` bottom-left, amber then red as it degrades.
+   *
+   * The stale timer matters as much as the ping: a link can show a healthy RTT
+   * while snapshots have stopped arriving, and that is exactly when remote
+   * aircraft are being extrapolated and will jump when the truth lands.
+   */
+  private drawLinkQuality(ctx: CanvasRenderingContext2D, x: number, y: number, uiScale: number): void {
+    const rtt = this.linkRttMs
+    if (rtt === null) return
+    const stalled = this.linkStaleSec > 1
+    const fontPx = Math.round(10 * uiScale)
+
+    ctx.save()
+    ctx.font = `${fontPx}px monospace`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillStyle = stalled || rtt > 250 ? '#ff6666' : rtt > 120 ? '#ffcc66' : '#66aa88'
+    const label = stalled
+      ? `LINK ${Math.round(rtt)}ms  NO DATA ${this.linkStaleSec.toFixed(1)}s`
+      : `LINK ${Math.round(rtt)}ms`
+    ctx.fillText(label, x, y)
     ctx.restore()
   }
 

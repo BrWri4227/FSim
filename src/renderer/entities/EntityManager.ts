@@ -15,7 +15,7 @@ import type { PlayerAircraft } from './PlayerAircraft'
 import { NetworkAircraft } from './NetworkAircraft'
 import { GroundTarget } from './GroundTarget'
 import type { GroundTargetSpec } from '../types/groundTarget'
-import type { NetPlayerState, Team } from '../network/MultiplayerTypes'
+import type { DamageZone, NetPlayerState, Team } from '../network/MultiplayerTypes'
 import { DEFAULT_TEAM } from '../network/MultiplayerTypes'
 
 /** Horizontal distance beyond which AI physics/behaviour updates are skipped. */
@@ -65,6 +65,7 @@ export class EntityManager {
   spawnEnemy(spec: AircraftSpec, stores: LoadedStore[], behavior: AIBehavior, spawnPos: Vec3, spawnVel: Vec3): AIAircraft {
     const ai = new AIAircraft(spec, stores, this.scene, behavior, spawnPos, spawnVel)
     this.enemies.push(ai)
+    this.wireAIHitReporting(ai)
     this.invalidateContactCaches()
     return ai
   }
@@ -73,7 +74,70 @@ export class EntityManager {
     const wm = new AIAircraft(spec, stores, this.scene, 'FOLLOW_BEHIND', spawnPos, spawnVel)
     wm.side = 'WINGMAN'
     this.wingmen.push(wm)
+    this.wireAIHitReporting(wm)
     return wm
+  }
+
+  // ── AI replication (host only) ─────────────────────────────────────────────
+
+  /**
+   * Told when one of our AI hits a remote player.
+   *
+   * Only the host simulates AI, and remote players are invincible locally, so
+   * the damage has to be reported to the victim's own client — nobody else is
+   * in a position to know it happened.
+   */
+  onAIHitRemotePlayer:
+    | ((aiEntityId: string, targetId: string, zone: DamageZone, severity: number, weapon: 'GUN' | 'MISSILE') => void)
+    | null = null
+
+  private wireAIHitReporting(ai: AIAircraft): void {
+    const report = (weapon: 'GUN' | 'MISSILE') =>
+      (target: Aircraft, zone: DamageZone, severity: number): void => {
+        // Only remote players need telling; local damage already happened.
+        if (!this.remotePlayers.has(target.entityId)) return
+        this.onAIHitRemotePlayer?.(ai.entityId, target.entityId, zone, severity, weapon)
+      }
+    ai.gun.setOnTargetHit(report('GUN'))
+    ai.missiles.setOnTargetHit(report('MISSILE'))
+  }
+
+  /** Every AI this client is simulating, hostile and friendly alike. */
+  getSimulatedAI(): AIAircraft[] {
+    return [...this.enemies, ...this.wingmen]
+  }
+
+  /**
+   * Apply a hit that a remote player reported against one of our AI.
+   *
+   * Returns true when the AI was destroyed by it, so the caller can report the
+   * kill. Damage stays client-authoritative, as it is for players — the
+   * difference is that for AI the authority is the host rather than the victim.
+   */
+  applyHitToAI(aiEntityId: string, zone: DamageZone, severity: number): boolean {
+    const ai = this.getSimulatedAI().find(a => a.entityId === aiEntityId)
+    if (!ai) return false
+    const wasDown = ai.damage.structuralFailure || ai.state.ejected
+    ai.applyIncomingHit(zone, severity)
+    return !wasDown && (ai.damage.structuralFailure || ai.state.ejected)
+  }
+
+  /**
+   * Mirror the host's AI as ordinary remote aircraft.
+   *
+   * Reusing [upsertRemotePlayer] is the whole trick: an AI arriving over the
+   * wire is indistinguishable from a human as far as interpolation, team
+   * filtering, radar and the HUD are concerned, so none of that needs an AI
+   * case.
+   */
+  upsertRemoteAI(
+    aiId: string,
+    aircraftSpec: AircraftSpec,
+    state: NetPlayerState,
+    label: string,
+    team: Team,
+  ): void {
+    this.upsertRemotePlayer(aiId, aircraftSpec, state, label, team)
   }
 
   getWingmen(): AIAircraft[] {

@@ -4,6 +4,7 @@ import type { IncomingMessage } from 'http'
 import type {
   HitEvent,
   JoinRejectionReason,
+  NetAIEntity,
   NetPlayerProfile,
   MatchConfig,
   MatchState,
@@ -23,9 +24,13 @@ import { isValidMatchConfig } from '../shared/network/validation'
 import {
   MAX_MESSAGE_BYTES,
   isPlausibleHit,
+  isValidAIStateFrame,
   isValidHitEvent,
   isValidPlayerState,
   isValidProfile,
+  isWellFormedHit,
+  nedDistanceM,
+  sanitizeAIEntity,
   sanitizeProfile,
 } from '../shared/network/validation'
 
@@ -128,6 +133,22 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
   let hostId: string | null = null
   let timeLimitTimer: ReturnType<typeof setTimeout> | null = null
 
+  /**
+   * Last known team and position of each AI, from the host's `ai-state`.
+   *
+   * The server does not simulate, but it still has to range- and team-check
+   * hits involving AI. Without this the AI half of every engagement would be
+   * unvalidated, which is a much larger hole than the one the peer checks close.
+   */
+  const aiEntities = new Map<string, { team: Team; positionNED: [number, number, number] }>()
+
+  /** Ranges match the hit validator; AI use the same weapons players do. */
+  const AI_HIT_MAX_RANGE_M = 70_500
+
+  function clearAI(): void {
+    aiEntities.clear()
+  }
+
   function clearTimeLimit(): void {
     if (timeLimitTimer !== null) {
       clearTimeout(timeLimitTimer)
@@ -182,6 +203,8 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
       peer.kills = 0
       peer.deaths = 0
     }
+    // Whatever the previous match left behind is not this match's.
+    clearAI()
     if (matchConfig.timeLimitSec > 0) {
       timeLimitTimer = setTimeout(() => endMatch(leadingTeam()), matchConfig.timeLimitSec * 1000)
       if (typeof timeLimitTimer.unref === 'function') timeLimitTimer.unref()
@@ -192,6 +215,7 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
 
   function returnToLobbyPhase(): void {
     clearTimeLimit()
+    clearAI()
     match = lobbyMatchState()
     for (const peer of peers.values()) {
       peer.kills = 0
@@ -343,6 +367,13 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
       if (typeof parsed !== 'object' || parsed === null) return
       const msg = parsed as Record<string, unknown>
 
+      if (msg['type'] === 'ping') {
+        // Echoed verbatim; the client measures against its own clock, so the
+        // two machines never have to agree on the time.
+        if (typeof msg['t'] === 'number') send(socket, { type: 'pong', t: msg['t'] })
+        return
+      }
+
       if (msg['type'] === 'query') {
         // Answered without joining and without occupying a player slot, so the
         // lobby can show a name, a count and a ping for a typed address.
@@ -454,9 +485,82 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
         return
       }
 
+      if (msg['type'] === 'ai-state') {
+        // Only the host simulates AI. Anyone else claiming to would be spawning
+        // aircraft on everyone's screen.
+        if (peerId !== hostId) return
+        if (!isValidAIStateFrame(msg['entities'])) return
+        const entities = (msg['entities'] as NetAIEntity[]).map(sanitizeAIEntity)
+
+        // Rebuilt from the frame: it is the complete set of live AI, so an
+        // entity that has gone is one that died or despawned.
+        aiEntities.clear()
+        for (const e of entities) {
+          aiEntities.set(e.id, { team: e.team, positionNED: e.state.positionNED })
+        }
+        broadcast({ type: 'ai-state', entities }, peerId)
+        return
+      }
+
+      if (msg['type'] === 'ai-death') {
+        if (peerId !== hostId) return
+        const aiId = msg['aiId']
+        if (typeof aiId !== 'string' || !aiEntities.has(aiId)) return
+        const rawKillerId = msg['killerId']
+        if (rawKillerId !== null && typeof rawKillerId !== 'string') return
+
+        aiEntities.delete(aiId)
+
+        const killerPeer = typeof rawKillerId === 'string' ? peers.get(rawKillerId) : undefined
+        const scoring = killerPeer?.profile ? killerPeer : undefined
+        // Personal credit and a kill-feed line, but deliberately not the team
+        // score: that number is the PvP race to `scoreLimit`, and letting AI
+        // kills drive it would let a match be won without meeting anyone.
+        if (scoring && match.phase !== 'ENDED') scoring.kills++
+
+        broadcast({
+          type: 'ai-death',
+          aiId,
+          killerId: scoring ? scoring.id : null,
+          killerScore: scoring ? { kills: scoring.kills, deaths: scoring.deaths } : null,
+        })
+        return
+      }
+
       if (msg['type'] === 'hit') {
-        if (!isValidHitEvent(msg['hit'], peerId)) return
+        if (!isWellFormedHit(msg['hit'])) return
         const hit = msg['hit'] as HitEvent
+
+        // ── AI on the receiving end: a player shot at something the host owns.
+        const targetAI = aiEntities.get(hit.targetId)
+        if (targetAI) {
+          if (!isValidHitEvent(hit, peerId)) return
+          const sourcePeer = peers.get(hit.sourceId)
+          if (!sourcePeer?.state) return
+          if (teamOf(sourcePeer) === targetAI.team) return
+          if (nedDistanceM(sourcePeer.state.positionNED, targetAI.positionNED) > AI_HIT_MAX_RANGE_M) return
+          // Only the host can act on it — it owns the AI's damage model.
+          const host = hostId ? peers.get(hostId) : undefined
+          if (host) send(host.socket, { type: 'hit', hit })
+          return
+        }
+
+        // ── AI on the delivering end: the host reporting one of its AI hitting
+        // a player. The host is the only peer entitled to speak for an AI.
+        const sourceAI = aiEntities.get(hit.sourceId)
+        if (sourceAI) {
+          if (peerId !== hostId) return
+          const targetPeer = peers.get(hit.targetId)
+          if (!targetPeer?.state || !targetPeer.profile) return
+          if (teamOf(targetPeer) === sourceAI.team) return
+          if (targetPeer.state.ejected) return
+          if (nedDistanceM(sourceAI.positionNED, targetPeer.state.positionNED) > AI_HIT_MAX_RANGE_M) return
+          send(targetPeer.socket, { type: 'hit', hit })
+          return
+        }
+
+        // ── Player on player, unchanged.
+        if (!isValidHitEvent(hit, peerId)) return
         const sourcePeer = peers.get(hit.sourceId)
         const targetPeer = peers.get(hit.targetId)
         if (!sourcePeer?.state || !targetPeer?.state) return
@@ -549,6 +653,10 @@ export function createGameServer(opts: GameServerOptions): Promise<GameServer> {
       // If the host left, someone has to own the rules or the session can never
       // start another match.
       if (peerId === hostId) {
+        // The AI lived in that client's process. A new host starts with none
+        // rather than inheriting aircraft it never simulated.
+        clearAI()
+        broadcast({ type: 'ai-state', entities: [] })
         hostId = null
         electHost(true)
       }

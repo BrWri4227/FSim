@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import { createGameServer, type GameServer } from './GameServer'
-import { PROTOCOL_VERSION } from '../shared/network/MultiplayerTypes'
+import { DEFAULT_MATCH_CONFIG, PROTOCOL_VERSION } from '../shared/network/MultiplayerTypes'
 
 const servers: GameServer[] = []
 
@@ -355,6 +355,186 @@ describe('GameServer match', () => {
     }
   }
 
+  // ── AI replication ─────────────────────────────────────────────────────────
+  //
+  // AI is simulated by the host alone and replicated to everyone else. The
+  // server does not simulate, but it still tracks each AI's team and position
+  // so hits involving one are range- and team-checked like any other.
+
+  function aiEntity(id: string, team: 'BLUE' | 'RED', pos: [number, number, number]): Record<string, unknown> {
+    return {
+      id,
+      aircraftId: 'mig29',
+      team,
+      label: 'Bandit',
+      state: playerState(pos),
+    }
+  }
+
+  it('relays AI from the host and from nobody else', async () => {
+    const srv = await startServer()
+    const { host, other } = await twoSides(srv.port)
+
+    host.send(JSON.stringify({ type: 'ai-state', entities: [aiEntity('ai_1', 'RED', [0, 0, -5000])] }))
+    const relayed = await nextMessageOfType(other, 'ai-state')
+    expect((relayed['entities'] as unknown[]).length).toBe(1)
+
+    // The non-host claiming to run AI would be spawning aircraft on everyone's
+    // screen; the server drops it silently.
+    other.send(JSON.stringify({ type: 'ai-state', entities: [aiEntity('ai_evil', 'BLUE', [0, 0, -5000])] }))
+    await expect(nextMessageOfType(host, 'ai-state')).rejects.toThrow(/never received|timed out/)
+
+    host.close(); other.close()
+  })
+
+  it('rejects a malformed AI frame whole rather than in part', async () => {
+    const srv = await startServer()
+    const { host, other } = await twoSides(srv.port)
+
+    host.send(JSON.stringify({
+      type: 'ai-state',
+      entities: [aiEntity('ai_1', 'RED', [0, 0, -5000]), { id: 'ai_2', aircraftId: 'mig29' }],
+    }))
+    // Accepting the valid half would silently despawn everything after the bad
+    // entry, since the frame is the complete live set.
+    await expect(nextMessageOfType(other, 'ai-state')).rejects.toThrow(/never received|timed out/)
+
+    host.close(); other.close()
+  })
+
+  it('routes a hit on an AI to the host alone', async () => {
+    const srv = await startServer()
+    const { host, other, otherId } = await twoSides(srv.port)
+
+    host.send(JSON.stringify({ type: 'ai-state', entities: [aiEntity('ai_1', 'BLUE', [0, 0, -5000])] }))
+    await nextMessageOfType(other, 'ai-state')
+    other.send(JSON.stringify({ type: 'state', state: playerState([100, 0, -5000]) }))
+    await nextMessageOfType(host, 'state')
+
+    // RED shooting a BLUE AI. Only the host owns that damage model.
+    other.send(JSON.stringify({
+      type: 'hit',
+      hit: { sourceId: otherId, targetId: 'ai_1', zone: 'ENGINE', severity: 0.9, weapon: 'GUN' },
+    }))
+    const delivered = await nextMessageOfType(host, 'hit')
+    expect((delivered['hit'] as Record<string, unknown>)['targetId']).toBe('ai_1')
+
+    host.close(); other.close()
+  })
+
+  it('refuses a hit on an AI of the shooter\'s own side', async () => {
+    const srv = await startServer()
+    const { host, other, otherId } = await twoSides(srv.port)
+
+    // A RED AI, shot at by the RED player.
+    host.send(JSON.stringify({ type: 'ai-state', entities: [aiEntity('ai_1', 'RED', [0, 0, -5000])] }))
+    await nextMessageOfType(other, 'ai-state')
+    other.send(JSON.stringify({ type: 'state', state: playerState([100, 0, -5000]) }))
+    await nextMessageOfType(host, 'state')
+
+    other.send(JSON.stringify({
+      type: 'hit',
+      hit: { sourceId: otherId, targetId: 'ai_1', zone: 'ENGINE', severity: 0.9, weapon: 'GUN' },
+    }))
+    await expect(nextMessageOfType(host, 'hit')).rejects.toThrow(/never received|timed out/)
+
+    host.close(); other.close()
+  })
+
+  it('refuses a hit on an AI from impossibly far away', async () => {
+    const srv = await startServer()
+    const { host, other, otherId } = await twoSides(srv.port)
+
+    host.send(JSON.stringify({ type: 'ai-state', entities: [aiEntity('ai_1', 'BLUE', [0, 0, -5000])] }))
+    await nextMessageOfType(other, 'ai-state')
+    other.send(JSON.stringify({ type: 'state', state: playerState([500_000, 0, -5000]) }))
+    await nextMessageOfType(host, 'state')
+
+    other.send(JSON.stringify({
+      type: 'hit',
+      hit: { sourceId: otherId, targetId: 'ai_1', zone: 'ENGINE', severity: 0.9, weapon: 'MISSILE' },
+    }))
+    await expect(nextMessageOfType(host, 'hit')).rejects.toThrow(/never received|timed out/)
+
+    host.close(); other.close()
+  })
+
+  it('lets only the host speak for an AI that hits a player', async () => {
+    const srv = await startServer()
+    const { host, other, otherId } = await twoSides(srv.port)
+
+    host.send(JSON.stringify({ type: 'ai-state', entities: [aiEntity('ai_1', 'BLUE', [0, 0, -5000])] }))
+    await nextMessageOfType(other, 'ai-state')
+    other.send(JSON.stringify({ type: 'state', state: playerState([200, 0, -5000]) }))
+    await nextMessageOfType(host, 'state')
+
+    host.send(JSON.stringify({
+      type: 'hit',
+      hit: { sourceId: 'ai_1', targetId: otherId, zone: 'WING_LEFT', severity: 0.5, weapon: 'MISSILE' },
+    }))
+    const delivered = await nextMessageOfType(other, 'hit')
+    expect((delivered['hit'] as Record<string, unknown>)['sourceId']).toBe('ai_1')
+
+    // The victim inventing an AI-sourced hit on the host would be handing
+    // itself damage it can already apply locally, or worse, framing the AI.
+    other.send(JSON.stringify({
+      type: 'hit',
+      hit: { sourceId: 'ai_1', targetId: 'peer_1', zone: 'ENGINE', severity: 1, weapon: 'GUN' },
+    }))
+    await expect(nextMessageOfType(host, 'hit')).rejects.toThrow(/never received|timed out/)
+
+    host.close(); other.close()
+  })
+
+  it('credits an AI kill to the shooter without moving the team score', async () => {
+    const srv = await startServer()
+    const { host, other, otherId } = await twoSides(srv.port)
+    host.send(JSON.stringify({ type: 'start-match' }))
+    await nextMessageOfType(host, 'match-state')
+    await nextMessageOfType(other, 'match-state')
+
+    host.send(JSON.stringify({ type: 'ai-state', entities: [aiEntity('ai_1', 'BLUE', [0, 0, -5000])] }))
+    await nextMessageOfType(other, 'ai-state')
+
+    host.send(JSON.stringify({ type: 'ai-death', aiId: 'ai_1', killerId: otherId }))
+    const death = await nextMessageOfType(other, 'ai-death')
+    expect(death['aiId']).toBe('ai_1')
+    expect(death['killerId']).toBe(otherId)
+    expect(death['killerScore']).toEqual({ kills: 1, deaths: 0 })
+
+    // The score limit is the PvP race. An AI kill must not advance it, or a
+    // match could be won without meeting anyone.
+    await expect(nextMessageOfType(other, 'match-state')).rejects.toThrow(/never received|timed out/)
+
+    host.close(); other.close()
+  })
+
+  it('ignores an AI death for something that was never alive', async () => {
+    const srv = await startServer()
+    const { host, other, otherId } = await twoSides(srv.port)
+
+    host.send(JSON.stringify({ type: 'ai-death', aiId: 'ai_ghost', killerId: otherId }))
+    await expect(nextMessageOfType(other, 'ai-death')).rejects.toThrow(/never received|timed out/)
+
+    host.close(); other.close()
+  })
+
+  it('clears the AI when the host leaves, rather than orphaning it', async () => {
+    const srv = await startServer()
+    const { host, other } = await twoSides(srv.port)
+
+    host.send(JSON.stringify({ type: 'ai-state', entities: [aiEntity('ai_1', 'RED', [0, 0, -5000])] }))
+    await nextMessageOfType(other, 'ai-state')
+
+    // Those aircraft lived in the host's process. A new host never simulated
+    // them, so everyone is told they are gone.
+    host.close()
+    const cleared = await nextMessageOfType(other, 'ai-state')
+    expect(cleared['entities']).toEqual([])
+
+    other.close()
+  })
+
   it('names the first joined peer as host and ships the rules in the welcome', async () => {
     const srv = await startServer()
     const a = await connect(srv.port)
@@ -362,7 +542,7 @@ describe('GameServer match', () => {
     const welcome = await nextMessageOfType(a, 'welcome')
 
     expect(welcome['hostId']).toBe(welcome['playerId'])
-    expect(welcome['config']).toEqual({ mode: 'TDM', scoreLimit: 25, timeLimitSec: 720 })
+    expect(welcome['config']).toEqual(DEFAULT_MATCH_CONFIG)
     expect(welcome['match']).toMatchObject({ phase: 'LOBBY', winner: null })
 
     a.close()

@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createGameServer, type GameServer } from '../../server/GameServer'
 import { MultiplayerClient } from './MultiplayerClient'
-import type { NetPlayerState, Team } from './MultiplayerTypes'
+import type { NetAIEntity, NetPlayerState, Team } from './MultiplayerTypes'
 
 const servers: GameServer[] = []
 const clients: MultiplayerClient[] = []
@@ -217,6 +217,185 @@ describe('multiplayer session (client ↔ server, end to end)', () => {
     bob.disconnect()
 
     await waitFor(() => alice.getRemoteSnapshots().length === 0, 'Bob never left the roster')
+  })
+
+  /**
+   * The whole concurrent-session model: several sessions on one box are several
+   * server processes on several ports. Nothing routes between them, and this is
+   * the test that says so.
+   */
+  it('keeps two sessions on two ports completely separate', async () => {
+    const alphaSrv = await startServer()
+    const bravoSrv = await startServer()
+    expect(alphaSrv.port).not.toBe(bravoSrv.port)
+
+    const alice = await joinClient(alphaSrv.port, 'Alice', 'f16c', 'BLUE')
+    const bob = await joinClient(alphaSrv.port, 'Bob', 'mig29', 'RED')
+    const carol = await joinClient(bravoSrv.port, 'Carol')
+
+    await waitFor(() => alice.getRemoteSnapshots().length === 1, 'Alice never saw Bob')
+
+    // Carol is alone on her port, and neither side sees the other.
+    expect(carol.getRemoteSnapshots()).toHaveLength(0)
+    expect(alice.getRemoteSnapshots().map(p => p.profile.callsign)).toEqual(['Bob'])
+    expect(alphaSrv.playerCount()).toBe(2)
+    expect(bravoSrv.playerCount()).toBe(1)
+
+    // Flight state does not leak across the port boundary.
+    pushState(alice, [4321, 0, -6000])
+    await waitFor(
+      () => bob.getRemoteSnapshots()[0]?.state?.positionNED[0] === 4321,
+      'Alice position never reached Bob',
+    )
+    expect(carol.getRemoteSnapshots()).toHaveLength(0)
+
+    // Nor do scores: a kill on Alpha leaves Bravo's standings untouched.
+    pushState(bob, [4321, 60, -6000])
+    await waitFor(() => alice.getRemoteSnapshots()[0]?.state !== null, 'Bob never sent state')
+    bob.sendDeath(alice.getLocalPlayerId())
+    await waitFor(
+      () => alice.getScore(alice.getLocalPlayerId()!).kills === 1,
+      'Alice was never credited on Alpha',
+    )
+    expect(carol.getScore(carol.getLocalPlayerId()!)).toEqual({ kills: 0, deaths: 0 })
+
+    // And each still identifies itself independently.
+    await waitFor(() => carol.getRemoteSnapshots().length === 0, 'Bravo should still be empty')
+  })
+
+  it('refuses a join with the wrong password and admits the right one', async () => {
+    const srv = await createGameServer({ port: 0, heartbeatIntervalMs: 60_000, password: 'hunter2' })
+    servers.push(srv)
+
+    const wrong = new MultiplayerClient({ aircraftId: 'f16c', callsign: 'Nope' })
+    clients.push(wrong)
+    await expect(
+      wrong.connect({ mode: 'join', host: '127.0.0.1', port: srv.port }, 'guess'),
+    ).rejects.toMatchObject({ reason: 'bad-password' })
+
+    const right = new MultiplayerClient({ aircraftId: 'f16c', callsign: 'Yep' })
+    clients.push(right)
+    await right.connect({ mode: 'join', host: '127.0.0.1', port: srv.port }, 'hunter2')
+    expect(right.getLocalPlayerId()).not.toBeNull()
+  })
+
+  it('measures round-trip time against the server', async () => {
+    const srv = await startServer()
+    const alice = await joinClient(srv.port, 'Alice')
+
+    expect(alice.getRttMs()).toBeNull()
+    await waitFor(() => alice.getRttMs() !== null, 'no pong ever came back', 4000)
+    // Loopback, so this is small — but it must be a real, sane measurement.
+    expect(alice.getRttMs()!).toBeGreaterThanOrEqual(0)
+    expect(alice.getRttMs()!).toBeLessThan(2000)
+  })
+
+  it('tells the player when the session goes away underneath them', async () => {
+    const srv = await createGameServer({ port: 0, heartbeatIntervalMs: 60_000 })
+    const alice = new MultiplayerClient({ aircraftId: 'f16c', callsign: 'Alice' })
+    clients.push(alice)
+    await alice.connect({ mode: 'join', host: '127.0.0.1', port: srv.port })
+
+    const drops: string[] = []
+    alice.onDisconnected(info => drops.push(info.message))
+
+    // The server stopping is the case that used to look, from the cockpit,
+    // like everyone quietly leaving at once.
+    await srv.close()
+
+    await waitFor(() => drops.length === 1, 'the drop was never reported')
+    expect(drops[0]!.length).toBeGreaterThan(0)
+    expect(alice.isConnected()).toBe(false)
+  })
+
+  it('does not report a disconnect the player asked for', async () => {
+    const srv = await startServer()
+    const alice = await joinClient(srv.port, 'Alice')
+
+    let reported = 0
+    alice.onDisconnected(() => reported++)
+    alice.disconnect()
+
+    await new Promise(r => setTimeout(r, 150))
+    expect(reported).toBe(0)
+  })
+
+  /**
+   * AI replication. The host simulates, everyone else receives — which is what
+   * lets a session be something other than Dogfight. Each client used to run an
+   * unreplicated copy from the same descriptor and diverge within seconds.
+   */
+  describe('host-simulated AI', () => {
+    function aiEntity(id: string, team: Team, pos: [number, number, number]): NetAIEntity {
+      return { id, aircraftId: 'mig29', team, label: 'Bandit', state: playerState(pos) }
+    }
+
+    it('reaches the other players, and nobody else can send it', async () => {
+      const srv = await startServer()
+      const host = await joinClient(srv.port, 'Host', 'f16c', 'BLUE')
+      const guest = await joinClient(srv.port, 'Guest', 'mig29', 'RED')
+      await waitFor(() => host.isHost(), 'the first joiner should own the session')
+
+      host.sendAIState([aiEntity('ai_1', 'RED', [500, 0, -6000])])
+      await waitFor(() => guest.getRemoteAI().length === 1, 'AI never reached the guest')
+
+      const seen = guest.getRemoteAI()[0]!
+      expect(seen.label).toBe('Bandit')
+      expect(seen.team).toBe('RED')
+      expect(seen.state.positionNED[0]).toBe(500)
+      // The host holds the real aircraft and never renders replicas of its own.
+      expect(host.getRemoteAI()).toHaveLength(0)
+
+      // A guest claiming to run AI would be spawning aircraft on every screen.
+      guest.sendAIState([aiEntity('ai_evil', 'BLUE', [0, 0, -6000])])
+      await new Promise(r => setTimeout(r, 150))
+      expect(host.getRemoteAI()).toHaveLength(0)
+    })
+
+    it('despawns an AI the host stops sending', async () => {
+      const srv = await startServer()
+      const host = await joinClient(srv.port, 'Host', 'f16c', 'BLUE')
+      const guest = await joinClient(srv.port, 'Guest', 'mig29', 'RED')
+
+      host.sendAIState([aiEntity('ai_1', 'RED', [0, 0, -6000]), aiEntity('ai_2', 'RED', [0, 100, -6000])])
+      await waitFor(() => guest.getRemoteAI().length === 2, 'both AI never arrived')
+
+      // The frame is the whole live set, so an absent entity is a despawn.
+      host.sendAIState([aiEntity('ai_2', 'RED', [0, 100, -6000])])
+      await waitFor(() => guest.getRemoteAI().length === 1, 'the dead AI never went away')
+      expect(guest.getRemoteAI()[0]!.id).toBe('ai_2')
+    })
+
+    it('credits an AI kill to the player who shot it', async () => {
+      const srv = await startServer()
+      const host = await joinClient(srv.port, 'Host', 'f16c', 'BLUE')
+      const guest = await joinClient(srv.port, 'Guest', 'mig29', 'RED')
+
+      host.sendAIState([aiEntity('ai_1', 'BLUE', [0, 0, -6000])])
+      await waitFor(() => guest.getRemoteAI().length === 1, 'AI never reached the guest')
+
+      const guestId = guest.getLocalPlayerId()!
+      host.sendAIDeath('ai_1', guestId)
+
+      await waitFor(() => guest.getScore(guestId).kills === 1, 'the AI kill was never credited')
+      expect(guest.consumeInboundAIDeaths().map(d => d.aiId)).toEqual(['ai_1'])
+      // Its own destruction is not a death against the player who shot it.
+      expect(guest.getScore(guestId).deaths).toBe(0)
+    })
+
+    it('clears the AI when the host leaves', async () => {
+      const srv = await startServer()
+      const host = await joinClient(srv.port, 'Host', 'f16c', 'BLUE')
+      const guest = await joinClient(srv.port, 'Guest', 'mig29', 'RED')
+
+      host.sendAIState([aiEntity('ai_1', 'RED', [0, 0, -6000])])
+      await waitFor(() => guest.getRemoteAI().length === 1, 'AI never reached the guest')
+
+      // Those aircraft lived in the host's process; a new host never ran them.
+      host.disconnect()
+      await waitFor(() => guest.getRemoteAI().length === 0, 'orphaned AI was left behind')
+      await waitFor(() => guest.isHost(), 'the guest should have been promoted')
+    })
   })
 
   it('propagates a callsign change mid-session', async () => {

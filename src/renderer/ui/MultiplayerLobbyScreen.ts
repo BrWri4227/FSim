@@ -1,4 +1,5 @@
 import type { AircraftSpec } from '../types/aircraft'
+import type { ScenarioDescriptor } from '../types/mission'
 import type { MultiplayerConfig, Team } from '../network/MultiplayerTypes'
 import {
   DEFAULT_TEAM,
@@ -7,13 +8,14 @@ import {
   TEAMS,
   isValidSessionPort,
 } from '../network/MultiplayerTypes'
-import { MultiplayerClient } from '../network/MultiplayerClient'
+import { JoinRejectedError, MultiplayerClient } from '../network/MultiplayerClient'
+import { describeProbe, probeServer, type ProbeResult } from '../network/probeServer'
 import { AIRCRAFT_ROSTER, getAircraftById } from '../data/aircraft/catalog'
 import { deriveAircraftIdentity } from '../data/aircraft/identity'
 import { LOADOUT_PRESETS, buildPreset, summariseStores, type LoadoutPreset } from '../data/hardpoints/presets'
 import { loadSettings, saveSettings, MAX_SAVED_SERVERS, type SavedServer } from '../persistence'
 import { MAX_CALLSIGN_LENGTH, sanitizeCallsign } from '../../shared/network/validation'
-import { DOGFIGHT } from '../mission/scenarios'
+import { DOGFIGHT, SCENARIO_CATALOG, getScenarioById } from '../mission/scenarios'
 
 export interface LobbyLaunchArgs {
   spec: AircraftSpec
@@ -21,6 +23,8 @@ export interface LobbyLaunchArgs {
   team: Team
   config: MultiplayerConfig
   client: MultiplayerClient
+  /** The scenario the host chose, which everyone flies. */
+  scenario: ScenarioDescriptor
 }
 
 export interface MultiplayerLobbyCallbacks {
@@ -54,9 +58,10 @@ function stripIpcPrefix(message: string): string {
  * launched whenever they felt like it. The host now owns the rules; players own
  * their aircraft; and the roster shows both sides at a glance.
  *
- * The scenario is fixed to Dogfight because it is the only one that makes sense
- * over a LAN: every other scenario spawns AI independently and unreplicated on
- * each client, so each player would fight a private copy of the same bandits.
+ * The host also picks the scenario. It used to be locked to Dogfight, because
+ * AI was unreplicated and each client would have fought a private copy of the
+ * same bandits. The host now simulates the AI and replicates it, so every
+ * scenario is a real option again.
  */
 export class MultiplayerLobbyScreen {
   private el: HTMLDivElement
@@ -71,6 +76,19 @@ export class MultiplayerLobbyScreen {
   /** Set while the port field holds something unusable; shown under the row. */
   private portError = ''
   private savedServers: SavedServer[]
+  /**
+   * Password for the session being joined. Held only for this screen's lifetime
+   * and never persisted — a game-server password in localStorage is plain text
+   * on disk, and the field is quick enough to retype.
+   */
+  private password = ''
+  /** Shown once a probe or a refused join says the session wants one. */
+  private passwordNeeded = false
+  /** Result of the last TEST, keyed to nothing — it is about the typed address. */
+  private probeLine = ''
+  private probing = false
+  /** Probe results for saved rows, keyed `host:port`. Populated only by REFRESH. */
+  private savedProbes = new Map<string, ProbeResult>()
   private statusMessage = 'Not connected.'
   private statusTone: 'ok' | 'warn' | 'error' = 'warn'
   private errorMessage = ''
@@ -82,6 +100,7 @@ export class MultiplayerLobbyScreen {
   private ready = false
 
   private unsubscribeRoster: (() => void) | null = null
+  private unsubscribeDisconnect: (() => void) | null = null
   private unsubscribeEvents: (() => void) | null = null
   private hostEvents: Array<{ message: string; timestamp: number }> = []
   private preserveClientOnDispose = false
@@ -166,6 +185,17 @@ export class MultiplayerLobbyScreen {
     this.connected = true
     this.mode = mode
     this.unsubscribeRoster = client.onRosterChanged(() => this.render())
+    // Without this, a server that stops just empties the roster: the screen
+    // still says "Joined", and the player is left guessing where everyone went.
+    this.unsubscribeDisconnect = client.onDisconnected(info => {
+      this.client = null
+      this.connected = false
+      this.ready = false
+      this.statusTone = 'error'
+      this.statusMessage = 'Connection lost.'
+      this.errorMessage = info.message
+      this.render()
+    })
     this.statusTone = 'ok'
     this.statusMessage = mode === 'host'
       ? `Hosting at ${this.hostLanIp}:${this.port}`
@@ -204,15 +234,24 @@ export class MultiplayerLobbyScreen {
         team: this.team,
         ready: false,
       })
-      await client.connect({
-        mode,
-        host: mode === 'host' ? '127.0.0.1' : this.joinHost,
-        port: this.port,
-      })
+      await client.connect(
+        {
+          mode,
+          host: mode === 'host' ? '127.0.0.1' : this.joinHost,
+          port: this.port,
+        },
+        this.password.length > 0 ? this.password : undefined,
+      )
       this.adoptClient(client, mode)
+      this.passwordNeeded = false
     } catch (err) {
       this.client = null
       this.connected = false
+      // A refusal names its reason, so the screen can react rather than just
+      // print: a wrong password puts the password box on screen.
+      if (err instanceof JoinRejectedError && err.reason === 'bad-password') {
+        this.passwordNeeded = true
+      }
       this.errorMessage = err instanceof Error ? stripIpcPrefix(err.message) : 'Could not connect.'
       this.statusTone = 'error'
       this.statusMessage = mode === 'host' ? 'Failed to create lobby.' : 'Failed to join.'
@@ -223,6 +262,8 @@ export class MultiplayerLobbyScreen {
   private async disconnect(stopHost = true): Promise<void> {
     this.unsubscribeRoster?.()
     this.unsubscribeRoster = null
+    this.unsubscribeDisconnect?.()
+    this.unsubscribeDisconnect = null
     this.client?.disconnect()
     this.client = null
     this.connected = false
@@ -236,6 +277,57 @@ export class MultiplayerLobbyScreen {
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
+
+  // ── Probing ────────────────────────────────────────────────────────────────
+
+  /**
+   * Ask one address what it is. Contacts exactly what the player typed, only
+   * when they press the button — nothing here scans or discovers.
+   */
+  private async testAddress(): Promise<void> {
+    if (this.probing) return
+    this.probing = true
+    this.probeLine = 'Checking…'
+    this.render()
+
+    const result = await probeServer(this.joinHost, this.port)
+    this.probing = false
+    this.probeLine = describeProbe(result)
+    // Save the player a failed join by asking for the password up front.
+    if (result.ok && result.info.requiresPassword) this.passwordNeeded = true
+    this.render()
+  }
+
+  /** Check every saved address at once, so a busy session is visible at a glance. */
+  private async refreshSavedServers(): Promise<void> {
+    if (this.probing || this.savedServers.length === 0) return
+    this.probing = true
+    this.render()
+
+    const entries = [...this.savedServers]
+    const results = await Promise.all(entries.map(e => probeServer(e.host, e.port)))
+    for (const [i, entry] of entries.entries()) {
+      const result = results[i]
+      if (result) this.savedProbes.set(`${entry.host}:${entry.port}`, result)
+    }
+
+    this.probing = false
+    this.render()
+  }
+
+  /** Short status for a saved row: players and ping, or why it did not answer. */
+  private savedRowStatus(entry: SavedServer): { text: string; color: string } {
+    const result = this.savedProbes.get(`${entry.host}:${entry.port}`)
+    if (!result) return { text: '', color: '#446644' }
+    if (!result.ok) return { text: 'no answer', color: '#886666' }
+    const { info, rttMs } = result
+    const lock = info.requiresPassword ? ' LOCKED' : ''
+    const live = info.match?.phase === 'LIVE' ? ' LIVE' : ''
+    return {
+      text: `${info.players}/${info.maxPlayers} · ${rttMs}ms${lock}${live}`,
+      color: info.players > 0 ? '#00ff88' : '#66886e',
+    }
+  }
 
   // ── Saved addresses ────────────────────────────────────────────────────────
 
@@ -284,6 +376,17 @@ export class MultiplayerLobbyScreen {
         'border:1px solid #226644;cursor:pointer'
       add.onclick = () => this.saveCurrentAddress()
       head.appendChild(add)
+
+      if (this.savedServers.length > 0) {
+        const refresh = document.createElement('button')
+        refresh.textContent = this.probing ? 'CHECKING…' : 'REFRESH'
+        refresh.disabled = this.probing
+        refresh.style.cssText =
+          'padding:2px 8px;font:10px monospace;background:#0a150a;color:#88bb88;' +
+          'border:1px solid #226644;cursor:pointer'
+        refresh.onclick = () => void this.refreshSavedServers()
+        head.appendChild(refresh)
+      }
     }
     wrap.appendChild(head)
 
@@ -315,6 +418,14 @@ export class MultiplayerLobbyScreen {
         this.render()
       }
       row.appendChild(pick)
+
+      const status = this.savedRowStatus(entry)
+      if (status.text) {
+        const statusEl = document.createElement('span')
+        statusEl.textContent = status.text
+        statusEl.style.cssText = `font:10px monospace;color:${status.color};white-space:nowrap`
+        row.appendChild(statusEl)
+      }
 
       const del = document.createElement('button')
       del.textContent = 'X'
@@ -420,6 +531,30 @@ export class MultiplayerLobbyScreen {
     box.appendChild(portErrorEl)
     box.appendChild(this.savedServersRow())
 
+    if (!this.connected && this.passwordNeeded) {
+      const pwRow = document.createElement('div')
+      pwRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px'
+      const pwLabel = document.createElement('span')
+      pwLabel.textContent = 'Password'
+      pwLabel.style.cssText = 'font-size:11px;color:#88bb88;min-width:70px'
+      const pwInput = document.createElement('input')
+      pwInput.type = 'password'
+      pwInput.value = this.password
+      pwInput.placeholder = 'required by this session'
+      pwInput.style.cssText =
+        'flex:1;min-width:0;max-width:240px;background:#0a150a;color:#00ff88;' +
+        'border:1px solid #226644;font:11px monospace;padding:4px'
+      pwInput.oninput = () => { this.password = pwInput.value }
+      pwRow.appendChild(pwLabel)
+      pwRow.appendChild(pwInput)
+      box.appendChild(pwRow)
+
+      const pwNote = document.createElement('div')
+      pwNote.textContent = 'Not saved — retype it next time.'
+      pwNote.style.cssText = 'font-size:10px;color:#446644;margin-bottom:8px'
+      box.appendChild(pwNote)
+    }
+
     const buttons = document.createElement('div')
     buttons.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap'
     if (this.connected) {
@@ -429,8 +564,22 @@ export class MultiplayerLobbyScreen {
     } else {
       buttons.appendChild(this.actionButton('HOST', () => void this.connect('host'), true))
       buttons.appendChild(this.actionButton('JOIN', () => void this.connect('join')))
+      const test = this.actionButton(
+        this.probing ? 'CHECKING…' : 'TEST',
+        () => void this.testAddress(),
+      )
+      test.disabled = this.probing
+      test.title = 'Ask that address what it is, without joining'
+      buttons.appendChild(test)
     }
     box.appendChild(buttons)
+
+    if (this.probeLine) {
+      const probeEl = document.createElement('div')
+      probeEl.textContent = this.probeLine
+      probeEl.style.cssText = 'font-size:11px;color:#aaffcc;margin-top:8px'
+      box.appendChild(probeEl)
+    }
 
     const status = document.createElement('div')
     const color = this.statusTone === 'ok' ? '#66ff66' : this.statusTone === 'error' ? '#ff6666' : '#88bb88'
@@ -643,7 +792,52 @@ export class MultiplayerLobbyScreen {
     numberRow('Time limit (min)', Math.round(config.timeLimitSec / 60), 0, 120, v =>
       client.setMatchConfig({ ...config, timeLimitSec: v * 60 }))
 
+    const scenarioLabel = document.createElement('div')
+    scenarioLabel.textContent = 'Scenario'
+    scenarioLabel.style.cssText = 'font-size:11px;color:#88bb88;margin:8px 0 4px'
+    box.appendChild(scenarioLabel)
+
+    const grid = document.createElement('div')
+    grid.style.cssText =
+      'display:grid;grid-template-columns:repeat(auto-fill,minmax(min(180px,100%),1fr));gap:6px'
+    const current = this.selectedScenario(client)
+    for (const scenario of SCENARIO_CATALOG) {
+      const active = scenario.id === current.id
+      const card = document.createElement('div')
+      card.style.cssText =
+        `border:1px solid ${active ? '#00ff88' : '#226644'};padding:6px;` +
+        `background:${active ? '#0f2a1a' : '#0a150a'};` +
+        `cursor:${isHost ? 'pointer' : 'default'};${isHost ? '' : 'opacity:0.55'}`
+      card.innerHTML =
+        `<div style="font-size:11px;color:${active ? '#00ff88' : '#cceecc'}">${scenario.name}</div>` +
+        `<div style="font-size:9px;color:#66886e;margin-top:2px">${scenario.briefing ?? ''}</div>`
+      if (isHost) {
+        card.onclick = () => {
+          client.setMatchConfig({ ...config, scenarioId: scenario.id })
+          this.render()
+        }
+      }
+      grid.appendChild(card)
+    }
+    box.appendChild(grid)
+
+    const note = document.createElement('div')
+    note.textContent = isHost
+      ? 'You run the AI for everyone. Time of day and weather come from the scenario.'
+      : `Flying ${current.name}, chosen by the host.`
+    note.style.cssText = 'font-size:10px;color:#446644;margin-top:6px'
+    box.appendChild(note)
+
     return box
+  }
+
+  /**
+   * The scenario the whole session flies, from the server-owned match config.
+   * Falls back to Dogfight, which is what a session used to be locked to.
+   */
+  private selectedScenario(client: MultiplayerClient): ScenarioDescriptor {
+    const id = client.getMatchConfig().scenarioId
+    return (id ? getScenarioById(id) : null) ?? DOGFIGHT
   }
 
   private launchPanel(client: MultiplayerClient): HTMLDivElement {
@@ -686,9 +880,10 @@ export class MultiplayerLobbyScreen {
       'padding:14px clamp(24px,6vw,48px);font:bold clamp(14px,2vw,16px) monospace;background:#0a2a0a;' +
       'color:#00ff88;border:2px solid #00ff88;cursor:pointer;letter-spacing:3px;margin-top:12px;display:block'
     launch.onclick = () => {
+      const scenario = this.selectedScenario(client)
       saveSettings({
         lastAircraftId: this.spec.id,
-        lastScenarioId: DOGFIGHT.id,
+        lastScenarioId: scenario.id,
         lastTeam: this.team,
         lastLoadoutPreset: this.preset,
         callsign: sanitizeCallsign(this.callsign),
@@ -700,6 +895,7 @@ export class MultiplayerLobbyScreen {
         spec: this.spec,
         preset: this.preset,
         team: this.team,
+        scenario,
         config: {
           mode: this.mode,
           host: this.mode === 'host' ? this.hostLanIp : this.joinHost,
@@ -740,6 +936,8 @@ export class MultiplayerLobbyScreen {
     this.unsubscribeEvents = null
     this.unsubscribeRoster?.()
     this.unsubscribeRoster = null
+    this.unsubscribeDisconnect?.()
+    this.unsubscribeDisconnect = null
     if (!this.preserveClientOnDispose) void this.disconnect(false)
     this.el.remove()
   }

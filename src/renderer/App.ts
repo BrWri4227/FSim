@@ -9,7 +9,7 @@ import type { MultiplayerClient } from './network/MultiplayerClient'
 import type { AircraftSpec, WeaponCategory } from './types/aircraft'
 import type { LoadedStore } from './types/weapons'
 import type { FlightResult, ScenarioDescriptor } from './types/mission'
-import { DEFAULT_SCENARIO, DOGFIGHT } from './mission/scenarios'
+import { DEFAULT_SCENARIO } from './mission/scenarios'
 import { loadSettings, recordSortie } from './persistence'
 import { EMPTY_SORTIE_STATS } from './mission/SortieStats'
 import { buildPreset, type LoadoutPreset } from './data/hardpoints/presets'
@@ -34,18 +34,18 @@ function storesForPreset(spec: AircraftSpec, preset: LoadoutPreset): LoadedStore
 }
 
 /**
- * Flight options for a LAN sortie. Time of day and weather come from the
- * scenario, never the player: neither is replicated, so two pilots on different
- * settings would be flying measurably different air.
+ * Flight options for a multiplayer sortie. Time of day and weather come from
+ * the scenario, never the player: neither is replicated, so two pilots on
+ * different settings would be flying measurably different air.
  */
-function flightOptionsFromSettings(): FlightOptions {
+function flightOptionsFromSettings(scenario: ScenarioDescriptor): FlightOptions {
   const saved = loadSettings()
   return {
     glocEnabled: saved.glocEnabled,
     autoRudder: saved.autoRudder,
     invertPitch: saved.invertPitch,
-    timeOfDay: DOGFIGHT.timeOfDay ?? 'DAY',
-    weather: DOGFIGHT.weather ?? 'CLEAR',
+    timeOfDay: scenario.timeOfDay ?? 'DAY',
+    weather: scenario.weather ?? 'CLEAR',
     masterVolume: saved.masterVolume,
     postFXQuality: saved.postFXQuality,
   }
@@ -116,16 +116,16 @@ export class App {
   }
 
   /**
-   * LAN lobby. The scenario is fixed to Dogfight: every other scenario spawns AI
-   * independently and unreplicated on each client, so choosing one for a LAN
-   * session gave each player a private copy of the same bandits.
+   * Multiplayer lobby. The scenario is the host's choice, carried in the
+   * server-owned match config so every client flies the same one. It used to be
+   * forced to Dogfight because AI was not replicated; the host now simulates it
+   * for everyone.
    */
   private enterLobby(initialError: string | null = null): void {
     this.state = 'LOBBY'
     this.clearScreens()
     this.flightSession?.dispose()
     this.flightSession = null
-    this.selectedScenario = DOGFIGHT
 
     const restore = this.lobbyRestore
     this.lobbyRestore = null
@@ -134,12 +134,13 @@ export class App {
       {
         onLaunch: args => {
           this.inMultiplayer = true
+          this.selectedScenario = args.scenario
           this.enterFlight({
             spec: args.spec,
             stores: storesForPreset(args.spec, args.preset),
             multiplayer: args.config,
             client: args.client,
-            options: flightOptionsFromSettings(),
+            options: flightOptionsFromSettings(args.scenario),
           })
         },
         onBack: () => this.enterMainMenu(),

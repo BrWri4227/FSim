@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { MultiplayerClient, resolveSessionUrl } from './MultiplayerClient'
+import {
+  MultiplayerClient,
+  describeClose,
+  describeJoinRejection,
+  resolveSessionUrl,
+} from './MultiplayerClient'
 import type { NetMissileState, NetPlayerState } from './MultiplayerTypes'
 
 function mkMissile(id: string): NetMissileState {
@@ -158,5 +163,37 @@ describe('resolveSessionUrl', () => {
   it('passes through an explicit ws:// or wss:// URL', () => {
     expect(resolveSessionUrl('wss://play.example.com', 8080)).toBe('wss://play.example.com')
     expect(resolveSessionUrl('ws://10.0.0.1:1234/', 8080)).toBe('ws://10.0.0.1:1234')
+  })
+})
+
+describe('describeClose', () => {
+  it('prefers the reason the server actually gave', () => {
+    expect(describeClose(4003, 'wrong key, mate')).toBe('wrong key, mate')
+  })
+
+  it('explains an abnormal closure, which carries no reason at all', () => {
+    // 1006 is what a browser reports for the server dying, the Wi-Fi dropping,
+    // or a router forgetting the NAT mapping — with an empty reason string.
+    const message = describeClose(1006, '')
+    expect(message).toMatch(/lost contact/i)
+    expect(message.length).toBeGreaterThan(20)
+  })
+
+  it('names the specific refusals a player can act on', () => {
+    expect(describeClose(1013, '')).toMatch(/full/i)
+    expect(describeClose(4003, '')).toMatch(/password/i)
+    expect(describeClose(4004, '')).toMatch(/does not match/i)
+  })
+
+  it('always says something, even for a code it has never seen', () => {
+    expect(describeClose(4999, '').length).toBeGreaterThan(0)
+  })
+})
+
+describe('describeJoinRejection', () => {
+  it('gives every reason a distinct, actionable line', () => {
+    const messages = (['full', 'bad-password', 'version'] as const).map(describeJoinRejection)
+    expect(new Set(messages).size).toBe(3)
+    for (const m of messages) expect(m.length).toBeGreaterThan(10)
   })
 })

@@ -82,6 +82,33 @@ export interface ServerInfo {
   config: MatchConfig
 }
 
+/**
+ * One AI aircraft, as the room's host sees it.
+ *
+ * AI is simulated by the host and nobody else. Each client used to run its own
+ * unreplicated copy from the same descriptor, which diverged within seconds:
+ * everyone fought a private set of bandits and reported kills nobody else saw.
+ * That is why AI was suppressed outright in a live session, and why multiplayer
+ * was Dogfight-only.
+ *
+ * The pose reuses [NetPlayerState] so the same validation, quantisation and
+ * interpolation apply as for a human — on the receiving side an AI *is* just
+ * another remote aircraft.
+ */
+export interface NetAIEntity {
+  /** The host's own entity id for it. Unique because only one peer sends these. */
+  id: string
+  aircraftId: string
+  /** Which side it fights for, so the existing team filtering handles it. */
+  team: Team
+  /** Shown on the HUD like a callsign. */
+  label: string
+  state: NetPlayerState
+}
+
+/** Ceiling on one `ai-state` frame — a scenario with more than this is a bug. */
+export const MAX_NET_AI_ENTITIES = 32
+
 /** Why a join was refused. Each maps to a specific line in the lobby. */
 export type JoinRejectionReason = 'full' | 'bad-password' | 'version'
 
@@ -112,6 +139,15 @@ export interface MatchConfig {
   scoreLimit: number
   /** Wall-clock cap. Whoever leads when it expires wins. */
   timeLimitSec: number
+  /**
+   * Scenario everyone flies. The host owns it because AI, time of day and
+   * weather all come from it, and two pilots on different scenarios would be
+   * flying measurably different air.
+   *
+   * Optional so a peer on an older build still validates; receivers fall back
+   * to Dogfight, which is what a session used to be locked to.
+   */
+  scenarioId?: string
 }
 
 export type MatchPhase = 'LOBBY' | 'LIVE' | 'ENDED'
@@ -135,10 +171,14 @@ export interface MatchState {
  * twenty-five-minute one that fizzles — the point is to reach the board and the
  * rematch button while everyone still wants another go.
  */
+/** What a session is when nobody has chosen otherwise. */
+export const DEFAULT_MATCH_SCENARIO_ID = 'dogfight'
+
 export const DEFAULT_MATCH_CONFIG: MatchConfig = {
   mode: 'TDM',
   scoreLimit: 25,
   timeLimitSec: 12 * 60,
+  scenarioId: DEFAULT_MATCH_SCENARIO_ID,
 }
 
 export function emptyTeamScores(): TeamScores {
@@ -220,6 +260,13 @@ export type ClientMessage =
    * taking a slot in the session or committing to it.
    */
   | { type: 'query' }
+  /**
+   * Round-trip probe. The WebSocket protocol has its own ping/pong, but a
+   * browser client cannot observe it — `WebSocket` exposes no hook — so latency
+   * has to be measured at the application level. `t` is the sender's clock and
+   * comes straight back untouched, so no clock comparison is involved.
+   */
+  | { type: 'ping'; t: number }
   | {
       type: 'join'
       profile: NetPlayerProfile
@@ -247,10 +294,24 @@ export type ClientMessage =
   | { type: 'start-match' }
   /** Host only. Clears the scores and returns everyone to LOBBY. */
   | { type: 'request-rematch' }
+  /**
+   * Host only. The full set of live AI this tick; anything absent has died or
+   * despawned. Sent as a set rather than as deltas so a client that missed a
+   * frame self-corrects on the next one.
+   */
+  | { type: 'ai-state'; entities: NetAIEntity[] }
+  /**
+   * Host only. An AI came apart, and who to credit. Separate from `death`,
+   * which is a peer reporting its own destruction — an AI cannot report itself,
+   * and there is no peer whose death count should rise.
+   */
+  | { type: 'ai-death'; aiId: string; killerId: string | null }
 
 export type ServerMessage =
   /** Reply to `query`. The socket closes straight after. */
   | { type: 'server-info'; info: ServerInfo }
+  /** Echo of a `ping`, carrying its `t` unchanged. */
+  | { type: 'pong'; t: number }
   /**
    * The join did not happen, and why. Sent instead of `welcome`, immediately
    * before the close, so the client can say something specific rather than
@@ -306,6 +367,15 @@ export type ServerMessage =
   | {
       type: 'hit'
       hit: HitEvent
+    }
+  /** Relayed from the host, unchanged. */
+  | { type: 'ai-state'; entities: NetAIEntity[] }
+  /** An AI was destroyed. `killerScore` is the killer's new authoritative total. */
+  | {
+      type: 'ai-death'
+      aiId: string
+      killerId: string | null
+      killerScore: NetScore | null
     }
   | {
       type: 'death'

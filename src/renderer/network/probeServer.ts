@@ -152,7 +152,9 @@ export function describeProbe(result: ProbeResult): string {
     `${rttMs} ms`,
   ]
   if (info.requiresPassword) parts.push('password required')
-  if (info.match.phase === 'LIVE') parts.push('match in progress')
+  // Optional-chained: the reply came off a network from a build that may not
+  // send `match` at all, and a crash here would take the lobby down.
+  if (info.match?.phase === 'LIVE') parts.push('match in progress')
   if (!compatible) parts.push(`protocol ${info.protocolVersion}, this build speaks ${PROTOCOL_VERSION}`)
   return parts.join(' · ')
 }
