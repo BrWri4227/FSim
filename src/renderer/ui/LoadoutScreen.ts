@@ -5,14 +5,15 @@ import { MultiplayerClient } from '../network/MultiplayerClient'
 import { AIRCRAFT_ROSTER } from '../data/aircraft/catalog'
 import { getAircraftById } from '../data/aircraft/catalog'
 import { MISSILE_SPECS, getStoreDragPenalty } from '../data/weapons/catalog'
+import { deriveAircraftIdentity, BAR_LABELS } from '../data/aircraft/identity'
+import { LOADOUT_PRESETS, buildPreset, summariseStores, type LoadoutPreset } from '../data/hardpoints/presets'
 import { renderControlsReference } from '../input/controlsReference'
 import { loadSettings, saveSettings, loadoutFor, saveLoadoutFor } from '../persistence'
 import { TIME_OF_DAY, TIME_OF_DAY_PRESETS, type TimeOfDayPreset } from '../scene/TimeOfDay'
 import { WEATHER_PRESETS, WEATHER_PRESET_LABELS, type WeatherPreset } from '../physics/WeatherPresets'
 import { POSTFX_QUALITIES, POSTFX_QUALITY_LABELS, type PostFXQuality } from '../postfx/PostFXManager'
-import { MAX_CALLSIGN_LENGTH, sanitizeCallsign } from '../../shared/network/validation'
 
-import type { LobbyRestoreBundle, FlightOptions } from '../FlightSession'
+import type { FlightOptions } from '../FlightSession'
 import type { ScenarioDescriptor } from '../types/mission'
 
 type LaunchCallback = (
@@ -43,22 +44,14 @@ export class LoadoutScreen {
   private weatherPreset: WeatherPreset = 'CLEAR'
   private masterVolume = 0.8
   private postFXQuality: PostFXQuality = 'HIGH'
-  private callsign = ''
-  private multiplayerMode: MultiplayerConfig['mode'] = 'single'
-  private joinHost = '127.0.0.1'
-  private hostLanIp = '127.0.0.1'
-  private lanPort = 45454
-  private lobbyClient: MultiplayerClient | null = null
-  private lobbyConnected = false
-  private lobbyError = ''
-  private unsubscribeLobbyRoster: (() => void) | null = null
-  private unsubscribeLobbyEvents: (() => void) | null = null
-  private hostEvents: Array<{ message: string; timestamp: number }> = []
   private selectedWeaponByHardpoint = new Map<string, string>()
-  private lobbyStatusMessage = 'Not connected to lobby.'
-  private lobbyStatusTone: 'ok' | 'warn' | 'error' = 'warn'
+  /** Which collapsed sections the pilot opened, kept across re-renders. */
+  private expandedSections = new Set<string>()
+  /** Highlighted preset, or null once the pilot edits an individual station. */
+  private selectedPreset: LoadoutPreset | null = null
+  /** Keeps the per-station block open across re-renders once the pilot opens it. */
+  private stationsExpanded = false
   private launchError = ''
-  private preserveLobbyClientOnDispose = false
   private scenario: ScenarioDescriptor
   private onBack: (() => void) | null
 
@@ -68,7 +61,6 @@ export class LoadoutScreen {
     options?: {
       scenario?: ScenarioDescriptor
       onBack?: () => void
-      lobbyRestore?: LobbyRestoreBundle | null
     }
   ) {
     this.onLaunch = onLaunch
@@ -94,7 +86,6 @@ export class LoadoutScreen {
     this.invertPitch = saved.invertPitch
     this.masterVolume = saved.masterVolume
     this.postFXQuality = saved.postFXQuality
-    this.callsign = saved.callsign
     const savedSpec = saved.lastAircraftId ? getAircraftById(saved.lastAircraftId) : null
     if (savedSpec) this.selectedSpec = savedSpec
     this.timeOfDay = this.scenario.timeOfDay ?? saved.lastTimeOfDay
@@ -125,56 +116,62 @@ export class LoadoutScreen {
     this.el.appendChild(versionBadge)
 
     document.body.appendChild(this.el)
-    const mp = this.getMultiplayerBridge()
-    if (mp?.onLobbyEvent) {
-      this.unsubscribeLobbyEvents = mp.onLobbyEvent(evt => {
-        this.hostEvents.unshift(evt)
-        if (this.hostEvents.length > 12) this.hostEvents.length = 12
-        this.render()
-      })
-    }
-    const lobbyRestore = options?.lobbyRestore
-    if (lobbyRestore?.client?.isConnected()) {
-      this.lobbyClient = lobbyRestore.client
-      this.lobbyConnected = true
-      this.multiplayerMode = lobbyRestore.config.mode === 'join' ? 'join' : 'host'
-      if (lobbyRestore.config.mode === 'join') {
-        this.joinHost = lobbyRestore.config.host
-      } else {
-        this.hostLanIp = lobbyRestore.config.host
-      }
-      this.lanPort = lobbyRestore.config.port
-      this.unsubscribeLobbyRoster = this.lobbyClient.onRosterChanged(() => this.render())
-      this.lobbyStatusTone = 'ok'
-      this.lobbyStatusMessage =
-        lobbyRestore.config.mode === 'host'
-          ? `Lobby created successfully at ${this.hostLanIp}:${this.lanPort}`
-          : `Joined lobby at ${this.joinHost}:${this.lanPort}`
-      this.lobbyClient.returnToLobby()
-    }
-    void this.initLanInfo()
     this.render()
   }
 
-  /** Populate the per-hardpoint weapon map from the persisted loadout for the selected aircraft. */
+  /**
+   * Populate the per-hardpoint weapon map from the persisted loadout for the
+   * selected aircraft, falling back to the Balanced preset.
+   *
+   * The fallback matters: every station used to default to "(Auto / Empty)", so
+   * a pilot who never opened the hardpoint list launched with nothing but the
+   * gun and no indication anything was wrong.
+   */
   private loadSavedLoadout(): void {
     this.selectedWeaponByHardpoint.clear()
     const stored = loadoutFor(this.selectedSpec.id)
-    for (const [hpId, weaponId] of Object.entries(stored)) {
+    const entries = Object.entries(stored)
+    if (entries.length === 0) {
+      this.selectedPreset = 'BALANCED'
+      for (const [hpId, weaponId] of Object.entries(buildPreset(this.selectedSpec, 'BALANCED'))) {
+        this.selectedWeaponByHardpoint.set(hpId, weaponId)
+      }
+      return
+    }
+    this.selectedPreset = null
+    for (const [hpId, weaponId] of entries) {
       this.selectedWeaponByHardpoint.set(hpId, weaponId)
     }
   }
 
-  private async initLanInfo(): Promise<void> {
-    const mp = this.getMultiplayerBridge()
-    if (!mp) return
-    try {
-      const res = await mp.getLanIp()
-      this.hostLanIp = res.ip
-      this.render()
-    } catch {
-      // ignore and keep localhost fallback
+  /**
+   * Tuck a built section behind a disclosure.
+   *
+   * The launch button used to sit below six full-height panels plus the entire
+   * controls table, so a new pilot's first act was scrolling. Aircraft and
+   * loadout stay open; everything else is one click away and remembers whether
+   * the pilot opened it.
+   */
+  private appendCollapsed(section: HTMLElement): void {
+    const heading = section.firstElementChild
+    const label = heading?.textContent?.trim() ?? 'MORE'
+    heading?.remove()
+
+    const details = document.createElement('details')
+    details.open = this.expandedSections.has(label)
+    details.style.cssText = 'border:1px solid #226644;width:100%;box-sizing:border-box'
+    details.ontoggle = () => {
+      if (details.open) this.expandedSections.add(label)
+      else this.expandedSections.delete(label)
     }
+    const summary = document.createElement('summary')
+    summary.textContent = label
+    summary.style.cssText =
+      'padding:10px 12px;color:#aaffcc;font-size:11px;letter-spacing:2px;cursor:pointer'
+    details.appendChild(summary)
+    section.style.border = 'none'
+    details.appendChild(section)
+    this.contentEl.appendChild(details)
   }
 
   private render(): void {
@@ -193,21 +190,6 @@ export class LoadoutScreen {
       `<div style="font-size:14px;color:#00ff88;margin-top:4px">${this.scenario.name}</div>`
     this.contentEl.appendChild(missionBanner)
 
-    // Scenario objectives are scored against locally-spawned AI, which is not
-    // replicated and is suppressed outright in a LAN session. Anything other
-    // than Dogfight therefore has no bandits and no reachable win condition.
-    if (this.lobbyConnected && this.scenario.id !== 'dogfight') {
-      const warn = document.createElement('div')
-      warn.style.cssText =
-        'border:1px solid #aa7722;background:#1a1206;padding:10px 12px;width:100%;' +
-        'box-sizing:border-box;text-align:center;font-size:11px;color:#ffaa44'
-      warn.textContent =
-        `"${this.scenario.name}" is a single-player mission. In a LAN session no AI is ` +
-        'spawned, so there will be nothing to fight but the other pilots and no objectives ' +
-        'to complete. Go back and pick Dogfight (Multiplayer).'
-      this.contentEl.appendChild(warn)
-    }
-
     if (this.onBack) {
       const backBtn = document.createElement('button')
       backBtn.textContent = '← CHANGE MISSION'
@@ -219,23 +201,34 @@ export class LoadoutScreen {
 
     // Aircraft cards
     const grid = document.createElement('div')
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(min(140px,100%),1fr));gap:12px;width:100%'
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(min(190px,100%),1fr));gap:12px;width:100%'
     for (const spec of AIRCRAFT_ROSTER) {
       const card = document.createElement('div')
       const selected = spec === this.selectedSpec
       card.style.cssText = `border:1px solid ${selected ? '#00ff88' : '#226644'};padding:12px;cursor:pointer;background:${selected ? '#0f2a1a' : '#0a150a'};min-width:140px`
+      // Role and comparative bars, not raw numbers: every airframe on the roster
+      // is +9.0 G and 26–28° AoA, so the old card said nothing that would help
+      // anyone choose. The bars come from the same specs the sim flies.
+      const identity = deriveAircraftIdentity(spec)
+      const bars = BAR_LABELS.map(([key, label]) => {
+        const pct = Math.round(identity.bars[key] * 100)
+        return (
+          `<div style="display:flex;align-items:center;gap:5px;margin-top:2px">` +
+          `<span style="color:#66aa88;width:46px;font-size:9px;letter-spacing:0.5px">${label}</span>` +
+          `<span style="flex:1;height:4px;background:#16301f;display:block">` +
+          `<span style="display:block;height:4px;width:${pct}%;background:${selected ? '#00ff88' : '#3d8f66'}"></span>` +
+          `</span></div>`
+        )
+      }).join('')
       card.innerHTML = `
         <div style="font-size:15px;font-weight:bold;color:${spec.nation === 'USA' ? '#4488ff' : '#ff4444'}">${spec.displayName}</div>
-        <div style="font-size:11px;color:#88bb88;margin-top:4px">
-          Nation: ${spec.nation}<br>
-          Max G: +${spec.maxGPositive}<br>
-          Max AoA: ${spec.maxAoADeg}°
-        </div>
+        <div style="font-size:10px;color:#aaffcc;letter-spacing:1px;margin-top:3px">${identity.role.toUpperCase()}</div>
+        <div style="margin-top:7px">${bars}</div>
+        <div style="font-size:10px;color:#88bb88;margin-top:8px;line-height:1.45">${identity.blurb}</div>
       `
       card.onclick = () => {
         this.selectedSpec = spec
         this.loadSavedLoadout()
-        this.lobbyClient?.updateProfile({ aircraftId: spec.id })
         this.render()
       }
       grid.appendChild(card)
@@ -245,9 +238,66 @@ export class LoadoutScreen {
     // Hardpoints
     const hpSection = document.createElement('div')
     hpSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
-    hpSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">HARDPOINTS</div>'
+    hpSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">LOADOUT</div>'
+
+    // One click for a whole load. The per-pylon selects are still below, but
+    // nobody has to read nine station codes to get airborne any more.
+    const presetRow = document.createElement('div')
+    presetRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px'
+    for (const preset of LOADOUT_PRESETS) {
+      const btn = document.createElement('button')
+      const active = this.selectedPreset === preset.id
+      btn.textContent = preset.label
+      btn.title = preset.hint
+      btn.style.cssText =
+        `padding:6px 14px;font:bold 11px monospace;background:${active ? '#0f2a1a' : '#0a150a'};` +
+        `color:${active ? '#00ff88' : '#88bb88'};border:1px solid ${active ? '#00ff88' : '#226644'};` +
+        'cursor:pointer;letter-spacing:1px'
+      btn.onclick = () => {
+        this.selectedPreset = preset.id
+        this.selectedWeaponByHardpoint.clear()
+        for (const [hpId, weaponId] of Object.entries(buildPreset(this.selectedSpec, preset.id))) {
+          this.selectedWeaponByHardpoint.set(hpId, weaponId)
+        }
+        this.render()
+      }
+      presetRow.appendChild(btn)
+    }
+    hpSection.appendChild(presetRow)
+
+    const hint = document.createElement('div')
+    hint.style.cssText = 'font-size:10px;color:#446644;margin-bottom:8px'
+    hint.textContent =
+      LOADOUT_PRESETS.find(p => p.id === this.selectedPreset)?.hint ??
+      'Custom load — pick each station below.'
+    hpSection.appendChild(hint)
+
+    // What the load costs. Stores mass and drag are already modelled per-store,
+    // so the BVR/Dogfight trade is a real performance difference, not flavour.
+    const summaryEl = document.createElement('div')
+    summaryEl.style.cssText = 'font-size:11px;color:#88bb88;margin-bottom:10px'
+    hpSection.appendChild(summaryEl)
+
+    // Station-by-station editing is still here for anyone who wants it, just no
+    // longer the first thing between a new pilot and the launch button.
+    const stationDetails = document.createElement('details')
+    stationDetails.open = this.stationsExpanded
+    stationDetails.ontoggle = () => { this.stationsExpanded = stationDetails.open }
+    const stationSummary = document.createElement('summary')
+    stationSummary.textContent = 'Per-station detail'
+    stationSummary.style.cssText = 'font-size:11px;color:#88bb88;cursor:pointer;margin-bottom:6px'
+    stationDetails.appendChild(stationSummary)
 
     const selects: Array<{ hpId: string; sel: HTMLSelectElement }> = []
+    const refreshSummary = (): void => {
+      const selection: Record<string, string> = {}
+      for (const s of selects) selection[s.hpId] = s.sel.value
+      const { count, massKg, dragPenalty } = summariseStores(selection)
+      summaryEl.textContent =
+        `${count} store${count === 1 ? '' : 's'}   ${Math.round(massKg)} kg   ` +
+        `drag +${dragPenalty.toFixed(4)}`
+    }
+
     for (const hp of this.selectedSpec.hardpoints) {
       const row = document.createElement('div')
       row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0;flex-wrap:wrap'
@@ -273,13 +323,26 @@ export class LoadoutScreen {
       }
       const priorWeapon = this.selectedWeaponByHardpoint.get(hp.id)
       if (priorWeapon && Array.from(sel.options).some(opt => opt.value === priorWeapon)) sel.value = priorWeapon
-      sel.onchange = () => this.selectedWeaponByHardpoint.set(hp.id, sel.value)
+      sel.onchange = () => {
+        this.selectedWeaponByHardpoint.set(hp.id, sel.value)
+        // Editing a station means this is no longer any of the presets.
+        this.selectedPreset = null
+        hint.textContent = 'Custom load — pick each station below.'
+        for (const b of Array.from(presetRow.children) as HTMLButtonElement[]) {
+          b.style.background = '#0a150a'
+          b.style.color = '#88bb88'
+          b.style.borderColor = '#226644'
+        }
+        refreshSummary()
+      }
 
       selects.push({ hpId: hp.id, sel })
       row.appendChild(lbl)
       row.appendChild(sel)
-      hpSection.appendChild(row)
+      stationDetails.appendChild(row)
     }
+    hpSection.appendChild(stationDetails)
+    refreshSummary()
     this.contentEl.appendChild(hpSection)
 
     // ── Environment ─────────────────────────────────────────────────────────
@@ -354,7 +417,8 @@ export class LoadoutScreen {
     // scene is built with and the air the flight model integrates, and neither
     // is replicated. Two players on different settings would be flying in
     // measurably different air, so lock them to the scenario in a lobby.
-    const envLocked = this.lobbyConnected
+    // Single-player only now, so the pilot owns the conditions outright.
+    const envLocked = false
     if (envLocked) {
       // Reset to the scenario's canonical conditions rather than this client's
       // last-used setting — otherwise locking the selects still leaves two
@@ -384,41 +448,12 @@ export class LoadoutScreen {
       envNote.style.cssText = 'font-size:10px;color:#446644;margin-top:4px'
       envSection.appendChild(envNote)
     }
-    this.contentEl.appendChild(envSection)
+    this.appendCollapsed(envSection)
 
     // ── Settings ────────────────────────────────────────────────────────────
     const setSection = document.createElement('div')
     setSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     setSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">SETTINGS</div>'
-
-    const csRow = document.createElement('div')
-    csRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
-    const csLbl = document.createElement('span')
-    csLbl.textContent = 'Callsign'
-    csLbl.style.cssText = 'font-size:11px;color:#88bb88;min-width:96px'
-    const csInput = document.createElement('input')
-    csInput.type = 'text'
-    csInput.maxLength = MAX_CALLSIGN_LENGTH
-    csInput.value = this.callsign
-    csInput.placeholder = 'shown to other pilots'
-    csInput.style.cssText =
-      'flex:1;min-width:0;max-width:260px;background:#0a150a;color:#00ff88;' +
-      'border:1px solid #226644;font:11px monospace;padding:3px 5px'
-    csInput.oninput = () => {
-      this.callsign = csInput.value
-    }
-    // Push on blur rather than per keystroke — profile-update goes to every
-    // peer and the server rate-limits inbound messages.
-    csInput.onchange = () => {
-      const clean = sanitizeCallsign(this.callsign)
-      this.callsign = clean
-      csInput.value = clean
-      saveSettings({ callsign: clean })
-      this.lobbyClient?.updateProfile({ callsign: clean })
-    }
-    csRow.appendChild(csLbl)
-    csRow.appendChild(csInput)
-    setSection.appendChild(csRow)
 
     mkSliderRow(setSection, 'Master volume', this.masterVolume, v => { this.masterVolume = v })
     mkSelectRow(
@@ -428,7 +463,7 @@ export class LoadoutScreen {
       this.postFXQuality,
       v => { this.postFXQuality = v as PostFXQuality },
     )
-    this.contentEl.appendChild(setSection)
+    this.appendCollapsed(setSection)
 
     const optSection = document.createElement('div')
     optSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
@@ -488,133 +523,15 @@ export class LoadoutScreen {
     invertRow.appendChild(invertHint)
     optSection.appendChild(invertRow)
 
-    this.contentEl.appendChild(optSection)
+    this.appendCollapsed(optSection)
 
-    const mpSection = document.createElement('div')
-    mpSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
-    mpSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">LAN MULTIPLAYER</div>'
-
-    const info = document.createElement('div')
-    info.style.cssText = 'font-size:11px;color:#88bb88'
-    info.textContent = `Host/share IP: ${this.hostLanIp}`
-    mpSection.appendChild(info)
-
-    const joinRow = document.createElement('div')
-    joinRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0;width:100%'
-    const hostInput = document.createElement('input')
-    hostInput.type = 'text'
-    hostInput.value = this.joinHost
-    hostInput.placeholder = 'Host IP / address (e.g. 192.168.1.25 or play.example.com:8080)'
-    hostInput.style.cssText = 'flex:1;min-width:0;max-width:320px;background:#0a150a;color:#00ff88;border:1px solid #226644;font:11px monospace;padding:4px'
-    hostInput.oninput = () => { this.joinHost = hostInput.value.trim() || '127.0.0.1' }
-    joinRow.appendChild(hostInput)
-    mpSection.appendChild(joinRow)
-
-    const portRow = document.createElement('div')
-    portRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:4px 0'
-    const portLabel = document.createElement('span')
-    portLabel.textContent = 'Port'
-    portLabel.style.cssText = 'font-size:11px;color:#88bb88;min-width:34px'
-    const portInput = document.createElement('input')
-    portInput.type = 'number'
-    portInput.min = '1024'
-    portInput.max = '65535'
-    portInput.value = String(this.lanPort)
-    portInput.style.cssText = 'width:100px;background:#0a150a;color:#00ff88;border:1px solid #226644;font:11px monospace;padding:4px'
-    portInput.oninput = () => {
-      const parsed = Number(portInput.value)
-      if (Number.isFinite(parsed) && parsed >= 1024 && parsed <= 65535) this.lanPort = Math.floor(parsed)
-    }
-    portRow.appendChild(portLabel)
-    portRow.appendChild(portInput)
-    mpSection.appendChild(portRow)
-
-    const controlsRow = document.createElement('div')
-    controlsRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap'
-    const hostBtn = document.createElement('button')
-    hostBtn.textContent = this.lobbyConnected && this.multiplayerMode === 'host' ? 'HOSTING (CLICK TO LEAVE)' : 'HOST LOBBY'
-    hostBtn.style.cssText = 'padding:6px 12px;font:bold 12px monospace;background:#0a2a0a;color:#00ff88;border:1px solid #00ff88;cursor:pointer'
-    hostBtn.onclick = () => {
-      if (this.lobbyConnected && this.multiplayerMode === 'host') {
-        void this.leaveLobby()
-      } else {
-        void this.joinLobby('host')
-      }
-    }
-    controlsRow.appendChild(hostBtn)
-
-    const joinBtn = document.createElement('button')
-    joinBtn.textContent = this.lobbyConnected && this.multiplayerMode === 'join' ? 'JOINED (CLICK TO LEAVE)' : 'JOIN LOBBY'
-    joinBtn.style.cssText = 'padding:6px 12px;font:bold 12px monospace;background:#0a2a0a;color:#00ff88;border:1px solid #00ff88;cursor:pointer'
-    joinBtn.onclick = () => {
-      if (this.lobbyConnected && this.multiplayerMode === 'join') {
-        void this.leaveLobby()
-      } else {
-        void this.joinLobby('join')
-      }
-    }
-    controlsRow.appendChild(joinBtn)
-    mpSection.appendChild(controlsRow)
-
-    const status = document.createElement('div')
-    const statusColor = this.lobbyStatusTone === 'ok' ? '#66ff66' : this.lobbyStatusTone === 'error' ? '#ff6666' : '#88bb88'
-    status.style.cssText = `font-size:11px;color:${statusColor};margin-bottom:6px`
-    status.textContent = `Lobby Status: ${this.lobbyStatusMessage}`
-    mpSection.appendChild(status)
-
-    if (this.lobbyError) {
-      const err = document.createElement('div')
-      err.style.cssText = 'font-size:11px;color:#ff6666;margin-bottom:6px'
-      err.textContent = this.lobbyError
-      mpSection.appendChild(err)
-    }
-    if (this.launchError) {
-      const launchErr = document.createElement('div')
-      launchErr.style.cssText = 'font-size:11px;color:#ff6666;margin-bottom:6px'
-      launchErr.textContent = this.launchError
-      mpSection.appendChild(launchErr)
-    }
-
-    const listTitle = document.createElement('div')
-    listTitle.style.cssText = 'font-size:11px;color:#aaffcc;margin-top:4px'
-    listTitle.textContent = 'SESSION PLAYERS'
-    mpSection.appendChild(listTitle)
-
-    const list = document.createElement('div')
-    list.style.cssText = 'margin-top:4px;font-size:11px;color:#88bb88;max-height:110px;overflow:auto'
-    const rows = this.getLobbyRows()
-    list.innerHTML = rows.map(r => `<div>${r}</div>`).join('')
-    mpSection.appendChild(list)
-
-    if (this.multiplayerMode === 'host') {
-      const eventsTitle = document.createElement('div')
-      eventsTitle.style.cssText = 'font-size:11px;color:#aaffcc;margin-top:8px'
-      eventsTitle.textContent = 'HOST CONNECTION EVENTS'
-      mpSection.appendChild(eventsTitle)
-
-      const events = document.createElement('div')
-      events.style.cssText = 'margin-top:4px;font-size:11px;color:#88bb88;max-height:110px;overflow:auto'
-      const eventRows = this.hostEvents.length > 0
-        ? this.hostEvents.map(evt => `${new Date(evt.timestamp).toLocaleTimeString()} - ${evt.message}`)
-        : ['(no connection activity yet)']
-      events.innerHTML = eventRows.map(r => `<div>${r}</div>`).join('')
-      mpSection.appendChild(events)
-    }
-    this.contentEl.appendChild(mpSection)
-
-    if (this.lobbyConnected && this.multiplayerMode === 'join') {
-      const hint = document.createElement('div')
-      hint.style.cssText = 'font-size:11px;color:#88bb88;margin-top:4px;text-align:center'
-      hint.textContent = 'Select your aircraft and weapons, then click LAUNCH MISSION to join the game.'
-      this.contentEl.appendChild(hint)
-    }
 
     // Controls reference
     const ctrlSection = document.createElement('div')
     ctrlSection.style.cssText = 'border:1px solid #226644;padding:12px;width:100%;box-sizing:border-box'
     ctrlSection.innerHTML = '<div style="margin-bottom:8px;color:#aaffcc">CONTROLS</div>'
     ctrlSection.appendChild(renderControlsReference())
-    this.contentEl.appendChild(ctrlSection)
+    this.appendCollapsed(ctrlSection)
 
     // Launch button
     const btn = document.createElement('button')
@@ -637,21 +554,8 @@ export class LoadoutScreen {
               remainingRounds: 1
             }
           })
-        const multiplayer: MultiplayerConfig = this.lobbyConnected
-          ? {
-              mode: this.multiplayerMode,
-              host: this.multiplayerMode === 'join' ? this.joinHost : this.hostLanIp,
-              port: this.lanPort,
-            }
-          : { mode: 'single', host: '127.0.0.1', port: this.lanPort }
-        const handoffClient = this.lobbyConnected ? this.lobbyClient : null
-        if (handoffClient) {
-          this.preserveLobbyClientOnDispose = true
-          this.unsubscribeLobbyRoster?.()
-          this.unsubscribeLobbyRoster = null
-          this.lobbyClient = null
-          this.lobbyConnected = false
-        }
+        // This screen is the single-player path; LAN launches come from the lobby.
+        const multiplayer: MultiplayerConfig = { mode: 'single', host: '127.0.0.1', port: 45454 }
         const selection: Record<string, string> = {}
         for (const s of selects) selection[s.hpId] = s.sel.value
         saveLoadoutFor(this.selectedSpec.id, selection)
@@ -665,7 +569,7 @@ export class LoadoutScreen {
           lastWeatherPreset: this.weatherPreset,
           masterVolume: this.masterVolume,
           postFXQuality: this.postFXQuality,
-          callsign: this.callsign,
+
         })
 
         const options: FlightOptions = {
@@ -677,7 +581,7 @@ export class LoadoutScreen {
           masterVolume: this.masterVolume,
           postFXQuality: this.postFXQuality,
         }
-        this.onLaunch(this.selectedSpec, stores, multiplayer, handoffClient, options)
+        this.onLaunch(this.selectedSpec, stores, multiplayer, null, options)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         this.launchError = `Launch failed: ${msg}`
@@ -688,107 +592,15 @@ export class LoadoutScreen {
     this.contentEl.appendChild(btn)
   }
 
-  private async joinLobby(mode: 'host' | 'join'): Promise<void> {
-    this.multiplayerMode = mode
-    this.lobbyError = ''
-    this.lobbyStatusTone = 'warn'
-    this.lobbyStatusMessage = mode === 'host' ? 'Creating lobby...' : 'Joining lobby...'
-    this.render()
-    const mp = this.getMultiplayerBridge()
-    if (!mp) {
-      this.lobbyError = 'Multiplayer bridge unavailable in this runtime.'
-      this.lobbyStatusTone = 'error'
-      this.lobbyStatusMessage = 'Lobby unavailable in this runtime.'
-      this.render()
-      return
-    }
-    await this.leaveLobby(false)
-    try {
-      if (mode === 'host') {
-        const hostInfo = await mp.startHost(this.lanPort)
-        this.hostLanIp = hostInfo.hostIp
-      }
-      const connectHost = mode === 'host' ? '127.0.0.1' : this.joinHost
-      const client = new MultiplayerClient({
-        aircraftId: this.selectedSpec.id,
-        callsign: sanitizeCallsign(this.callsign),
-      })
-      await client.connect({
-        mode,
-        host: connectHost,
-        port: this.lanPort,
-      })
-      this.lobbyClient = client
-      this.lobbyConnected = true
-      this.unsubscribeLobbyRoster = client.onRosterChanged(() => this.render())
-      this.lobbyStatusTone = 'ok'
-      this.lobbyStatusMessage = mode === 'host'
-        ? `Lobby created successfully at ${this.hostLanIp}:${this.lanPort}`
-        : `Joined lobby at ${this.joinHost}:${this.lanPort}`
-    } catch (err) {
-      this.lobbyClient = null
-      this.lobbyConnected = false
-      this.lobbyError = err instanceof Error ? err.message : 'Failed to join lobby.'
-      this.lobbyStatusTone = 'error'
-      this.lobbyStatusMessage = mode === 'host' ? 'Failed to create lobby.' : 'Failed to join lobby.'
-    }
-    this.render()
-  }
-
-  private async leaveLobby(stopHostIfHosting = true): Promise<void> {
-    const mp = this.getMultiplayerBridge()
-    this.unsubscribeLobbyRoster?.()
-    this.unsubscribeLobbyRoster = null
-    this.lobbyClient?.disconnect()
-    this.lobbyClient = null
-    this.lobbyConnected = false
-    this.lobbyStatusTone = 'warn'
-    this.lobbyStatusMessage = 'Not connected to lobby.'
-    this.lobbyError = ''
-    if (stopHostIfHosting && this.multiplayerMode === 'host' && mp) {
-      try {
-        await mp.stopHost()
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  private getLobbyRows(): string[] {
-    if (!this.lobbyConnected || !this.lobbyClient) return ['(host or join a lobby to view players)']
-    const rows: string[] = []
-    const localSpec = getAircraftById(this.selectedSpec.id)
-    const localName = localSpec?.displayName ?? this.selectedSpec.id.toUpperCase()
-    const localCallsign = sanitizeCallsign(this.callsign)
-    rows.push(`YOU${localCallsign ? ` (${localCallsign})` : ''} - ${localName} - IN LOBBY`)
-    for (const peer of this.lobbyClient.getRemoteSnapshots()) {
-      const spec = getAircraftById(peer.profile.aircraftId)
-      const aircraftName = spec?.displayName ?? peer.profile.aircraftId.toUpperCase()
-      const status = peer.state ? 'IN FLIGHT' : 'IN LOBBY'
-      // Peer id is the fallback: a pilot who set no callsign is still listed.
-      const who = peer.profile.callsign ?? peer.playerId
-      rows.push(`${who} - ${aircraftName} - ${status}`)
-    }
-    return rows.length > 0 ? rows : ['(no players yet)']
-  }
-
-  private getMultiplayerBridge():
-    | {
-        startHost: (port: number) => Promise<{ ok: true; hostIp: string; port: number }>
-        stopHost: () => Promise<{ ok: true }>
-        getLanIp: () => Promise<{ ip: string }>
-        onLobbyEvent: (cb: (evt: { message: string; timestamp: number }) => void) => () => void
-      }
-    | null {
-    return (window as unknown as { fsim?: { multiplayer?: LoadoutScreen['getMultiplayerBridge'] extends () => infer T ? T : never } }).fsim?.multiplayer ?? null
-  }
+  /**
+   * Match rules and the START button.
+   *
+   * Only the host sees the controls — the server ignores these messages from
+   * anyone else, so showing them to every player would just be a lie. Everyone
+   * sees the *rules*, because they need to know what they are playing.
+   */
 
   dispose(): void {
-    this.unsubscribeLobbyEvents?.()
-    this.unsubscribeLobbyEvents = null
-    if (!this.preserveLobbyClientOnDispose) {
-      void this.leaveLobby(false)
-    }
     document.body.removeChild(this.el)
   }
 }

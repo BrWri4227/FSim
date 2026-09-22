@@ -1,6 +1,7 @@
 import type { ControlInputs } from '../../types/aircraft'
 import type { AIAircraft } from '../AIAircraft'
 import { clamp } from '../../utils/MathUtils'
+import { neutralControls } from '../../input/neutralControls'
 
 const PATROL_THROTTLE = 0.9
 const ALTITUDE_GAIN_M = 152.4   // 500 ft above spawn
@@ -20,13 +21,5 @@ export function avoidance(self: AIAircraft, _dt: number): ControlInputs {
   const weavCmd = Math.sin((2 * Math.PI * tSec) / WEAVE_PERIOD_S) * WEAVE_BANK_DEG
   const roll   = clamp((weavCmd - self.state.rollDeg) * 0.05, -0.6, 0.6)
 
-  return {
-    pitch, roll, yaw: 0, throttle: PATROL_THROTTLE,
-    fireMissile: false, fireGun: false, cycleMissile: false,
-    dispenseFlare: false, dispenseChaff: false,
-    toggleGear: false, cycleFlaps: false, brakeHeld: false, speedBrakeToggle: false,
-    radarModeNext: false, radarSelectNext: false, radarLockTarget: false, radarUnlock: false,
-    ejectRequested: false, tgpToggle: false, tgpLock: false, tgpUnlock: false,
-    wingmanEngage: false, wingmanCover: false, wingmanRTB: false, wingmanRejoin: false,
-  }
+  return neutralControls({ pitch, roll, throttle: PATROL_THROTTLE })
 }

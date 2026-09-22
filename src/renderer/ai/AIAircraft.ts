@@ -9,6 +9,7 @@ import { MissileSystem } from '../weapons/MissileSystem'
 import { getMissileSpec, getStoreDragPenalty } from '../data/weapons/catalog'
 import { makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
 import type * as THREE from 'three'
+import { SPAWN_FIRE_DELAY_SEC } from '../mission/spawnRules'
 
 export type AIBehavior = 'FOLLOW_BEHIND' | 'FOLLOW_IN_FRONT' | 'FLY_STRAIGHT' | 'TURN_CONSTANTLY' | 'BVR_ENGAGE' | 'WINGMAN_COVER' | 'AVOIDANCE'
 export type AISide = 'HOSTILE' | 'WINGMAN'
@@ -21,8 +22,16 @@ export class AIAircraft extends Aircraft {
   readonly gun: GunSystem
   readonly cmds: CMDS
   readonly missiles: MissileSystem
-  /** Cooldown (sec) until next BVR shot is allowed. Decremented in update. */
-  bvrFireCooldownSec = 0
+  /**
+   * Cooldown (sec) until next BVR shot is allowed. Decremented in update.
+   *
+   * Seeded so a bandit cannot launch on the frame it spawns. It used to fire on
+   * tick zero — before the player had oriented, locked anything, or even read
+   * the briefing off the screen — which is a spawn artifact, not a tactic. The
+   * first missile now arrives after the player has had a few seconds to look at
+   * the radar and react to the launch warning.
+   */
+  bvrFireCooldownSec = SPAWN_FIRE_DELAY_SEC
   /** Cooldown (sec) until next WVR IR shot is allowed. */
   wvrFireCooldownSec = 0
   /** Skips physics/AI when the player is beyond sim cull range. */
@@ -123,6 +132,20 @@ export class AIAircraft extends Aircraft {
     return n
   }
 
+  /**
+   * Our own missiles still airborne against one target.
+   *
+   * Read by the BVR brain to hold fire while a shot is still working, instead of
+   * emptying the rails at a target that may already be dead.
+   */
+  missilesInFlightAt(targetEntityId: string): number {
+    let n = 0
+    for (const m of this.missiles.getMissiles()) {
+      if (m.active && m.targetEntityId === targetEntityId) n++
+    }
+    return n
+  }
+
   /** Number of unfired IR missiles still on rails. Read by WVR brain. */
   getRemainingIR(): number {
     let n = 0
@@ -197,7 +220,7 @@ export class AIAircraft extends Aircraft {
   /** Hostile radar vs the player: range-based track + STT when supported (debug-spawn AI). */
   updateRadarVsBandit(dt: number, bandit: Aircraft): void {
     if (this.state.ejected) return
-    this.radar.update(dt, this.state, [bandit], false, true)
+    this.radar.update(dt, this.state, [bandit], true)
     const bid = bandit.entityId
     if (!this.radar.getTrack(bid)) return
     this.radar.state.selectedTrackId = bid

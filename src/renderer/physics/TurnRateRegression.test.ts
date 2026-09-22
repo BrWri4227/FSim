@@ -13,6 +13,7 @@ import { makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
 import type { AircraftSpec } from '../types/aircraft'
 import type { ControlInputs } from '../types/aircraft'
 import type { FlightPenalties } from '../types/damage'
+import { neutralControls } from '../input/neutralControls'
 
 const NO_DAMAGE: FlightPenalties = {
   thrustMultiplier: 1,
@@ -30,16 +31,7 @@ const MIN_REF_FACTOR = 0.35
 const MAX_REF_FACTOR = 1.20
 
 function makeControls(): ControlInputs {
-  return {
-    pitch: PITCH_INPUT, roll: ROLL_INPUT, yaw: 0, throttle: 1,
-    fireMissile: false, fireGun: false, cycleMissile: false,
-    dispenseFlare: false, dispenseChaff: false, toggleGear: false,
-    cycleFlaps: false, brakeHeld: false, speedBrakeToggle: false,
-    radarModeNext: false, radarSelectNext: false, radarLockTarget: false,
-    radarUnlock: false, ejectRequested: false,
-    tgpToggle: false, tgpLock: false, tgpUnlock: false,
-    wingmanEngage: false, wingmanCover: false, wingmanRTB: false, wingmanRejoin: false,
-  }
+  return neutralControls({ pitch: PITCH_INPUT, roll: ROLL_INPUT, throttle: 1 })
 }
 
 function meanSustainedTurnRateDegS(spec: AircraftSpec): number {

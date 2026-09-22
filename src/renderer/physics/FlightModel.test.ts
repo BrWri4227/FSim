@@ -11,6 +11,7 @@ import { F16C } from '../data/aircraft/f16c'
 import { makeStateVec, quatFromEulerZYX } from '../utils/MathUtils'
 import type { FlightPenalties } from '../types/damage'
 import type { ControlInputs } from '../types/aircraft'
+import { neutralControls } from '../input/neutralControls'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -23,17 +24,7 @@ const NO_DAMAGE: FlightPenalties = {
 }
 
 function makeControls(overrides: Partial<ControlInputs> = {}): ControlInputs {
-  return {
-    pitch: 0, roll: 0, yaw: 0, throttle: 0.7,
-    fireMissile: false, fireGun: false, cycleMissile: false,
-    dispenseFlare: false, dispenseChaff: false, toggleGear: false,
-    cycleFlaps: false, brakeHeld: false, speedBrakeToggle: false,
-    radarModeNext: false, radarSelectNext: false, radarLockTarget: false,
-    radarUnlock: false, ejectRequested: false,
-    tgpToggle: false, tgpLock: false, tgpUnlock: false,
-    wingmanEngage: false, wingmanCover: false, wingmanRTB: false, wingmanRejoin: false,
-    ...overrides,
-  }
+  return neutralControls({ throttle: 0.7, ...overrides })
 }
 
 /** Standard deviation of a number array. */

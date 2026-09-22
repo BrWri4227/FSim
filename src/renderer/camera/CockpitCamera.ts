@@ -14,8 +14,27 @@ export class CockpitCamera {
 
   private readonly MAX_YAW   = Math.PI / 2.2   // ±80°
   private readonly MAX_PITCH = 0.7              // ±40°
+  /**
+   * Wider limits for the assisted looks (look-back, padlock). A pilot craning
+   * over the shoulder reaches much further than a comfortable mouse-drag, and
+   * "check six" is unreachable inside MAX_YAW by definition.
+   */
+  private readonly MAX_YAW_ASSISTED   = 2.79    // ±160°
+  private readonly MAX_PITCH_ASSISTED = 1.05    // ±60°
   /** Per-second fraction by which head recenters when freelook is released. */
   private readonly RETURN_RATE = 12
+
+  private lookBack = false
+  /** Direction to the padlocked bandit in NED body frame [fwd, right, down], or null. */
+  private padlockDirBody: [number, number, number] | null = null
+
+  /** Hold to crane over the shoulder; releasing eases back to boresight. */
+  setLookBack(held: boolean): void { this.lookBack = held }
+
+  /** Keep the head on this bandit. Null releases it. */
+  setPadlockDirBody(dirBody: [number, number, number] | null): void {
+    this.padlockDirBody = dirBody
+  }
 
   constructor() {
     window.addEventListener('mousedown', this.onMouseDown)
@@ -54,8 +73,16 @@ export class CockpitCamera {
   update(camera: THREE.PerspectiveCamera, player: PlayerAircraft, dt = 0.016): void {
     const { spec, state } = player
 
-    // Ease the head back to boresight once the pilot releases freelook.
-    if (!this.looking) {
+    // Mouse drag always wins. Otherwise the head is either being held somewhere
+    // by an assisted look, or easing back to boresight.
+    const assisted = this.resolveAssistedLook()
+    if (this.looking) {
+      // yaw/pitch were already set by onMouseMove.
+    } else if (assisted) {
+      const k = 1 - Math.exp(-this.RETURN_RATE * dt)
+      this.yaw   += (assisted.yaw   - this.yaw)   * k
+      this.pitch += (assisted.pitch - this.pitch) * k
+    } else {
       const k = Math.exp(-this.RETURN_RATE * dt)
       this.yaw   *= k
       this.pitch *= k
@@ -91,6 +118,34 @@ export class CockpitCamera {
     camera.near = 0.05
     camera.fov = spec.cockpitFovDeg
     camera.updateProjectionMatrix()
+  }
+
+  /**
+   * Where the head wants to be this frame, or null to fall back to the
+   * boresight ease. Padlock outranks look-back: if the pilot has designated a
+   * bandit, that is the thing they are trying to keep in sight.
+   *
+   * Sign conventions follow the mouse: dragging right decreases yaw, so
+   * negative yaw looks right; dragging down decreases pitch, so negative pitch
+   * looks down.
+   */
+  private resolveAssistedLook(): { yaw: number; pitch: number } | null {
+    const dir = this.padlockDirBody
+    if (dir) {
+      const [fwd, right, down] = dir
+      const horizontal = Math.hypot(fwd, right)
+      return {
+        yaw: clamp(-Math.atan2(right, fwd), -this.MAX_YAW_ASSISTED, this.MAX_YAW_ASSISTED),
+        pitch: clamp(-Math.atan2(down, horizontal), -this.MAX_PITCH_ASSISTED, this.MAX_PITCH_ASSISTED),
+      }
+    }
+    if (this.lookBack) {
+      // Go over whichever shoulder the head is already nearer, so a check-six
+      // from a right-hand freelook does not whip across the nose to get there.
+      const side = this.yaw < -0.05 ? -1 : 1
+      return { yaw: side * this.MAX_YAW_ASSISTED, pitch: 0 }
+    }
+    return null
   }
 
   getHeadAzDeg(): number { return this.yaw * (180 / Math.PI) }

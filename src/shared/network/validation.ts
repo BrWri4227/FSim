@@ -1,4 +1,7 @@
-import type { HitEvent, NetPlayerProfile, NetPlayerState, NetRadarState } from './MultiplayerTypes'
+import type {
+  HitEvent, MatchConfig, NetAIEntity, NetPlayerProfile, NetPlayerState, NetRadarState,
+} from './MultiplayerTypes'
+import { DEFAULT_TEAM, MAX_NET_AI_ENTITIES, isTeam } from './MultiplayerTypes'
 
 export const MAX_MESSAGE_BYTES = 64 * 1024
 export const MAX_INBOUND_DAMAGE_SEVERITY = 1.0
@@ -59,25 +62,94 @@ export function isValidProfile(p: unknown): p is NetPlayerProfile {
   if (callsign !== undefined && (typeof callsign !== 'string' || callsign.length > MAX_CALLSIGN_LENGTH * 4)) {
     return false
   }
+  const team = o['team']
+  if (team !== undefined && !isTeam(team)) return false
+  const ready = o['ready']
+  if (ready !== undefined && typeof ready !== 'boolean') return false
   return true
 }
 
-/** Normalize an accepted profile in place — call after `isValidProfile`. */
+/**
+ * Normalize an accepted profile — call after `isValidProfile`.
+ *
+ * The team is always stamped, even when the sender omitted it, so downstream
+ * code never has to decide what an absent side means. That matters: a peer
+ * whose team is ambiguous would be shootable by one client and not another.
+ */
 export function sanitizeProfile(p: NetPlayerProfile): NetPlayerProfile {
   const callsign = sanitizeCallsign(p.callsign)
-  return callsign ? { aircraftId: p.aircraftId, callsign } : { aircraftId: p.aircraftId }
+  const team = isTeam(p.team) ? p.team : DEFAULT_TEAM
+  const ready = p.ready === true
+  return callsign
+    ? { aircraftId: p.aircraftId, callsign, team, ready }
+    : { aircraftId: p.aircraftId, team, ready }
 }
 
-export function isValidHitEvent(h: unknown, senderId: string): h is HitEvent {
+/** Shape check only — says nothing about who is entitled to send it. */
+export function isWellFormedHit(h: unknown): h is HitEvent {
   if (typeof h !== 'object' || h === null) return false
   const o = h as Record<string, unknown>
   return (
-    o['sourceId'] === senderId &&
-    typeof o['targetId'] === 'string' && o['targetId'].length > 0 &&
-    o['targetId'] !== senderId &&
+    typeof o['sourceId'] === 'string' && o['sourceId'].length > 0 && o['sourceId'].length <= 96 &&
+    typeof o['targetId'] === 'string' && o['targetId'].length > 0 && o['targetId'].length <= 96 &&
+    o['targetId'] !== o['sourceId'] &&
     VALID_DAMAGE_ZONES.has(String(o['zone'])) &&
     typeof o['severity'] === 'number' && o['severity'] >= 0 && o['severity'] <= MAX_INBOUND_DAMAGE_SEVERITY &&
     (o['weapon'] === 'GUN' || o['weapon'] === 'MISSILE')
+  )
+}
+
+export function isValidHitEvent(h: unknown, senderId: string): h is HitEvent {
+  return isWellFormedHit(h) && h.sourceId === senderId
+}
+
+export const MAX_AI_LABEL_LENGTH = 24
+
+export function isValidAIEntity(v: unknown): v is NetAIEntity {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return (
+    typeof o['id'] === 'string' && o['id'].length > 0 && o['id'].length <= 96 &&
+    typeof o['aircraftId'] === 'string' && o['aircraftId'].length > 0 && o['aircraftId'].length <= 64 &&
+    isTeam(o['team']) &&
+    typeof o['label'] === 'string' && o['label'].length <= MAX_AI_LABEL_LENGTH * 4 &&
+    isValidPlayerState(o['state'])
+  )
+}
+
+/**
+ * Validate a whole `ai-state` frame.
+ *
+ * All or nothing: the frame is the complete set of live AI, so accepting a
+ * partially valid one would silently despawn whatever came after the bad entry.
+ */
+export function isValidAIStateFrame(v: unknown): v is NetAIEntity[] {
+  return Array.isArray(v) && v.length <= MAX_NET_AI_ENTITIES && v.every(isValidAIEntity)
+}
+
+/** Trim an accepted AI entity — the label is rendered on every other client. */
+export function sanitizeAIEntity(e: NetAIEntity): NetAIEntity {
+  return { ...e, label: sanitizeCallsign(e.label).slice(0, MAX_AI_LABEL_LENGTH) }
+}
+
+/** Upper bounds on host-supplied match rules — a hostile host must not be able
+ *  to set a match that never ends or a timer that overflows a setTimeout. */
+export const MAX_SCORE_LIMIT = 500
+export const MAX_TIME_LIMIT_SEC = 2 * 60 * 60
+
+export function isValidMatchConfig(c: unknown): c is MatchConfig {
+  if (typeof c !== 'object' || c === null) return false
+  const o = c as Record<string, unknown>
+  if (o['mode'] !== 'TDM' && o['mode'] !== 'FFA') return false
+  const scenarioId = o['scenarioId']
+  if (scenarioId !== undefined && (typeof scenarioId !== 'string' || scenarioId.length > 64)) {
+    return false
+  }
+  const score = o['scoreLimit']
+  const time = o['timeLimitSec']
+  return (
+    typeof score === 'number' && Number.isInteger(score) && score >= 1 && score <= MAX_SCORE_LIMIT &&
+    typeof time === 'number' && Number.isFinite(time) && time >= 0 && time <= MAX_TIME_LIMIT_SEC
   )
 }
 

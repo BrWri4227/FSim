@@ -127,7 +127,8 @@ export interface ControlInputs {
   cycleFlaps: boolean
   brakeHeld: boolean
   speedBrakeToggle: boolean
-  radarModeNext: boolean
+  /** Swap the radar between air search and ground search (one-shot edge). */
+  radarAirGroundToggle: boolean
   radarSelectNext: boolean
   radarLockTarget: boolean
   radarUnlock: boolean
@@ -143,6 +144,10 @@ export interface ControlInputs {
   wingmanCover: boolean
   wingmanRTB: boolean
   wingmanRejoin: boolean
+  /** Hold to snap the view over your shoulder; releases back to boresight. */
+  lookBack: boolean
+  /** Keep the designated bandit framed while the aircraft still flies to your stick (one-shot edge). */
+  padlockToggle: boolean
 }
 
 export interface AircraftState {

@@ -122,7 +122,7 @@ export class GlassHUD {
 
     // ── STT target designator ──────────────────────────────────────────────
     const target = radar.mode === 'STT' && radar.sttTargetId
-      ? entityManager.getEnemies().find(e => e.entityId === radar.sttTargetId) ?? null
+      ? entityManager.getHostiles().find(e => e.entityId === radar.sttTargetId) ?? null
       : null
     if (radar.sttTargetId !== this.sttLockId) {
       this.sttLockId = radar.sttTargetId
@@ -136,7 +136,7 @@ export class GlassHUD {
     // ── Own-missile time-to-impact (lower-left) ────────────────────────────
     const tti = collectMissileTTI(
       player.missiles.getMissiles(),
-      id => entityManager.getEnemies().find(e => e.entityId === id)?.state ?? null,
+      id => entityManager.getHostiles().find(e => e.entityId === id)?.state ?? null,
     ).slice(0, 3)
     c.font = '10px monospace'
     for (let i = 0; i < tti.length; i++) {
@@ -338,7 +338,7 @@ export class GlassHUD {
   private currentTarget(player: PlayerAircraft, entityManager: EntityManager): Aircraft | null {
     const id = player.radar.state.sttTargetId ?? player.hms.state.lockedEntityId
     if (!id) return null
-    return entityManager.getEnemies().find(e => e.entityId === id) ?? null
+    return entityManager.getHostiles().find(e => e.entityId === id) ?? null
   }
 
   private weaponLabel(player: PlayerAircraft): string {

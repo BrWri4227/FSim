@@ -5,6 +5,7 @@ import { networkInterfaces } from 'os'
 import { getPrimaryLanIp as _getPrimaryLanIp } from './lanIp'
 import { pathToFileURL } from 'url'
 import { createGameServer, type GameServer } from '../server/GameServer'
+import { MAX_SESSION_PORT, MIN_SESSION_PORT } from '../shared/network/MultiplayerTypes'
 
 let lanServer: GameServer | null = null
 let lanServerPort = 0
@@ -31,24 +32,70 @@ async function stopLanHost(): Promise<void> {
   await srv.close()
 }
 
+/**
+ * Turn a socket error into something a player can act on. These arrive in the
+ * lobby as the error line under the Host button, where a raw `listen EADDRINUSE
+ * 0.0.0.0:45454` stack tells them nothing about what to do next.
+ */
+function describeHostError(err: unknown, port: number): string {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  switch (code) {
+    case 'EADDRINUSE':
+      return `Port ${port} is already in use. Another session may already be running — ` +
+        'pick a different port, or stop the other one.'
+    case 'EACCES':
+      return `Not allowed to listen on port ${port}. Ports below ${MIN_SESSION_PORT} need ` +
+        'elevated privileges; pick a higher one. On Windows, the firewall prompt must ' +
+        'also be accepted before anyone can join.'
+    case 'EADDRNOTAVAIL':
+      return 'The requested bind address is not available on this machine.'
+    default:
+      return err instanceof Error ? err.message : `Could not start a session on port ${port}.`
+  }
+}
+
 async function startLanHost(port: number): Promise<{ ok: true; hostIp: string; port: number }> {
   if (lanServer && lanServerPort === port) {
     return { ok: true, hostIp: getPrimaryLanIp(), port }
   }
   await stopLanHost()
   emitLobbyEvent(`LAN host starting on ${getPrimaryLanIp()}:${port}`)
-  lanServer = await createGameServer({ port, onEvent: emitLobbyEvent })
+  try {
+    lanServer = await createGameServer({ port, onEvent: emitLobbyEvent })
+  } catch (err) {
+    const message = describeHostError(err, port)
+    emitLobbyEvent(`LAN host failed: ${message}`)
+    throw new Error(message)
+  }
   lanServerPort = port
   emitLobbyEvent(`LAN host ready on ${getPrimaryLanIp()}:${port}`)
   return { ok: true, hostIp: getPrimaryLanIp(), port }
 }
 
 function createWindow(): void {
+  // `.cjs` first: the window is sandboxed, and Electron only loads CommonJS
+  // preload scripts under sandbox. The other two are fallbacks for builds made
+  // before the preload output format was pinned — an `.mjs` preload will fail
+  // to load, so say so rather than opening a window with no `window.fsim`.
   const preloadPath = (() => {
-    const mjs = join(__dirname, '../preload/index.mjs')
-    const js = join(__dirname, '../preload/index.js')
-    if (existsSync(mjs)) return mjs
-    return js
+    const candidates = ['index.cjs', 'index.js', 'index.mjs']
+      .map(name => join(__dirname, '../preload', name))
+    const found = candidates.find(existsSync)
+    if (!found) {
+      console.error(
+        'No preload script found. Looked for:\n  ' + candidates.join('\n  ') +
+        '\nRun `npm run build` — without it the app has no IPC bridge, so ' +
+        'multiplayer and bundled audio will not work.'
+      )
+      return candidates[0] as string
+    }
+    if (found.endsWith('.mjs')) {
+      console.error(
+        `Preload ${found} is an ES module, which Electron cannot load in a ` +
+        'sandboxed window. Rebuild with `npm run build` to emit index.cjs.'
+      )
+    }
+    return found
   })()
 
   const win = new BrowserWindow({
@@ -123,8 +170,10 @@ function getAudioBaseUrls(): string[] {
 app.whenReady().then(() => {
   ipcMain.handle('mp:start-host', async (_e, port: unknown) => {
     const p = Number(port)
-    if (!Number.isInteger(p) || p < 1024 || p > 65535) {
-      throw new Error(`Invalid port: ${String(port)}`)
+    if (!Number.isInteger(p) || p < MIN_SESSION_PORT || p > MAX_SESSION_PORT) {
+      throw new Error(
+        `Invalid port: ${String(port)} (expected ${MIN_SESSION_PORT}-${MAX_SESSION_PORT})`
+      )
     }
     return startLanHost(p)
   })

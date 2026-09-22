@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { CockpitCamera } from './CockpitCamera'
 import { ExternalCamera } from './ExternalCamera'
 import type { PlayerAircraft } from '../entities/PlayerAircraft'
+import { nedToThree, quatConjugate, quatRotateVec } from '../utils/MathUtils'
 
 export type CameraMode = 'COCKPIT' | 'EXTERNAL'
 
@@ -11,6 +12,7 @@ export class CameraManager {
   private mode: CameraMode = 'COCKPIT'
   private cockpit: CockpitCamera
   private external: ExternalCamera
+  private padlockEnabled = false
   readonly camera: THREE.PerspectiveCamera
 
   constructor(camera: THREE.PerspectiveCamera) {
@@ -57,6 +59,41 @@ export class CameraManager {
     } else {
       this.external.update(this.camera, player)
     }
+  }
+
+  /** Hold-to-check-six, applied to whichever view is active. */
+  setLookBack(held: boolean): void {
+    this.cockpit.setLookBack(held)
+    this.external.setLookBack(held)
+  }
+
+  /** Flip padlock on/off. The session supplies the target each frame. */
+  togglePadlock(): void {
+    this.padlockEnabled = !this.padlockEnabled
+    if (!this.padlockEnabled) this.setPadlockTarget(null)
+  }
+
+  isPadlockEnabled(): boolean { return this.padlockEnabled }
+
+  /**
+   * Point the padlock at a bandit. Ignored while padlock is switched off, and
+   * `null` releases it — so losing the lock releases the view rather than
+   * leaving the head stuck where the bandit used to be.
+   */
+  setPadlockTarget(targetNED: readonly [number, number, number] | null, ownState?: PlayerAircraft['state']): void {
+    if (!this.padlockEnabled || !targetNED || !ownState) {
+      this.cockpit.setPadlockDirBody(null)
+      this.external.setPadlockTarget(null)
+      return
+    }
+    const toTargetNED: [number, number, number] = [
+      targetNED[0] - ownState.positionNED[0],
+      targetNED[1] - ownState.positionNED[1],
+      targetNED[2] - ownState.positionNED[2],
+    ]
+    // The cockpit head works in body axes; the chase camera works in world space.
+    this.cockpit.setPadlockDirBody(quatRotateVec(quatConjugate(ownState.attitudeQuat), toTargetNED))
+    this.external.setPadlockTarget(nedToThree(targetNED as [number, number, number]))
   }
 
   getMode(): CameraMode { return this.mode }

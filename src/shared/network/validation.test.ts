@@ -88,12 +88,48 @@ describe('network validation', () => {
     it('drops the callsign entirely when nothing usable remains', () => {
       // Receivers fall back to the peer id on absent, so a blank name must not
       // survive as an empty string that renders as nothing at all.
-      expect(sanitizeProfile({ aircraftId: 'f16c', callsign: '  ' })).toEqual({ aircraftId: 'f16c' })
+      expect(sanitizeProfile({ aircraftId: 'f16c', callsign: '  ' }))
+        .toEqual({ aircraftId: 'f16c', team: 'BLUE', ready: false })
     })
 
     it('keeps a sanitized callsign', () => {
       expect(sanitizeProfile({ aircraftId: 'f16c', callsign: ' Viper ' }))
-        .toEqual({ aircraftId: 'f16c', callsign: 'Viper' })
+        .toEqual({ aircraftId: 'f16c', callsign: 'Viper', team: 'BLUE', ready: false })
+    })
+
+    it('keeps a declared team', () => {
+      expect(sanitizeProfile({ aircraftId: 'f16c', team: 'RED' }))
+        .toEqual({ aircraftId: 'f16c', team: 'RED', ready: false })
+    })
+
+    it('normalises ready to a boolean', () => {
+      // The lobby reads this to decide whether START is safe to press, so an
+      // absent flag must land as "not ready" rather than undefined.
+      expect(sanitizeProfile({ aircraftId: 'f16c' }).ready).toBe(false)
+      expect(sanitizeProfile({ aircraftId: 'f16c', ready: true }).ready).toBe(true)
+    })
+
+    it('always stamps a team, so no peer is ambiguously sided', () => {
+      // A peer whose side is undefined would be shootable on one client and
+      // not another. Defaulting at the edge keeps every receiver in agreement.
+      expect(sanitizeProfile({ aircraftId: 'f16c' }).team).toBe('BLUE')
+    })
+  })
+
+  describe('team validation', () => {
+    it('accepts a profile with a valid team', () => {
+      expect(isValidProfile({ aircraftId: 'f16c', team: 'RED' })).toBe(true)
+      expect(isValidProfile({ aircraftId: 'f16c', team: 'BLUE' })).toBe(true)
+    })
+
+    it('accepts a profile with no team — older clients stay compatible', () => {
+      expect(isValidProfile({ aircraftId: 'f16c' })).toBe(true)
+    })
+
+    it('rejects a profile with a nonsense team', () => {
+      expect(isValidProfile({ aircraftId: 'f16c', team: 'GREEN' })).toBe(false)
+      expect(isValidProfile({ aircraftId: 'f16c', team: 3 })).toBe(false)
+      expect(isValidProfile({ aircraftId: 'f16c', team: null })).toBe(false)
     })
   })
 

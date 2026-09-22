@@ -8,13 +8,15 @@ import { AIAircraft, type AIBehavior } from '../ai/AIAircraft'
 import { runAIBrain } from '../ai/AIBrain'
 import type { MissileThreat } from '../ai/behaviors/EvadeMissile'
 import { WVR_MERGE_RANGE_M } from '../ai/behaviors/WVREngage'
+import { MIN_FIRE_INTERVAL_S } from '../ai/behaviors/BVREngage'
 import { MissileSystem } from '../weapons/MissileSystem'
 import type { Aircraft } from './Aircraft'
 import type { PlayerAircraft } from './PlayerAircraft'
 import { NetworkAircraft } from './NetworkAircraft'
 import { GroundTarget } from './GroundTarget'
 import type { GroundTargetSpec } from '../types/groundTarget'
-import type { NetPlayerState } from '../network/MultiplayerTypes'
+import type { DamageZone, NetPlayerState, Team } from '../network/MultiplayerTypes'
+import { DEFAULT_TEAM } from '../network/MultiplayerTypes'
 
 /** Horizontal distance beyond which AI physics/behaviour updates are skipped. */
 const AI_SIM_CULL_RANGE_M = 80_000
@@ -35,9 +37,23 @@ export class EntityManager {
   killCount = 0
   groundKillCount = 0
   lastWingmanCmd: 'ENGAGE' | 'COVER' | 'RTB' | 'REJOIN' | null = null
+  /**
+   * Fired when an AI bandit or ground target is destroyed, so the session can
+   * confirm the kill to the player. Multiplayer kills already arrive as server
+   * `death` events; these used to increment [killCount] and say nothing.
+   */
+  onEnemyDestroyed: ((displayName: string) => void) | null = null
 
-  /** Cached combined enemy list — rebuilt only when the entity set changes. */
-  private _enemyCache: Aircraft[] | null = null
+  /** Cached contact partitions — rebuilt when the entity set or our team changes. */
+  private _hostileCache: Aircraft[] | null = null
+  private _friendlyCache: Aircraft[] | null = null
+  private localTeam: Team = DEFAULT_TEAM
+
+  /** Rebuilt lazily by getHostiles/getFriendlies on the next call. */
+  private invalidateContactCaches(): void {
+    this._hostileCache = null
+    this._friendlyCache = null
+  }
 
   constructor(scene: THREE.Scene, player: PlayerAircraft) {
     this.scene  = scene
@@ -49,7 +65,8 @@ export class EntityManager {
   spawnEnemy(spec: AircraftSpec, stores: LoadedStore[], behavior: AIBehavior, spawnPos: Vec3, spawnVel: Vec3): AIAircraft {
     const ai = new AIAircraft(spec, stores, this.scene, behavior, spawnPos, spawnVel)
     this.enemies.push(ai)
-    this._enemyCache = null  // invalidate cache
+    this.wireAIHitReporting(ai)
+    this.invalidateContactCaches()
     return ai
   }
 
@@ -57,7 +74,70 @@ export class EntityManager {
     const wm = new AIAircraft(spec, stores, this.scene, 'FOLLOW_BEHIND', spawnPos, spawnVel)
     wm.side = 'WINGMAN'
     this.wingmen.push(wm)
+    this.wireAIHitReporting(wm)
     return wm
+  }
+
+  // ── AI replication (host only) ─────────────────────────────────────────────
+
+  /**
+   * Told when one of our AI hits a remote player.
+   *
+   * Only the host simulates AI, and remote players are invincible locally, so
+   * the damage has to be reported to the victim's own client — nobody else is
+   * in a position to know it happened.
+   */
+  onAIHitRemotePlayer:
+    | ((aiEntityId: string, targetId: string, zone: DamageZone, severity: number, weapon: 'GUN' | 'MISSILE') => void)
+    | null = null
+
+  private wireAIHitReporting(ai: AIAircraft): void {
+    const report = (weapon: 'GUN' | 'MISSILE') =>
+      (target: Aircraft, zone: DamageZone, severity: number): void => {
+        // Only remote players need telling; local damage already happened.
+        if (!this.remotePlayers.has(target.entityId)) return
+        this.onAIHitRemotePlayer?.(ai.entityId, target.entityId, zone, severity, weapon)
+      }
+    ai.gun.setOnTargetHit(report('GUN'))
+    ai.missiles.setOnTargetHit(report('MISSILE'))
+  }
+
+  /** Every AI this client is simulating, hostile and friendly alike. */
+  getSimulatedAI(): AIAircraft[] {
+    return [...this.enemies, ...this.wingmen]
+  }
+
+  /**
+   * Apply a hit that a remote player reported against one of our AI.
+   *
+   * Returns true when the AI was destroyed by it, so the caller can report the
+   * kill. Damage stays client-authoritative, as it is for players — the
+   * difference is that for AI the authority is the host rather than the victim.
+   */
+  applyHitToAI(aiEntityId: string, zone: DamageZone, severity: number): boolean {
+    const ai = this.getSimulatedAI().find(a => a.entityId === aiEntityId)
+    if (!ai) return false
+    const wasDown = ai.damage.structuralFailure || ai.state.ejected
+    ai.applyIncomingHit(zone, severity)
+    return !wasDown && (ai.damage.structuralFailure || ai.state.ejected)
+  }
+
+  /**
+   * Mirror the host's AI as ordinary remote aircraft.
+   *
+   * Reusing [upsertRemotePlayer] is the whole trick: an AI arriving over the
+   * wire is indistinguishable from a human as far as interpolation, team
+   * filtering, radar and the HUD are concerned, so none of that needs an AI
+   * case.
+   */
+  upsertRemoteAI(
+    aiId: string,
+    aircraftSpec: AircraftSpec,
+    state: NetPlayerState,
+    label: string,
+    team: Team,
+  ): void {
+    this.upsertRemotePlayer(aiId, aircraftSpec, state, label, team)
   }
 
   getWingmen(): AIAircraft[] {
@@ -105,16 +185,19 @@ export class EntityManager {
     const ai = this.enemies[idx]!
     this.scene.remove(ai.mesh)
     this.enemies.splice(idx, 1)
-    this._enemyCache = null  // invalidate cache
+    this.invalidateContactCaches()
     this.killCount++
+    this.onEnemyDestroyed?.(ai.spec.displayName)
   }
 
   private despawnGround(entityId: string): void {
     const idx = this.groundTargets.findIndex(g => g.entityId === entityId)
     if (idx < 0) return
-    this.groundTargets[idx]!.dispose()
+    const gt = this.groundTargets[idx]!
+    gt.dispose()
     this.groundTargets.splice(idx, 1)
     this.groundKillCount++
+    this.onEnemyDestroyed?.(gt.spec.displayName)
   }
 
   /** Launch an inbound R-73 at the player from the nearest spawned enemy (or 2 km behind). */
@@ -176,7 +259,8 @@ export class EntityManager {
         ai.wvrFireCooldownSec = 4
       }
     } else if (ai.bvrFireCooldownSec <= 0 && ai.fireBVRMissile(target)) {
-      ai.bvrFireCooldownSec = 5
+      // Shared with the brain's crank timing, so re-attack spacing is one number.
+      ai.bvrFireCooldownSec = MIN_FIRE_INTERVAL_S
     }
   }
 
@@ -191,7 +275,7 @@ export class EntityManager {
 
   update(dt: number, player: PlayerAircraft): void {
     // Update debug missiles — pass player aircraft so 'player' target resolves correctly
-    this.debugMissiles.update(dt, player.state, this.getEnemies(), player as unknown as Aircraft, undefined, undefined, this.groundTargets)
+    this.debugMissiles.update(dt, player.state, this.getHostiles(), player as unknown as Aircraft, undefined, undefined, this.groundTargets)
 
     // Pre-compute missile target lists for AI weapon systems.
     const playerAsAircraft = player as unknown as Aircraft
@@ -228,7 +312,7 @@ export class EntityManager {
     }
 
     // Wingmen — same update path as enemies but they target the player's locked
-    // bandit instead of the player. They're not in `getEnemies()` so the player's
+    // bandit instead of the player. They're not in `getHostiles()` so the player's
     // own missiles can't track them.
     for (let i = this.wingmen.length - 1; i >= 0; i--) {
       const wm = this.wingmen[i]!
@@ -278,7 +362,13 @@ export class EntityManager {
         const detectR = gt.spec.samDetectionRangeM ?? 50000
         const engageR = gt.spec.samEngagementRangeM ?? 40000
         if (dist <= detectR) {
-          const engaging = dist <= engageR && gt.samReadyToFire()
+          // Same discipline the BVR brain follows: one round in the air at a
+          // time. A site that re-fires on its reload timer regardless stacks
+          // missiles on a target that is still defending the last one.
+          const alreadyAirborne = this.samMissiles
+            .getMissiles()
+            .some(m => m.active && m.shooterEntityId === gt.entityId)
+          const engaging = dist <= engageR && gt.samReadyToFire() && !alreadyAirborne
           samEmitters.push({
             entityId: gt.entityId,
             positionNED: [...gt.state.positionNED] as [number, number, number],
@@ -333,11 +423,64 @@ export class EntityManager {
     for (const gt of this.groundTargets) gt.updateMesh()
   }
 
-  getEnemies(): Aircraft[] {
-    if (this._enemyCache === null) {
-      this._enemyCache = [...this.enemies, ...this.remotePlayers.values()]
+  /**
+   * Everything the player may track, lock and shoot: all AI, plus the remote
+   * players on the *other* side.
+   *
+   * This is the one place teams are enforced. [PlayerAircraft.update] hands this
+   * single array to the gun, the missile system, the radar and the RWR, so
+   * filtering here makes a teammate simultaneously un-lockable, un-shootable
+   * and invisible to our own RWR — without threading a team check through four
+   * subsystems. Teammates are still *rendered*, and [getFriendlies] puts them
+   * back on the HUD, or players would lose their team picture entirely.
+   *
+   * AI is always hostile: no scenario currently spawns friendly AI on a side.
+   */
+  getHostiles(): Aircraft[] {
+    if (this._hostileCache === null) {
+      const hostileRemotes: Aircraft[] = []
+      for (const remote of this.remotePlayers.values()) {
+        if (remote.team !== this.localTeam) hostileRemotes.push(remote)
+      }
+      this._hostileCache = [...this.enemies, ...hostileRemotes]
     }
-    return this._enemyCache
+    return this._hostileCache
+  }
+
+  /** Remote players on our own side — for markers and the team picture. */
+  getFriendlies(): Aircraft[] {
+    if (this._friendlyCache === null) {
+      const friendly: Aircraft[] = []
+      for (const remote of this.remotePlayers.values()) {
+        if (remote.team === this.localTeam) friendly.push(remote)
+      }
+      this._friendlyCache = friendly
+    }
+    return this._friendlyCache
+  }
+
+  /** Every aircraft in the world regardless of side — AWACS classifies its own picture. */
+  getAllAircraft(): Aircraft[] {
+    return [...this.enemies, ...this.remotePlayers.values()]
+  }
+
+  /** Which side the local pilot is on. Changing it re-partitions the contacts. */
+  setLocalTeam(team: Team): void {
+    if (this.localTeam === team) return
+    this.localTeam = team
+    this.invalidateContactCaches()
+  }
+
+  getLocalTeam(): Team {
+    return this.localTeam
+  }
+
+  /**
+   * Side of a contact by entity id, or null if it is not a remote player.
+   * AI has no team — AWACS falls back to its nation check for those.
+   */
+  teamOf(entityId: string): Team | null {
+    return this.remotePlayers.get(entityId)?.team ?? null
   }
 
   getAllAIFlares(): FlareContact[] {
@@ -418,16 +561,24 @@ export class EntityManager {
     playerId: string,
     aircraftSpec: AircraftSpec,
     state: NetPlayerState,
-    callsign?: string
+    callsign?: string,
+    team: Team = DEFAULT_TEAM,
   ): void {
     let remote = this.remotePlayers.get(playerId)
     if (!remote) {
       remote = new NetworkAircraft(aircraftSpec, this.scene, playerId)
       this.remotePlayers.set(playerId, remote)
-      this._enemyCache = null  // new remote player — invalidate cache
+      this.invalidateContactCaches()  // new remote player — invalidate cache
     }
     // Refreshed every tick, so a mid-session rename lands without a respawn.
     remote.callsign = callsign ?? null
+    // A side switch has to re-partition the contacts, or a pilot who just
+    // changed teams stays lockable (or stops being lockable) until something
+    // unrelated happens to invalidate the cache.
+    if (remote.team !== team) {
+      remote.team = team
+      this.invalidateContactCaches()
+    }
     remote.applyNetworkState(state)
   }
 
@@ -436,7 +587,7 @@ export class EntityManager {
     if (!remote) return
     remote.dispose()
     this.remotePlayers.delete(playerId)
-    this._enemyCache = null  // invalidate cache
+    this.invalidateContactCaches()
   }
 
   dispose(): void {

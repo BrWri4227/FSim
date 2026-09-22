@@ -8,6 +8,23 @@ export interface ChaffCloud {
   ageSec: number
 }
 
+/**
+ * Radiated power of a fresh decoy flare, in the same arbitrary units as
+ * `AircraftSpec.heatSignatureBaseKW`.
+ *
+ * A flare has to comfortably outshine a tailpipe or it is not a decoy. At the
+ * old 60 it was dimmer than most of the roster seen from behind (an Su-27 in
+ * afterburner reads ~300 at tail aspect), so `evaluateFlareSeduction`'s
+ * brightness gate could never pass in the exact geometry flares exist for. The
+ * gate now only screens out flares that have burned down; which seeker is
+ * fooled is decided by its `flareRejectionCapability`, which is what that field
+ * is for and what differentiates an R-73 from an AIM-9X.
+ */
+export const FLARE_PEAK_HEAT_KW = 400
+
+/** Seconds a flare burns before it is no longer competitive with the target. */
+export const FLARE_BURN_SEC = 4.0
+
 export class CMDS {
   private readonly MAX_FLARES: number
   private readonly MAX_CHAFF: number
@@ -31,7 +48,7 @@ export class CMDS {
     this.flares.push({
       positionNED: [...posNED] as Vec3,
       velocityNED: [...velocityNED] as Vec3,
-      heatSignatureKW: 60,  // bright flare
+      heatSignatureKW: FLARE_PEAK_HEAT_KW,
       ageSec: 0
     })
   }
@@ -80,8 +97,8 @@ export class CMDS {
         f.positionNED[1] + f.velocityNED[1] * dt,
         f.positionNED[2] + f.velocityNED[2] * dt,
       ]
-      f.heatSignatureKW = Math.max(0, 60 * (1 - f.ageSec / 4.0))
-      if (f.ageSec > 4.0) this.flares.splice(i, 1)
+      f.heatSignatureKW = Math.max(0, FLARE_PEAK_HEAT_KW * (1 - f.ageSec / FLARE_BURN_SEC))
+      if (f.ageSec > FLARE_BURN_SEC) this.flares.splice(i, 1)
     }
     for (let i = this.chaffClouds.length - 1; i >= 0; i--) {
       const c = this.chaffClouds[i]!

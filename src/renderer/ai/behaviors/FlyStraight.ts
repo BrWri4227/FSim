@@ -1,6 +1,7 @@
 ﻿import type { ControlInputs } from '../../types/aircraft'
 import type { AIAircraft } from '../AIAircraft'
 import { clamp } from '../../utils/MathUtils'
+import { neutralControls } from '../../input/neutralControls'
 
 export function flyStraight(self: AIAircraft, _dt: number): ControlInputs {
   // NED: positive Z = Down.  altErr > 0 → aircraft is below its target altitude.
@@ -20,12 +21,5 @@ export function flyStraight(self: AIAircraft, _dt: number): ControlInputs {
   // Maintain sustainable cruise throttle
   const throttle = 0.72
 
-  return {
-    pitch, roll, yaw: 0, throttle,
-    fireMissile: false, fireGun: false, cycleMissile: false,
-    dispenseFlare: false, dispenseChaff: false, toggleGear: false, cycleFlaps: false, brakeHeld: false, speedBrakeToggle: false,
-    radarModeNext: false, radarSelectNext: false, radarLockTarget: false, radarUnlock: false, ejectRequested: false,
-    tgpToggle: false, tgpLock: false, tgpUnlock: false,
-    wingmanEngage: false, wingmanCover: false, wingmanRTB: false, wingmanRejoin: false,
-  }
+  return neutralControls({ pitch, roll, throttle })
 }

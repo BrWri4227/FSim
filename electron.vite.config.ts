@@ -22,7 +22,19 @@ export default defineConfig({
     define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
     build: {
       outDir: 'dist-electron/preload',
-      rollupOptions: { input: { index: resolve(__dirname, 'src/preload/index.ts') } }
+      rollupOptions: {
+        input: { index: resolve(__dirname, 'src/preload/index.ts') },
+        // CommonJS, and a `.cjs` extension, both deliberately.
+        //
+        // package.json is `"type": "module"`, so electron-vite would otherwise
+        // emit `index.mjs` — and a `.js` here would be read as ESM too. But the
+        // BrowserWindow runs with `sandbox: true`, and Electron only loads
+        // CommonJS preload scripts under sandbox. An ESM preload fails silently:
+        // `contextBridge.exposeInMainWorld` never runs, `window.fsim` is
+        // undefined, and the lobby reports "Multiplayer is unavailable in this
+        // runtime" while the version badge quietly reads "dev".
+        output: { format: 'cjs', entryFileNames: '[name].cjs' }
+      }
     }
   },
   renderer: {

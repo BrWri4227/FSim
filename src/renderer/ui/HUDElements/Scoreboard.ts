@@ -1,3 +1,5 @@
+import type { Team } from '../../network/MultiplayerTypes'
+
 export interface ScoreboardRow {
   playerId: string
   name: string
@@ -5,6 +7,13 @@ export interface ScoreboardRow {
   kills: number
   deaths: number
   isLocal: boolean
+  team: Team
+}
+
+/** Row colours by side, so the board reads as two teams rather than a list. */
+const TEAM_COLOR: Record<Team, string> = {
+  BLUE: '#7ab8ff',
+  RED: '#ff8080',
 }
 
 /**
@@ -51,12 +60,16 @@ export function drawScoreboard(
   ctx.fillText('K', colK, y + headerH + fontPx)
   ctx.fillText('D', colD, y + headerH + fontPx)
 
-  const sorted = [...rows].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)
+  // Grouped by side first, then by score, so the board reads as two teams.
+  const sorted = [...rows].sort(
+    (a, b) =>
+      a.team.localeCompare(b.team) || b.kills - a.kills || a.deaths - b.deaths,
+  )
   sorted.forEach((row, i) => {
     const rowY = y + headerH + lineH + i * lineH + fontPx
-    ctx.fillStyle = row.isLocal ? '#00ff44' : '#cceecc'
+    ctx.fillStyle = row.isLocal ? '#00ff44' : TEAM_COLOR[row.team]
     ctx.textAlign = 'left'
-    const label = `${row.name}  ${row.aircraft}`
+    const label = `${row.team === 'BLUE' ? '◆' : '◇'} ${row.name}  ${row.aircraft}`
     ctx.fillText(label, x + pad, rowY)
     ctx.textAlign = 'right'
     ctx.fillText(String(row.kills), colK, rowY)

@@ -79,6 +79,18 @@ export interface MissileState {
   lastKnownTargetVel: Vec3
   active: boolean
   shooterEntityId: string
+  /**
+   * A decoy the seeker has committed to, and how long it stays committed.
+   *
+   * Seduction used to be re-rolled every tick and only redirected guidance for
+   * that single frame, so a "successful" flare or chaff break steered the
+   * missile for 1/60 s and it snapped straight back onto the real target. The
+   * net effect on the trajectory was indistinguishable from noise. Breaking lock
+   * has to *stick* for the decoy to be worth carrying.
+   */
+  decoyTargetPos?: Vec3
+  decoyTargetVel?: Vec3
+  decoyRemainSec?: number
 }
 
 export interface GunRoundState {

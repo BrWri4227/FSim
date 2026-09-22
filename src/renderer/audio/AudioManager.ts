@@ -16,7 +16,13 @@ export type AudioEvent =
   | 'PULL_UP'
   | 'PULL_UP_URGENT'
   | 'ENGINE_FLAMEOUT'
+  /** We took a hit. */
   | 'HIT'
+  /** We landed a hit on someone else — the counterpart to HIT. */
+  | 'HIT_DEALT_GUN'
+  | 'HIT_DEALT_MISSILE'
+  /** We destroyed something. */
+  | 'KILL_CONFIRMED'
   | 'EXPLOSION'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -74,10 +80,22 @@ const SOUND_FILES: Record<string, string> = {
   pull_up:           'pull_up.wav',
   pull_up_urgent:    'pull_up_urgent.wav',
   hit:               'hit.wav',
+  hit_dealt:         'hit_dealt.wav',
+  splash:            'splash.wav',
   explosion:         'explosion.wav',
 }
 
-const OPTIONAL_SOUND_FILES = new Set(['pitbull', 'shoot', 'hit', 'explosion', 'gun_20mm_tail', 'gun_30mm_tail'])
+const OPTIONAL_SOUND_FILES = new Set([
+  'pitbull', 'shoot', 'hit', 'hit_dealt', 'splash', 'explosion',
+  'gun_20mm_tail', 'gun_30mm_tail',
+])
+
+/**
+ * Minimum gap between outgoing-hit ticks. A 6000 rpm cannon lands up to 100
+ * rounds a second, and one cue per round is a buzz, not feedback — the HUD
+ * marker still refreshes on every round.
+ */
+const HIT_DEALT_MIN_INTERVAL_MS = 70
 const BINGO_FUEL_FRACTION = 0.20
 const LOW_FUEL_FRACTION = 0.10
 const CALLOUT_COOLDOWN_SEC = 10
@@ -139,6 +157,8 @@ export class AudioManager {
   private gunSrcGain: GainNode | null = null
   private gunFiring   = false
   private gunCaliber: '20mm' | '30mm' = '20mm'
+  /** Last outgoing-hit tick, for [throttleHitDealt]. */
+  private lastHitDealtMs = 0
 
   // ── Master gain (global volume) ─────────────────────────────────────────
   private masterGain: GainNode
@@ -465,10 +485,30 @@ export class AudioManager {
       case 'HIT':
         if (!this.playOnce('hit', 0.9)) this.playTone(140, 0.18, 0.5)
         break
+      // Outgoing hits read as a bright tick against the low thump of taking
+      // one, so the pilot can tell the two apart without looking.
+      case 'HIT_DEALT_GUN':
+        if (this.throttleHitDealt()) break
+        if (!this.playOnce('hit_dealt', 0.5)) this.playTone(1150, 0.08, 0.05)
+        break
+      case 'HIT_DEALT_MISSILE':
+        if (!this.playOnce('hit_dealt', 0.95)) this.playTone(820, 0.22, 0.16)
+        break
+      case 'KILL_CONFIRMED':
+        if (!this.playOnce('splash', 0.95)) this.speak('Splash')
+        break
       case 'EXPLOSION':
         if (!this.playOnce('explosion', 0.85)) this.playTone(70, 0.5, 0.6)
         break
     }
+  }
+
+  /** True when this gun tick arrived too soon after the last one to be worth playing. */
+  private throttleHitDealt(): boolean {
+    const now = performance.now()
+    if (now - this.lastHitDealtMs < HIT_DEALT_MIN_INTERVAL_MS) return true
+    this.lastHitDealtMs = now
+    return false
   }
 
   /**

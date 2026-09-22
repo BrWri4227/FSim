@@ -81,28 +81,68 @@ npm run dist
 
 All installers are written to the `release/` directory.
 
-## LAN Multiplayer
+## Multiplayer
 
-FSim supports 2–N player combat over a local network. No internet or account is required.
+FSim supports 2–N player combat over a LAN or the internet. No account is
+required. Everything happens on the **Multiplayer** screen, reached from the
+main menu.
 
-### Hosting a game
+### Hosting on your own machine
 
-1. On the **Loadout** screen, set a port (default **45454**) and click **Host Lobby**.
-2. Your LAN IP is shown next to "Host/share IP" — share this with other players.
-3. On **macOS**, the OS will prompt *"FSim would like to accept incoming network connections"* — click **Allow**.
-4. On **Windows**, allow the app through Windows Defender Firewall if prompted.
+1. Pick a port (default **45454**) and click **HOST**. Your LAN address is shown
+   at the top of the connection panel — share `address:port` with the others.
+2. On **Windows**, allow the app through Windows Defender Firewall when prompted.
+   Nobody can join until that prompt is accepted.
+3. On **macOS**, allow *"FSim would like to accept incoming network connections"*.
 
-### Joining a game
+### Joining
 
-1. Enter the host's LAN IP and port, then click **Join Lobby**.
-2. No inbound port needs to be open on the joiner's machine.
+1. Type the host's address in the join field and click **JOIN**. The field takes
+   a bare IP, `host:port`, or a full `ws://` / `wss://` URL.
+2. **TEST** asks that address what it is — name, players, ping, and whether it
+   wants a password — without joining.
+3. **+ SAVE CURRENT** keeps the address for next time. **REFRESH** checks every
+   saved address at once, so you can see which of your sessions has people in it.
+4. Nothing needs to be open on the joiner's machine.
+
+The port is remembered between runs, and it is how you pick between sessions:
+see below.
+
+### Dedicated servers, and several sessions at once
+
+A session can run head-less on an always-on box — a Raspberry Pi is plenty,
+since the server relays messages and runs no simulation:
+
+```bash
+npm run server -- --port 45454 --name "Alpha"
+```
+
+**A session is a process.** Several concurrent, independent sessions are several
+processes on several ports — `45454`, `45455`, and so on — which is why the
+port field is editable and saved. Give each one a `--name` and `TEST`/`REFRESH`
+will tell them apart.
+
+Set a password with the `FSIM_PASSWORD` environment variable for anything on a
+publicly routable port. See [docs/dedicated-server.md](docs/dedicated-server.md)
+for the systemd template unit, TLS with a reverse proxy, and
+`scripts/deploy-pi.sh`.
 
 ### Notes
 
-- All players must be on the same subnet (e.g. the same Wi-Fi or wired LAN).
-- If the displayed IP looks wrong (VPN active, multiple adapters), check your OS network settings and enter the correct IP manually in the join field.
+- On a LAN, all players must be on the same subnet.
+- If the displayed IP looks wrong (VPN active, multiple adapters), enter the
+  correct one manually in the join field.
 - Mac and Windows players can play together — the protocol is cross-platform.
-- AP client isolation on some routers will block connections; disable it or use a direct switch if joining fails.
+- AP client isolation on some routers blocks connections; disable it or use a
+  wired switch if joining fails.
+- The host picks the scenario for everyone, and simulates the AI in it. Any
+  scenario works: AI is replicated from the host, so there is one set of bandits
+  rather than a private copy per player.
+- Kills against AI count towards your personal score and the kill feed, but not
+  towards the team score that ends a match — that race is between players.
+- If the host leaves, its AI goes with it and a new host is elected.
+- Friendly fire is off, and the server enforces it — you cannot lock or hit
+  your own side.
 
 ## Audio Assets
 

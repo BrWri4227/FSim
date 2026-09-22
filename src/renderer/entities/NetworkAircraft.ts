@@ -1,11 +1,13 @@
 import * as THREE from 'three'
 import type { AircraftSpec } from '../types/aircraft'
-import type { NetPlayerState, NetRadarState, NetMissileState } from '../network/MultiplayerTypes'
+import type { NetPlayerState, NetRadarState, NetMissileState, Team } from '../network/MultiplayerTypes'
+import { DEFAULT_TEAM } from '../network/MultiplayerTypes'
 import { cloneNetPlayerState } from '../../shared/network/MultiplayerTypes'
 import { Aircraft } from './Aircraft'
 import type { ChaffCloud } from '../avionics/CMDS'
 import type { FlareContact } from '../types/ir'
 import { RemoteMissileVisual } from '../weapons/RemoteMissileVisual'
+import { ArrivalJitterTracker } from '../network/interpolationDelay'
 import { ExplosionManager } from '../scene/ExplosionEffect'
 
 // Reusable temporaries — avoids per-frame Quaternion allocations
@@ -28,12 +30,26 @@ export class NetworkAircraft extends Aircraft {
   private _snapshotBuffer: TimedSnapshot[] = []
   /** Last position pushed to the buffer — dedupes the 60 Hz re-delivery of a 20 Hz stream. */
   private _lastBufferedPos: [number, number, number] | null = null
+  /**
+   * Per-peer arrival pattern. The render delay follows what this link actually
+   * does rather than a constant: a fixed LAN-sized delay is too short for a Pi
+   * across the internet, and the interpolator answers by extrapolating, which
+   * is what rubber-banding is.
+   */
+  private _jitter = new ArrivalJitterTracker()
 
-  // Interpolation is tuned for internet latency/jitter, not just LAN: a deeper
-  // buffer and a slightly longer delay ride out reordered / dropped packets.
-  private static readonly INTERP_DELAY_MS = 120
-  private static readonly MAX_SNAPSHOTS = 12
-  private static readonly MAX_EXTRAP_MS = 250
+  // A deeper buffer than a LAN needs, so a WAN delay near the ceiling still has
+  // snapshots on both sides of the render time to interpolate between.
+  private static readonly MAX_SNAPSHOTS = 24
+  // Covers roughly one dropped snapshot at the worst tolerated delay. Past this
+  // the aircraft is guessing, and it is better to stop than to invent a flight
+  // path that snaps when the truth arrives.
+  private static readonly MAX_EXTRAP_MS = 400
+
+  /** Current render delay in ms — exposed for the HUD's link readout. */
+  get interpolationDelayMs(): number {
+    return this._jitter.delayMs()
+  }
 
   readonly cmds = {
     getActiveFlares: (): ReadonlyArray<FlareContact> => this._netFlares,
@@ -42,6 +58,14 @@ export class NetworkAircraft extends Aircraft {
 
   /** Sanitized display name from the peer's profile; null falls back to the id. */
   callsign: string | null = null
+
+  /**
+   * Side this peer is fighting for. Drives whether we can lock and shoot them —
+   * see [EntityManager.getHostiles]. Defaults to BLUE so a peer on an older
+   * build that sends no team is still classified deterministically rather than
+   * being hostile on one client and friendly on another.
+   */
+  team: Team = DEFAULT_TEAM
 
   /** What to label this contact with on the HUD and in the kill feed. */
   get displayName(): string {
@@ -73,8 +97,10 @@ export class NetworkAircraft extends Aircraft {
       this._lastBufferedPos[2] === p[2]
     if (isDuplicate) return
 
+    const arrivedAtMs = performance.now()
+    this._jitter.record(arrivedAtMs)
     this._lastBufferedPos = [p[0], p[1], p[2]]
-    this._snapshotBuffer.push({ receivedAtMs: performance.now(), state: cloneNetPlayerState(net) })
+    this._snapshotBuffer.push({ receivedAtMs: arrivedAtMs, state: cloneNetPlayerState(net) })
     while (this._snapshotBuffer.length > NetworkAircraft.MAX_SNAPSHOTS) {
       this._snapshotBuffer.shift()
     }
@@ -172,7 +198,7 @@ export class NetworkAircraft extends Aircraft {
     const buf = this._snapshotBuffer
     if (buf.length === 0) return
 
-    const targetMs = performance.now() - NetworkAircraft.INTERP_DELAY_MS
+    const targetMs = performance.now() - this._jitter.delayMs()
     const first = buf[0]!
     const last = buf[buf.length - 1]!
 

@@ -1,14 +1,18 @@
 import type { ScenarioDescriptor } from '../types/mission'
-import { SCENARIO_CATALOG } from '../mission/scenarios'
+import { SCENARIO_CATALOG, DEFAULT_SCENARIO } from '../mission/scenarios'
 
 export class MissionSelectScreen {
   private el: HTMLDivElement
   private contentEl: HTMLDivElement
-  private selectedScenario: ScenarioDescriptor = SCENARIO_CATALOG[1] ?? SCENARIO_CATALOG[0]!
+  // Highlight a mission with bandits in it. This used to be SCENARIO_CATALOG[1]
+  // (Free Flight), so a new pilot who accepted the default launched into empty
+  // skies with nothing to shoot and no hint that anything else existed.
+  private selectedScenario: ScenarioDescriptor = DEFAULT_SCENARIO
 
   constructor(
     _container: HTMLElement,
-    private onContinue: (scenario: ScenarioDescriptor) => void
+    private onContinue: (scenario: ScenarioDescriptor) => void,
+    private onBack: (() => void) | null = null,
   ) {
     this.el = document.createElement('div')
     Object.assign(this.el.style, {
@@ -46,6 +50,15 @@ export class MissionSelectScreen {
     title.style.cssText =
       'color:#00ff88;letter-spacing:clamp(2px,0.5vw,4px);font-size:clamp(16px,2.5vw,22px);margin:0;text-align:center'
     this.contentEl.appendChild(title)
+
+    if (this.onBack) {
+      const back = document.createElement('button')
+      back.textContent = '← MAIN MENU'
+      back.style.cssText =
+        'padding:6px 14px;font:11px monospace;background:#0a150a;color:#88bb88;border:1px solid #226644;cursor:pointer'
+      back.onclick = () => this.onBack!()
+      this.contentEl.appendChild(back)
+    }
 
     const grid = document.createElement('div')
     grid.style.cssText =

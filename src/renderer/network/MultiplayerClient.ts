@@ -1,10 +1,17 @@
-import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent, NetScore } from './MultiplayerTypes'
+import type { MultiplayerConfig, NetPlayerProfile, NetPlayerState, ServerMessage, ClientMessage, HitEvent, NetScore, MatchConfig, MatchState, JoinRejectionReason, NetAIEntity } from './MultiplayerTypes'
+import { DEFAULT_MATCH_CONFIG, PROTOCOL_VERSION, lobbyMatchState } from './MultiplayerTypes'
 
 /** The server's `death` broadcast, as handed to the session. */
 export type DeathEvent = Extract<ServerMessage, { type: 'death' }>
+/** The server's `ai-death` broadcast, as handed to the session. */
+export type AIDeathEvent = Extract<ServerMessage, { type: 'ai-death' }>
 import { quantizePlayerState, missileSetKey } from '../../shared/network/serialization'
 
 const CONNECT_TIMEOUT_MS = 8000
+/** App-level latency probe cadence. Cheap: two tiny frames a second. */
+const PING_INTERVAL_MS = 1000
+/** Smoothing on the RTT readout, so the HUD number does not flicker. */
+const RTT_SMOOTHING = 0.3
 const MAX_INBOUND_HITS = 256
 /** Deaths are far rarer than hits, but the queue still needs a ceiling. */
 const MAX_INBOUND_DEATHS = 64
@@ -12,6 +19,63 @@ const MAX_INBOUND_DEATHS = 64
 const STATE_SEND_INTERVAL_SEC = 1 / 20
 /** Full countermeasure re-sync cadence while flares/chaff are active (they age locally between). */
 const CM_RESYNC_INTERVAL_SEC = 0.5
+
+/**
+ * A join the server refused, with the reason it gave.
+ *
+ * Carried as a typed field rather than only a message so the lobby can react to
+ * `bad-password` by showing the password box, instead of string-matching.
+ */
+export class JoinRejectedError extends Error {
+  constructor(readonly reason: JoinRejectionReason) {
+    super(describeJoinRejection(reason))
+    this.name = 'JoinRejectedError'
+  }
+}
+
+/** Why a session ended, in words a player can act on. */
+export interface DisconnectInfo {
+  code: number
+  reason: string
+  /** False for a drop; true when either side closed deliberately. */
+  wasClean: boolean
+  /** Ready to show on screen. */
+  message: string
+}
+
+/**
+ * Turn a close code into something meaningful.
+ *
+ * 1006 is the important one: browsers report it for every abnormal closure —
+ * the server process dying, the Wi-Fi dropping, a router forgetting the NAT
+ * mapping — with no reason string at all, so the message has to cover the case
+ * without pretending to know which it was.
+ */
+export function describeClose(code: number, reason: string): string {
+  if (reason) return reason
+  switch (code) {
+    case 1000: return 'Disconnected from the session.'
+    case 1001: return 'The session went away.'
+    case 1002: return 'The session closed the connection: nothing was sent in time.'
+    case 1013: return 'That session is full.'
+    case 4003: return 'Wrong password for that session.'
+    case 4004: return 'This build does not match the server.'
+    case 1006:
+    default:
+      return 'Lost contact with the session. It may have stopped, or the network dropped.'
+  }
+}
+
+export function describeJoinRejection(reason: JoinRejectionReason): string {
+  switch (reason) {
+    case 'full':
+      return 'That session is full. Try again once someone leaves.'
+    case 'bad-password':
+      return 'Wrong password for that session.'
+    case 'version':
+      return 'This build does not match the server. Update the game, or update the server.'
+  }
+}
 
 /** Build the WebSocket URL. Accepts a bare host, `host:port`, or a full `ws(s)://` URL. */
 export function resolveSessionUrl(host: string, port: number): string {
@@ -34,7 +98,31 @@ export class MultiplayerClient {
   private inboundDeaths: DeathEvent[] = []
   /** Server-authoritative standings, keyed by player id (local player included). */
   private scores = new Map<string, NetScore>()
+  /** Whose rules the server takes. Only this peer may configure or start a match. */
+  private hostId: string | null = null
+  private matchConfig: MatchConfig = { ...DEFAULT_MATCH_CONFIG }
+  private matchState: MatchState = lobbyMatchState()
+  /** Set once when the match ends; drained by the session. */
+  private pendingMatchEnd: MatchState | null = null
   private connected = false
+  /** Smoothed round-trip time in ms; null until the first pong lands. */
+  private rttMs: number | null = null
+  /**
+   * `performance.now()` of the newest peer snapshot. The session hands the same
+   * snapshot to the renderer every tick, so only the client can tell "a fresh
+   * one arrived" from "still showing the last one".
+   */
+  private lastStateArrivalMs = 0
+  /**
+   * AI the host is simulating, as of its last frame. Empty on the host itself —
+   * it owns the real aircraft and never renders its own replicas.
+   */
+  private remoteAI: NetAIEntity[] = []
+  private inboundAIDeaths: AIDeathEvent[] = []
+  private pingTimer: ReturnType<typeof setInterval> | null = null
+  private disconnectListeners: Array<(info: DisconnectInfo) => void> = []
+  /** True once disconnect() was called, so a deliberate close is not reported as a drop. */
+  private closingDeliberately = false
   private localPlayerId: string | null = null
   private profile: NetPlayerProfile
   private rosterListeners: Array<() => void> = []
@@ -49,13 +137,25 @@ export class MultiplayerClient {
     this.profile = profile
   }
 
-  async connect(config: MultiplayerConfig): Promise<void> {
+  /**
+   * Attach to a session and join it.
+   *
+   * Resolves once the server has sent a `welcome`, not merely once the socket
+   * opened. A password or a version mismatch is refused *after* the handshake,
+   * so resolving on open reported success for joins that were about to be
+   * turned away — the caller then had no error to show.
+   */
+  async connect(config: MultiplayerConfig, password?: string): Promise<void> {
     if (config.mode === 'single') return
     const url = resolveSessionUrl(config.host, config.port)
     const ws = new WebSocket(url)
     this.ws = ws
 
-    await new Promise<void>((resolve, reject) => {
+    // Created here so its listeners are attached before the join goes out, but
+    // awaited at the end of the method: the durable message handler below must
+    // be registered before the welcome arrives, or it misses it and the roster
+    // never populates.
+    const handshake = new Promise<void>((resolve, reject) => {
       let settled = false
       const settle = (fn: () => void): void => {
         if (settled) return
@@ -63,6 +163,8 @@ export class MultiplayerClient {
         clearTimeout(timer)
         ws.removeEventListener('open',  onOpen)
         ws.removeEventListener('error', onError)
+        ws.removeEventListener('close', onClose)
+        ws.removeEventListener('message', onHandshakeMessage)
         fn()
       }
 
@@ -74,17 +176,40 @@ export class MultiplayerClient {
       }, CONNECT_TIMEOUT_MS)
 
       const onOpen = (): void => {
-        settle(() => {
-          this.connected = true
-          this.send({ type: 'join', profile: this.profile })
-          resolve()
-        })
+        this.connected = true
+        this.send({ type: 'join', profile: this.profile, password, protocolVersion: PROTOCOL_VERSION })
       }
       const onError = (): void => {
-        settle(() => reject(new Error(`Failed to connect to LAN session at ${url}`)))
+        settle(() => reject(new Error(`Could not reach a session at ${url}.`)))
       }
-      ws.addEventListener('open',  onOpen)
-      ws.addEventListener('error', onError)
+      // A close before the welcome means the join was refused. If the server
+      // said why, `onHandshakeMessage` has already settled with that reason.
+      const onClose = (): void => {
+        settle(() => {
+          this.connected = false
+          reject(new Error(`The session at ${url} closed the connection.`))
+        })
+      }
+      // Only watches for the handshake outcome. The durable handler below sees
+      // every message, this one included, and does the actual bookkeeping.
+      const onHandshakeMessage = (event: MessageEvent): void => {
+        let msg: ServerMessage | null = null
+        try {
+          msg = JSON.parse(String(event.data)) as ServerMessage
+        } catch {
+          return
+        }
+        if (msg?.type === 'welcome') settle(resolve)
+        else if (msg?.type === 'join-rejected') {
+          const reason = msg.reason
+          settle(() => reject(new JoinRejectedError(reason)))
+        }
+      }
+
+      ws.addEventListener('open',    onOpen)
+      ws.addEventListener('error',   onError)
+      ws.addEventListener('close',   onClose)
+      ws.addEventListener('message', onHandshakeMessage)
     })
 
     this.ws.addEventListener('message', event => {
@@ -96,10 +221,33 @@ export class MultiplayerClient {
       }
       if (!msg) return
 
+      if (msg.type === 'server-info') {
+        // Only a probe asks for this; a joined client ignores it.
+        return
+      }
+
+      if (msg.type === 'pong') {
+        const sample = Date.now() - msg.t
+        // Exponential smoothing: one slow frame should nudge the readout, not
+        // redefine it, or the HUD number is unreadable on a normal link.
+        this.rttMs = this.rttMs === null
+          ? sample
+          : this.rttMs * (1 - RTT_SMOOTHING) + sample * RTT_SMOOTHING
+        return
+      }
+
+      if (msg.type === 'join-rejected') {
+        // Handled by the connect() handshake. Nothing to do here.
+        return
+      }
+
       if (msg.type === 'welcome') {
         this.localPlayerId = msg.playerId
         this.remotePlayers.clear()
         this.scores.clear()
+        this.hostId = msg.hostId
+        this.matchConfig = msg.config
+        this.matchState = msg.match
         this.scores.set(msg.playerId, msg.score)
         for (const peer of msg.peers) {
           this.remotePlayers.set(peer.playerId, {
@@ -132,6 +280,7 @@ export class MultiplayerClient {
       }
 
       if (msg.type === 'state') {
+        this.lastStateArrivalMs = performance.now()
         const prev = this.remotePlayers.get(msg.playerId)
         const wasInLobby = !prev?.state
         const nowInLobby = !msg.state
@@ -161,6 +310,46 @@ export class MultiplayerClient {
         return
       }
 
+      if (msg.type === 'ai-state') {
+        // The whole live set each frame, so anything missing has gone.
+        this.remoteAI = msg.entities
+        this.lastStateArrivalMs = performance.now()
+        return
+      }
+
+      if (msg.type === 'ai-death') {
+        if (msg.killerId && msg.killerScore) this.scores.set(msg.killerId, msg.killerScore)
+        if (this.inboundAIDeaths.length < MAX_INBOUND_DEATHS) {
+          this.inboundAIDeaths.push(msg)
+        }
+        this.notifyRosterChanged()
+        return
+      }
+
+      if (msg.type === 'host-changed') {
+        this.hostId = msg.hostId
+        this.notifyRosterChanged()
+        return
+      }
+
+      if (msg.type === 'match-config') {
+        this.matchConfig = msg.config
+        this.notifyRosterChanged()
+        return
+      }
+
+      if (msg.type === 'match-state') {
+        const previousPhase = this.matchState.phase
+        this.matchState = msg.match
+        // The transition into ENDED is the moment the session has to react to —
+        // queue it the way deaths are queued rather than making the session poll.
+        if (previousPhase !== 'ENDED' && msg.match.phase === 'ENDED') {
+          this.pendingMatchEnd = msg.match
+        }
+        this.notifyRosterChanged()
+        return
+      }
+
       if (msg.type === 'death') {
         this.scores.set(msg.victimId, msg.victimScore)
         if (msg.killerId && msg.killerScore) this.scores.set(msg.killerId, msg.killerScore)
@@ -171,13 +360,77 @@ export class MultiplayerClient {
       }
     })
 
-    this.ws.addEventListener('close', () => {
+    this.ws.addEventListener('close', event => {
+      const wasConnected = this.connected
       this.connected = false
+      this.stopPinging()
       this.remotePlayers.clear()
       this.scores.clear()
       this.localPlayerId = null
+      this.rttMs = null
+      this.remoteAI = []
       this.notifyRosterChanged()
+
+      // A close we asked for is not news. One we did not is the thing that used
+      // to look, mid-flight, like everyone quietly leaving at once.
+      if (this.closingDeliberately || !wasConnected) return
+      const code = event.code
+      const reason = String(event.reason ?? '')
+      const info: DisconnectInfo = {
+        code,
+        reason,
+        wasClean: event.wasClean === true,
+        message: describeClose(code, reason),
+      }
+      for (const listener of [...this.disconnectListeners]) listener(info)
     })
+
+    await handshake
+    this.startPinging()
+  }
+
+  private startPinging(): void {
+    this.stopPinging()
+    const timer = setInterval(() => {
+      if (!this.isConnected()) return
+      this.send({ type: 'ping', t: Date.now() })
+    }, PING_INTERVAL_MS)
+    // Node's timer keeps a test process alive otherwise; the browser has no unref.
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    this.pingTimer = timer
+  }
+
+  private stopPinging(): void {
+    if (this.pingTimer !== null) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = null
+    }
+  }
+
+  /** Smoothed round-trip time in ms, or null before the first reply. */
+  getRttMs(): number | null {
+    return this.rttMs
+  }
+
+  /**
+   * Seconds since the last snapshot from any peer, or 0 when none is expected.
+   * Rising while peers are present means the link has stalled and remote
+   * aircraft are being extrapolated.
+   */
+  secondsSinceLastPeerState(): number {
+    if (this.lastStateArrivalMs === 0) return 0
+    return Math.max(0, (performance.now() - this.lastStateArrivalMs) / 1000)
+  }
+
+  /**
+   * Called when the session drops for a reason the player did not ask for.
+   * Returns an unsubscribe function.
+   */
+  onDisconnected(cb: (info: DisconnectInfo) => void): () => void {
+    this.disconnectListeners.push(cb)
+    return () => {
+      this.disconnectListeners = this.disconnectListeners.filter(l => l !== cb)
+    }
   }
 
   isConnected(): boolean {
@@ -285,6 +538,65 @@ export class MultiplayerClient {
     return out
   }
 
+  // ── AI (host-simulated) ────────────────────────────────────────────────────
+
+  /** The host's live AI set. Empty on the host, which has the real aircraft. */
+  getRemoteAI(): readonly NetAIEntity[] {
+    return this.remoteAI
+  }
+
+  consumeInboundAIDeaths(): AIDeathEvent[] {
+    const out = [...this.inboundAIDeaths]
+    this.inboundAIDeaths.length = 0
+    return out
+  }
+
+  /** Host only — the server drops these from anyone else. */
+  sendAIState(entities: NetAIEntity[]): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'ai-state', entities })
+  }
+
+  /** Host only. Reports an AI destroyed, and who to credit. */
+  sendAIDeath(aiId: string, killerId: string | null): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'ai-death', aiId, killerId })
+  }
+
+  // ── Match ──────────────────────────────────────────────────────────────────
+
+  getMatchConfig(): MatchConfig { return this.matchConfig }
+  getMatchState(): MatchState { return this.matchState }
+  getHostId(): string | null { return this.hostId }
+
+  /** True when this client owns the rules — gates the lobby's host controls. */
+  isHost(): boolean {
+    return this.localPlayerId !== null && this.localPlayerId === this.hostId
+  }
+
+  /** Drain the one-shot "the match just ended" signal. */
+  consumeMatchEnd(): MatchState | null {
+    const out = this.pendingMatchEnd
+    this.pendingMatchEnd = null
+    return out
+  }
+
+  /** Host only — the server ignores these from anyone else, so they are safe to call. */
+  setMatchConfig(config: MatchConfig): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'set-match-config', config })
+  }
+
+  startMatch(): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'start-match' })
+  }
+
+  requestRematch(): void {
+    if (!this.isConnected()) return
+    this.send({ type: 'request-rematch' })
+  }
+
   /** Server-authoritative standings for one player. Zeroes if not yet known. */
   getScore(playerId: string): NetScore {
     return this.scores.get(playerId) ?? { kills: 0, deaths: 0 }
@@ -295,6 +607,9 @@ export class MultiplayerClient {
   }
 
   disconnect(): void {
+    // Marks the close as expected so listeners are not told the link dropped.
+    this.closingDeliberately = true
+    this.stopPinging()
     if (this.ws) this.ws.close()
     this.ws = null
     this.connected = false
@@ -303,12 +618,20 @@ export class MultiplayerClient {
     this.inboundHits.length = 0
     this.inboundDeaths.length = 0
     this.scores.clear()
+    this.hostId = null
+    this.matchConfig = { ...DEFAULT_MATCH_CONFIG }
+    this.matchState = lobbyMatchState()
+    this.pendingMatchEnd = null
     this.stateSendAccumSec = 0
     this.cmSendAccumSec = 0
     this.pendingState = null
     this.lastSentRadarMode = null
     this.lastSentMissileKey = ''
     this.lastCmSignature = '0:0'
+    this.rttMs = null
+    this.lastStateArrivalMs = 0
+    this.remoteAI = []
+    this.inboundAIDeaths.length = 0
     this.notifyRosterChanged()
   }
 
